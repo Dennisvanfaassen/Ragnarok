@@ -1,5 +1,4 @@
 window:
-  # Prefer the real game process so the launcher is never selected by mistake.
   process_names:
     - "Classic.exe"
   title_contains:
@@ -12,18 +11,15 @@ bot:
   pause_hotkey: "f11"
   debug_hotkey: "f10"
   loop_delay_ms: 120
-  # Time to let the client walk to/engage the clicked target before another decision.
-  attack_wait_seconds: 1.25
+  attack_wait_seconds: 1.15
   no_target_move_after_seconds: 1.5
-  target_reclick_cooldown_seconds: 2.0
+  target_reclick_cooldown_seconds: 1.8
 
 player:
-  # Your character is kept close to the middle of the 1600x900 client.
   center_x_ratio: 0.50
   center_y_ratio: 0.46
 
 hp:
-  # Keep actions disabled until you choose the correct hotkeys.
   enabled: false
   roi:
     x_ratio: 0.480
@@ -37,7 +33,6 @@ hp:
   cooldown_seconds: 0.8
 
 targeting:
-  # Animated Ragnarok sprites rarely produce an exact template match.
   template_threshold: 0.56
   grayscale_threshold: 0.58
   edge_threshold: 0.42
@@ -45,7 +40,6 @@ targeting:
   click_y_offset: 0
   max_target_distance_px: 700
   min_target_distance_px: 35
-  # Rectangles are [x1_ratio, y1_ratio, x2_ratio, y2_ratio].
   excluded_regions:
     - [0.00, 0.00, 0.41, 0.11]
     - [0.00, 0.66, 0.38, 1.00]
@@ -56,6 +50,17 @@ movement:
   min_radius_px: 150
   max_radius_px: 330
   click_delay_seconds: 0.20
+
+loot:
+  enabled: true
+  # Your server already reports "Pet auto-loot enabled". This click sweep is
+  # an extra fallback for anything that still appears on the ground.
+  sweep_after_target_disappears: true
+  settle_delay_seconds: 0.18
+  radius_px: 24
+  rings: 2
+  points_per_ring: 8
+  click_delay_seconds: 0.045
 
 debug:
   save_detection_frame: true
