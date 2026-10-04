@@ -180,6 +180,94 @@ def _interesting_strings(strings: list[str]) -> dict:
     return groups
 
 
+
+def _debug_directory(pe: pefile.PE) -> list[dict]:
+    result = []
+    try:
+        for entry in getattr(pe, "DIRECTORY_ENTRY_DEBUG", []) or []:
+            item = {
+                "type": int(entry.struct.Type),
+                "size": int(entry.struct.SizeOfData),
+                "address": hex(entry.struct.AddressOfRawData),
+                "pointer": hex(entry.struct.PointerToRawData),
+            }
+
+            if entry.struct.Type == 2 and entry.struct.SizeOfData >= 24:
+                data = pe.__data__[
+                    entry.struct.PointerToRawData:
+                    entry.struct.PointerToRawData + entry.struct.SizeOfData
+                ]
+                if data[:4] == b"RSDS":
+                    guid = data[4:20].hex()
+                    age = int.from_bytes(data[20:24], "little")
+                    pdb = data[24:].split(b"\x00", 1)[0].decode(
+                        "latin-1", errors="replace"
+                    )
+                    item["codeview"] = {
+                        "signature": "RSDS",
+                        "guid_raw": guid,
+                        "age": age,
+                        "pdb_path": pdb,
+                    }
+
+            result.append(item)
+    except Exception:
+        pass
+    return result
+
+
+def _date_candidates(strings: list[str]) -> list[str]:
+    patterns = (
+        r"\b20\d{2}[-_/]\d{2}[-_/]\d{2}\b",
+        r"\b20\d{6}\b",
+        r"\b\d{4}[-_/]\d{2}[-_/]\d{2}[a-zA-Z]?\b",
+    )
+    found = []
+    seen = set()
+    for value in strings:
+        for pattern in patterns:
+            for match in re.findall(pattern, value):
+                if match not in seen:
+                    seen.add(match)
+                    found.append(match)
+                    if len(found) >= 200:
+                        return found
+    return found
+
+
+def _nemo_section(pe: pefile.PE) -> dict | None:
+    for section in pe.sections:
+        name = section.Name.rstrip(b"\x00").decode("latin-1", errors="replace")
+        if name.strip().lower() != ".nemo":
+            continue
+
+        data = section.get_data()
+        strings = _extract_strings(data, min_len=4)
+        return {
+            "virtual_address": hex(section.VirtualAddress),
+            "virtual_size": int(section.Misc_VirtualSize),
+            "raw_size": int(section.SizeOfRawData),
+            "entropy": _entropy(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "strings": strings[:200],
+            "hex_prefix": data[:128].hex(),
+        }
+
+    return None
+
+
+def _compiler_metadata(pe: pefile.PE) -> dict:
+    oh = pe.OPTIONAL_HEADER
+    return {
+        "linker_version": f"{oh.MajorLinkerVersion}.{oh.MinorLinkerVersion}",
+        "os_version": f"{oh.MajorOperatingSystemVersion}.{oh.MinorOperatingSystemVersion}",
+        "image_version": f"{oh.MajorImageVersion}.{oh.MinorImageVersion}",
+        "subsystem_version": f"{oh.MajorSubsystemVersion}.{oh.MinorSubsystemVersion}",
+        "checksum": hex(oh.CheckSum),
+        "dll_characteristics": hex(oh.DllCharacteristics),
+    }
+
+
 def _pe_details(pe: pefile.PE, exe_bytes: bytes) -> dict:
     sections = []
     for section in pe.sections:
@@ -213,8 +301,12 @@ def _pe_details(pe: pefile.PE, exe_bytes: bytes) -> dict:
 
     return {
         "entry_point": hex(pe.OPTIONAL_HEADER.AddressOfEntryPoint),
+        "compiler": _compiler_metadata(pe),
+        "debug_directory": _debug_directory(pe),
         "sections": sections,
+        "nemo": _nemo_section(pe),
         "imports": imports,
+        "date_candidates": _date_candidates(strings),
         "interesting_strings": _interesting_strings(strings),
         "string_count": len(strings),
     }
