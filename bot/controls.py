@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import ctypes
 import math
 import random
 import time
 
 import pyautogui
-import win32api
 import win32con
 import win32gui
 
 
 pyautogui.PAUSE = 0.03
 pyautogui.FAILSAFE = True
+
+user32 = ctypes.windll.user32
 
 
 def _activate(hwnd: int) -> None:
@@ -23,24 +25,38 @@ def _activate(hwnd: int) -> None:
         pass
 
 
+def _move_cursor(screen_x: int, screen_y: int) -> None:
+    # Use the raw Win32 call first. Unlike win32api.SetCursorPos this does not
+    # raise the '(0, SetCursorPos, No error message is available)' pywin32 error
+    # seen on some Windows setups.
+    ok = user32.SetCursorPos(int(screen_x), int(screen_y))
+    if ok:
+        return
+
+    # Fallback if Windows rejects the direct call.
+    pyautogui.moveTo(int(screen_x), int(screen_y), duration=0.05)
+
+
+def _left_click() -> None:
+    # mouse_event is widely compatible with older DirectX-era clients.
+    user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+    time.sleep(0.025)
+    user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+
+
 def click_relative(hwnd: int, window_rect, x: int, y: int, clicks: int = 1) -> None:
     left, top, _right, _bottom = window_rect
     sx = int(left + x)
     sy = int(top + y)
 
     _activate(hwnd)
+    time.sleep(0.04)
+    _move_cursor(sx, sy)
     time.sleep(0.03)
 
-    # Native Windows cursor/mouse events are more reliable for the windowed
-    # Ragnarok client than pyautogui.click alone.
-    win32api.SetCursorPos((sx, sy))
-    time.sleep(0.02)
-
     for _ in range(max(1, clicks)):
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(0.025)
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        time.sleep(0.04)
+        _left_click()
+        time.sleep(0.045)
 
 
 def press_key(key: str) -> None:
@@ -94,10 +110,8 @@ def loot_sweep(
     points_per_ring: int = 8,
     delay_seconds: float = 0.055,
 ) -> None:
-    """Click the corpse/drop area in a small spiral after a target disappears."""
     cx, cy = center_xy
 
-    # Click exact death location first.
     click_relative(hwnd, window_rect, cx, cy, clicks=2)
     time.sleep(delay_seconds)
 
