@@ -48,12 +48,19 @@ class RagnarokBot:
         self.last_target_xy = None
         self.had_target_last_frame = False
 
+        # Combat is a persistent state. A single missed template frame must
+        # never be interpreted as a kill.
+        self.combat_active = False
+        self.combat_no_target_since = None
+        self.combat_positions = []
+
         # Continuous roaming state.
         self.walking = False
         self.walk_heading = random.uniform(0, math.tau)
         self.walk_started = 0.0
         self.last_steer = 0.0
         self.next_major_turn = 0.0
+        self.last_nav_log = 0.0
 
         minimap_cfg = self.config.get("minimap", {})
         self.navigator = (
@@ -125,46 +132,99 @@ class RagnarokBot:
         return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 <= radius
 
     def _roam(self, hwnd, rect, player_xy, targeting, movement, frame):
+        """Continuously steer a held mouse along the real GAT route."""
         now = time.monotonic()
-        radius = int(movement.get("hold_radius_px", 320))
+        radius = int(movement.get("hold_radius_px", 300))
 
-        nav_heading = None
-        nav_info = None
-
-        # Preferred mode: real GAT world navigation. The minimap is used only
-        # to localize/verify the character and learn screen rotation.
         if self.world_planner is not None and self.navigator is not None:
             mini_player, track = self.navigator.observe_player(
                 frame,
                 self.walk_heading if self.walking else None,
             )
-            if mini_player is not None:
-                world_heading, world_info = self.world_planner.plan_heading(
-                    mini_player,
-                    track["minimap_shape"],
-                )
-                if world_heading is not None:
-                    nav_heading = world_heading + float(track["rotation_offset"])
-                    nav_info = {**world_info, **track, "status": world_info["status"]}
 
-        # Fallback to visual minimap routing if world localization is unavailable.
-        if nav_heading is None and self.navigator is not None:
-            nav_heading, nav_info = self.navigator.plan(
-                frame,
+            if mini_player is None:
+                self._stop_walking()
+                if now - self.last_nav_log >= 1.0:
+                    print(f"\n[BOT] WORLD paused: {track.get('status')}.")
+                    self.last_nav_log = now
+                return
+
+            # Learn the actual isometric screen mapping from the movement that
+            # resulted from our previous held-mouse direction.
+            self.world_planner.observe_motion(
+                track.get("delta"),
                 self.walk_heading if self.walking else None,
             )
 
-        if nav_heading is not None:
-            self.walk_heading = nav_heading
-        elif not self.walking:
-            self.walk_heading = (
-                self.walk_heading
-                + random.uniform(
-                    -float(movement.get("new_heading_max_turn_radians", 1.2)),
-                    float(movement.get("new_heading_max_turn_radians", 1.2)),
-                )
-            ) % math.tau
+            screen_heading, info = self.world_planner.plan_heading(
+                mini_player,
+                track["minimap_shape"],
+            )
 
+            if screen_heading is None:
+                self._stop_walking()
+                if now - self.last_nav_log >= 1.0:
+                    print(f"\n[BOT] WORLD paused: {info.get('status')}.")
+                    self.last_nav_log = now
+                return
+
+            self.walk_heading = screen_heading
+
+            x, y = choose_walk_point(
+                rect,
+                player_xy,
+                targeting["excluded_regions"],
+                self.walk_heading,
+                radius,
+            )
+
+            if not self.walking:
+                begin_held_walk(hwnd, rect, x, y)
+                self.walking = True
+                self.walk_started = now
+                self.last_steer = now
+                print(
+                    f"\n[BOT] WORLD {info['map']} "
+                    f"pos={info['position']} -> {info['target']} "
+                    f"goal={info['goal']} path={info['path_cells']} cells "
+                    f"-> HOLD"
+                )
+                self.last_nav_log = now
+                return
+
+            # Moving the cursor while LEFT remains down changes direction
+            # continuously. No extra click is generated here.
+            steer_interval = float(movement.get("steer_interval_seconds", 0.18))
+            if now - self.last_steer >= steer_interval:
+                steer_held_walk(hwnd, rect, x, y)
+                self.last_steer = now
+
+            if now - self.last_nav_log >= float(
+                movement.get("navigation_log_interval_seconds", 2.0)
+            ):
+                print(
+                    f"\n[BOT] WORLD {info['map']} "
+                    f"pos={info['position']} -> {info['target']} "
+                    f"goal={info['goal']} HOLDING"
+                )
+                self.last_nav_log = now
+            return
+
+        # Legacy visual navigation is only used if the real world database is
+        # intentionally disabled. Never mix random/visual steering into an
+        # active GAT route.
+        if self.navigator is None:
+            return
+
+        nav_heading, nav_info = self.navigator.plan(
+            frame,
+            self.walk_heading if self.walking else None,
+        )
+        if nav_heading is None:
+            self._stop_walking()
+            return
+
+        self.walk_heading = nav_heading
         x, y = choose_walk_point(
             rect,
             player_xy,
@@ -178,23 +238,9 @@ class RagnarokBot:
             self.walking = True
             self.walk_started = now
             self.last_steer = now
-            if nav_info and nav_info.get("status") == "world_ok":
-                print(
-                    f"\n[BOT] WORLD {nav_info['map']} "
-                    f"pos={nav_info['position']} -> {nav_info['target']} "
-                    f"goal={nav_info['goal']} path={nav_info['path_cells']} cells"
-                )
-            elif nav_info and nav_info.get("status") == "ok":
-                print(
-                    f"\n[BOT] Minimap route -> ({x},{y}) "
-                    f"offset={nav_info['rotation_offset']:.2f}."
-                )
-            else:
-                print(f"\n[BOT] Roaming continuously toward ({x},{y}).")
-            return
-
-        steer_interval = float(movement.get("steer_interval_seconds", 0.45))
-        if now - self.last_steer >= steer_interval:
+        elif now - self.last_steer >= float(
+            movement.get("steer_interval_seconds", 0.18)
+        ):
             steer_held_walk(hwnd, rect, x, y)
             self.last_steer = now
 
@@ -234,10 +280,10 @@ class RagnarokBot:
         loot_cfg = self.config.get("loot", {})
         debug_cfg = self.config.get("debug", {})
 
-        attack_wait = float(bot_cfg["attack_wait_seconds"])
         loop_delay = float(bot_cfg["loop_delay_ms"]) / 1000.0
         move_after = float(bot_cfg["no_target_move_after_seconds"])
-        reclick_cooldown = float(bot_cfg.get("target_reclick_cooldown_seconds", 2.0))
+        reclick_cooldown = float(bot_cfg.get("target_reclick_cooldown_seconds", 0.55))
+        combat_clear_seconds = float(bot_cfg.get("combat_clear_seconds", 0.65))
 
         try:
             while self.running:
@@ -289,53 +335,84 @@ class RagnarokBot:
                         self.debug_requested = False
 
                     if detections:
-                        # Release held movement immediately before engaging.
+                        # Monster detection always pre-empts navigation.
                         self._stop_walking()
+
+                        now = time.monotonic()
+                        self.combat_active = True
+                        self.combat_no_target_since = None
+                        self.last_target_seen = now
 
                         x, y, name, score, distance, _tw, _th = detections[0]
                         y += int(targeting.get("click_y_offset", 0))
-                        now = time.monotonic()
-
                         target_xy = (x, y)
+
+                        # Remember distinct combat locations. We only loot once
+                        # the whole visible group has been cleared.
+                        if not any(
+                            self._same_target(target_xy, p, radius=70)
+                            for p in self.combat_positions
+                        ):
+                            self.combat_positions.append(target_xy)
+                            self.combat_positions = self.combat_positions[-8:]
+
                         if (
                             not self._same_target(target_xy, self.last_target_xy)
                             or now - self.last_target_click >= reclick_cooldown
                         ):
                             print(
-                                f"\n[BOT] Target {name} at ({x},{y}) "
-                                f"score={score:.2f} distance={distance:.0f}px -> CLICK"
+                                f"\n[BOT] COMBAT {name} at ({x},{y}) "
+                                f"score={score:.2f} distance={distance:.0f}px -> ATTACK"
                             )
                             click_relative(hwnd, rect, x, y)
                             self.last_target_click = now
                             self.last_target_xy = target_xy
 
-                        self.last_target_seen = now
-                        self.had_target_last_frame = True
-                        time.sleep(attack_wait)
+                        # Keep scanning every loop; do not sleep for a whole
+                        # attack cycle. This lets another visible monster be
+                        # acquired immediately.
+                        time.sleep(loop_delay)
                         continue
 
-                    if (
-                        self.had_target_last_frame
-                        and self.last_target_xy is not None
-                        and loot_cfg.get("enabled", True)
-                        and loot_cfg.get("sweep_after_target_disappears", True)
-                    ):
-                        self._stop_walking()
-                        time.sleep(float(loot_cfg.get("settle_delay_seconds", 0.18)))
-                        print("\n[BOT] Target disappeared -> looting drop area.")
-                        loot_sweep(
-                            hwnd,
-                            rect,
-                            self.last_target_xy,
-                            int(loot_cfg.get("radius_px", 24)),
-                            int(loot_cfg.get("rings", 2)),
-                            int(loot_cfg.get("points_per_ring", 8)),
-                            float(loot_cfg.get("click_delay_seconds", 0.045)),
-                        )
-                        self.last_target_seen = time.monotonic()
+                    if self.combat_active:
+                        now = time.monotonic()
 
-                    self.had_target_last_frame = False
-                    self.last_target_xy = None
+                        if self.combat_no_target_since is None:
+                            self.combat_no_target_since = now
+
+                        # Require a stable period with zero detected monsters.
+                        # Short animation/template misses no longer trigger loot.
+                        if now - self.combat_no_target_since < combat_clear_seconds:
+                            time.sleep(loop_delay)
+                            continue
+
+                        self._stop_walking()
+
+                        if (
+                            loot_cfg.get("enabled", True)
+                            and loot_cfg.get("sweep_after_target_disappears", True)
+                        ):
+                            time.sleep(float(loot_cfg.get("settle_delay_seconds", 0.12)))
+                            print(
+                                f"\n[BOT] COMBAT CLEAR -> looting "
+                                f"{len(self.combat_positions)} combat area(s)."
+                            )
+                            for loot_xy in self.combat_positions:
+                                loot_sweep(
+                                    hwnd,
+                                    rect,
+                                    loot_xy,
+                                    int(loot_cfg.get("radius_px", 20)),
+                                    int(loot_cfg.get("rings", 1)),
+                                    int(loot_cfg.get("points_per_ring", 6)),
+                                    float(loot_cfg.get("click_delay_seconds", 0.035)),
+                                )
+
+                        self.combat_active = False
+                        self.combat_no_target_since = None
+                        self.combat_positions = []
+                        self.last_target_xy = None
+                        self.last_target_seen = time.monotonic()
 
                     if (
                         movement.get("enabled", True)
