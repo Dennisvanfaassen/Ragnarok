@@ -276,9 +276,11 @@ class MinimapNavigator:
             return None, {"status": self.last_status}
 
         moved = 0.0
+        delta = None
         if self.last_player is not None:
             dx = player[0] - self.last_player[0]
             dy = player[1] - self.last_player[1]
+            delta = (float(dx), float(dy))
             moved = math.hypot(dx, dy)
 
             if moved >= float(self.cfg.get("calibration_min_move_pixels", 1.2)):
@@ -304,6 +306,7 @@ class MinimapNavigator:
             "status": self.last_status,
             "player": player,
             "moved": moved,
+            "delta": delta,
             "rotation_offset": self.rotation_offset,
             "minimap_shape": minimap.shape[:2],
         }
