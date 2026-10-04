@@ -15,6 +15,7 @@ class HandshakeEvent:
     length: int
     opcode: str | None
     sha256: str
+    details: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -23,6 +24,7 @@ class HandshakeEvent:
             "length": self.length,
             "opcode": self.opcode,
             "sha256": self.sha256,
+            "details": self.details,
         }
 
 
@@ -35,6 +37,33 @@ class ProxyState:
     upstream_port: int = 6900
     connections: int = 0
     events: list[HandshakeEvent] = field(default_factory=list)
+
+
+# Fixed lengths for the small set of login-stage packets we can safely
+# recognize without needing the full game packet table.
+LOGIN_STAGE_FIXED_LENGTHS = {
+    0x006A: 23,
+    0x006C: 3,
+    0x0081: 3,
+    0x0205: 26,
+    0x02CA: 3,
+    0x083E: 26,
+    0x0ACD: 3,
+    0x0AE0: 30,
+}
+
+
+def _safe_details(opcode: int | None, data: bytes) -> dict[str, Any]:
+    if opcode == 0x083E and len(data) >= 26:
+        # OpenKore: AC_REFUSE_LOGIN_R2 => V Z20
+        error_type = struct.unpack_from("<I", data, 2)[0]
+        raw_date = data[6:26].split(b"\x00", 1)[0]
+        return {
+            "name": "AC_REFUSE_LOGIN_R2",
+            "login_error_type": error_type,
+            "date": raw_date.decode("latin-1", errors="replace"),
+        }
+    return {}
 
 
 class HandshakeProxy:
@@ -60,12 +89,18 @@ class HandshakeProxy:
         if not data:
             return
 
+        opcode_value = (
+            struct.unpack_from("<H", data, 0)[0]
+            if len(data) >= 2
+            else None
+        )
         event = HandshakeEvent(
             timestamp=time.time(),
             direction=direction,
             length=len(data),
             opcode=self._opcode(data),
             sha256=hashlib.sha256(data).hexdigest(),
+            details=_safe_details(opcode_value, data),
         )
         self.state.events.append(event)
 
@@ -84,7 +119,22 @@ class HandshakeProxy:
                 data = await reader.read(65536)
                 if not data:
                     break
+                # Record the raw TCP chunk, then also record recognizable
+                # fixed-length login-stage packets when a chunk contains them.
                 self._record(direction, data)
+
+                offset = 0
+                while len(data) - offset >= 2:
+                    opcode = struct.unpack_from("<H", data, offset)[0]
+                    packet_len = LOGIN_STAGE_FIXED_LENGTHS.get(opcode)
+                    if not packet_len or offset + packet_len > len(data):
+                        break
+
+                    packet = data[offset:offset + packet_len]
+                    if offset != 0 or len(packet) != len(data):
+                        self._record(direction + "_parsed", packet)
+                    offset += packet_len
+
                 writer.write(data)
                 await writer.drain()
         finally:
