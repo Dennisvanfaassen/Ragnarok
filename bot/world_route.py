@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from pathlib import Path
+import os
 
 from bot.world_nav import WorldDatabase, astar, simplify_path
 
@@ -19,8 +21,34 @@ class WorldRouteState:
 class WorldRoutePlanner:
     def __init__(self, cfg: dict):
         self.cfg = cfg
-        self.db = WorldDatabase(cfg["database_path"])
+        db_path = self._resolve_database_path(cfg.get("database_path"))
+        self.db = WorldDatabase(db_path)
         self.state = WorldRouteState(map_name=str(cfg.get("current_map", "")).lower())
+
+    @staticmethod
+    def _resolve_database_path(configured):
+        candidates = []
+        if configured:
+            candidates.append(Path(configured))
+
+        here = Path(__file__).resolve().parent
+        repo_root = here.parent
+        candidates.extend([
+            repo_root / "world_db" / "processed",
+            repo_root.parent / "Ragnarokmap" / "processed",
+            Path(os.path.expandvars(r"%USERPROFILE%")) / "Desktop" / "Ragnarokmap" / "processed",
+        ])
+
+        for candidate in candidates:
+            candidate = candidate.expanduser()
+            if (candidate / "maps.json").exists():
+                return candidate
+
+        pretty = "\n  - ".join(str(p) for p in candidates)
+        raise FileNotFoundError(
+            "Could not find the processed Ragnarok world database. Tried:\n  - "
+            + pretty
+        )
 
     def set_map(self, map_name: str) -> None:
         name = map_name.lower()
