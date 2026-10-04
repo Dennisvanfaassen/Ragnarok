@@ -20,6 +20,7 @@ from bot.controls import (
 from bot.vision import Vision
 from bot.minimap import MinimapNavigator
 from bot.window import find_game_window, focus_window
+from bot.world_route import WorldRoutePlanner
 
 
 class RagnarokBot:
@@ -58,6 +59,13 @@ class RagnarokBot:
         self.navigator = (
             MinimapNavigator(minimap_cfg)
             if minimap_cfg.get("enabled", False)
+            else None
+        )
+
+        world_cfg = self.config.get("world", {})
+        self.world_planner = (
+            WorldRoutePlanner(world_cfg)
+            if world_cfg.get("enabled", False)
             else None
         )
 
@@ -122,7 +130,25 @@ class RagnarokBot:
 
         nav_heading = None
         nav_info = None
-        if self.navigator is not None:
+
+        # Preferred mode: real GAT world navigation. The minimap is used only
+        # to localize/verify the character and learn screen rotation.
+        if self.world_planner is not None and self.navigator is not None:
+            mini_player, track = self.navigator.observe_player(
+                frame,
+                self.walk_heading if self.walking else None,
+            )
+            if mini_player is not None:
+                world_heading, world_info = self.world_planner.plan_heading(
+                    mini_player,
+                    track["minimap_shape"],
+                )
+                if world_heading is not None:
+                    nav_heading = world_heading + float(track["rotation_offset"])
+                    nav_info = {**world_info, **track, "status": world_info["status"]}
+
+        # Fallback to visual minimap routing if world localization is unavailable.
+        if nav_heading is None and self.navigator is not None:
             nav_heading, nav_info = self.navigator.plan(
                 frame,
                 self.walk_heading if self.walking else None,
@@ -152,7 +178,13 @@ class RagnarokBot:
             self.walking = True
             self.walk_started = now
             self.last_steer = now
-            if nav_info and nav_info.get("status") == "ok":
+            if nav_info and nav_info.get("status") == "world_ok":
+                print(
+                    f"\n[BOT] WORLD {nav_info['map']} "
+                    f"pos={nav_info['position']} -> {nav_info['target']} "
+                    f"goal={nav_info['goal']} path={nav_info['path_cells']} cells"
+                )
+            elif nav_info and nav_info.get("status") == "ok":
                 print(
                     f"\n[BOT] Minimap route -> ({x},{y}) "
                     f"offset={nav_info['rotation_offset']:.2f}."
