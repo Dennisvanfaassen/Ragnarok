@@ -242,7 +242,18 @@ class RagnarokBot:
                     if self.debug_requested:
                         path = debug_cfg.get("output_path", "debug_last.jpg")
                         self.vision.save_debug(frame, detections, player_xy, path)
-                        print(f"\n[BOT] Debug screenshot saved: {path}")
+                        if self.navigator is not None:
+                            nav_path = debug_cfg.get(
+                                "minimap_output_path",
+                                "debug_minimap.jpg",
+                            )
+                            self.navigator.save_debug(frame, nav_path)
+                            print(
+                                f"\n[BOT] Debug screenshots saved: "
+                                f"{path} + {nav_path}"
+                            )
+                        else:
+                            print(f"\n[BOT] Debug screenshot saved: {path}")
                         self.debug_requested = False
 
                     if detections:
