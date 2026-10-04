@@ -6,7 +6,7 @@ from pathlib import Path
 import keyboard
 import yaml
 
-from bot.controls import click_relative, move_randomly, press_key
+from bot.controls import click_relative, loot_sweep, move_randomly, press_key
 from bot.vision import Vision
 from bot.window import find_game_window, focus_window
 
@@ -34,6 +34,7 @@ class RagnarokBot:
         self.last_target_seen = time.monotonic()
         self.last_target_click = 0.0
         self.last_target_xy = None
+        self.had_target_last_frame = False
 
     def stop(self):
         print("\n[BOT] Stop requested.")
@@ -113,6 +114,7 @@ class RagnarokBot:
         bot_cfg = self.config["bot"]
         targeting = self.config["targeting"]
         movement = self.config["movement"]
+        loot_cfg = self.config.get("loot", {})
         debug_cfg = self.config.get("debug", {})
 
         attack_wait = float(bot_cfg["attack_wait_seconds"])
@@ -169,16 +171,39 @@ class RagnarokBot:
                     ):
                         print(
                             f"\n[BOT] Target {name} at ({x},{y}) "
-                            f"score={score:.2f} distance={distance:.0f}px"
+                            f"score={score:.2f} distance={distance:.0f}px -> CLICK"
                         )
-                        click_relative(rect, x, y)
+                        click_relative(hwnd, rect, x, y)
                         self.last_target_click = now
                         self.last_target_xy = target_xy
 
                     self.last_target_seen = now
+                    self.had_target_last_frame = True
                     time.sleep(attack_wait)
                     continue
 
+                # A target was visible previously and has now disappeared.
+                # Treat that as the likely kill moment and sweep the drop area.
+                if (
+                    self.had_target_last_frame
+                    and self.last_target_xy is not None
+                    and loot_cfg.get("enabled", True)
+                    and loot_cfg.get("sweep_after_target_disappears", True)
+                ):
+                    time.sleep(float(loot_cfg.get("settle_delay_seconds", 0.18)))
+                    print("\n[BOT] Target disappeared -> looting drop area.")
+                    loot_sweep(
+                        hwnd,
+                        rect,
+                        self.last_target_xy,
+                        int(loot_cfg.get("radius_px", 24)),
+                        int(loot_cfg.get("rings", 2)),
+                        int(loot_cfg.get("points_per_ring", 8)),
+                        float(loot_cfg.get("click_delay_seconds", 0.045)),
+                    )
+                    self.last_target_seen = time.monotonic()
+
+                self.had_target_last_frame = False
                 self.last_target_xy = None
 
                 if (
@@ -186,6 +211,7 @@ class RagnarokBot:
                     and time.monotonic() - self.last_target_seen >= move_after
                 ):
                     mx, my = move_randomly(
+                        hwnd,
                         rect,
                         player_xy,
                         targeting["excluded_regions"],
@@ -193,7 +219,7 @@ class RagnarokBot:
                         int(movement["max_radius_px"]),
                         float(movement.get("click_delay_seconds", 0.20)),
                     )
-                    print(f"\n[BOT] No target -> searching at ({mx},{my}).")
+                    print(f"\n[BOT] No target -> walking to ({mx},{my}).")
                     self.last_target_seen = time.monotonic()
 
                 time.sleep(loop_delay)
