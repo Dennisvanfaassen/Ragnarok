@@ -56,6 +56,25 @@ movement:
   major_turn_radians: 0.50
   new_heading_max_turn_radians: 1.10
 
+minimap:
+  enabled: true
+  # Calibrated for the 1600x900 Soulbound client screenshots.
+  # The bot reads the top-right minimap directly from the game window.
+  roi:
+    x_ratio: 0.914
+    y_ratio: 0.018
+    width_ratio: 0.086
+    height_ratio: 0.145
+  auto_calibrate_rotation: true
+  rotation_offset_radians: 0.0
+  calibration_min_move_pixels: 1.5
+  calibration_alpha: 0.22
+  route_search_pixels: 70
+  minimum_goal_distance_pixels: 14
+  path_lookahead_pixels: 10
+  visited_penalty: 9.0
+  stuck_frames: 10
+
 loot:
   enabled: true
   sweep_after_target_disappears: true
