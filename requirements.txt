@@ -5,3 +5,4 @@ pyautogui>=0.9.54
 keyboard>=0.13.5
 pywin32>=306
 PyYAML>=6.0
+psutil>=6.0
