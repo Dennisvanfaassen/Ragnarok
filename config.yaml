@@ -101,6 +101,31 @@ minimap:
   stuck_turn_radians: 2.15
   max_heading_change_radians: 0.32
 
+world:
+  enabled: true
+  # Current test map: Byalan Dungeon F3.
+  # Later this will be detected automatically on map changes.
+  current_map: "iz_dun02"
+
+  # Leave blank to auto-discover Desktop\Ragnarokmap\processed.
+  database_path: ""
+
+  # The in-game minimap shows the whole map. These values convert the
+  # white arrow location to real GAT cell coordinates.
+  invert_y: true
+  minimap_padding_left_ratio: 0.03
+  minimap_padding_right_ratio: 0.03
+  minimap_padding_top_ratio: 0.03
+  minimap_padding_bottom_ratio: 0.08
+
+  exploration_min_distance_cells: 45
+  exploration_max_distance_cells: 120
+  exploration_attempts: 250
+  snap_radius_cells: 12
+  waypoint_spacing_cells: 8
+  waypoint_reached_radius_cells: 4.0
+  goal_reached_radius_cells: 5.0
+
 loot:
   enabled: true
   sweep_after_target_disappears: true
