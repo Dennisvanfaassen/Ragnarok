@@ -42,6 +42,14 @@ class WorldRoutePlanner:
         self._calibration_screen = []
         self._goal_visits: dict[tuple[int, int], int] = {}
 
+        destination = cfg.get("destination")
+        self.fixed_destination = None
+        if destination:
+            self.fixed_destination = (
+                int(destination["x"]),
+                int(destination["y"]),
+            )
+
     @staticmethod
     def _resolve_database_path(configured):
         candidates = []
@@ -226,6 +234,10 @@ class WorldRoutePlanner:
             current[0] - self.state.goal[0],
             current[1] - self.state.goal[1],
         ) <= float(self.cfg.get("goal_reached_radius_cells", 4.0))
+
+        if goal_reached and self.fixed_destination is not None:
+            return False
+
         return goal_reached
 
     def plan_heading(
@@ -245,8 +257,24 @@ class WorldRoutePlanner:
         nav_map = self.db.load_map(self.state.map_name)
         current = self.map_position_from_minimap(nav_map, minimap_player, minimap_shape)
 
+        if self.fixed_destination is not None:
+            if math.hypot(
+                current[0] - self.fixed_destination[0],
+                current[1] - self.fixed_destination[1],
+            ) <= float(self.cfg.get("goal_reached_radius_cells", 4.0)):
+                return None, {
+                    "status": "world_arrived",
+                    "map": self.state.map_name,
+                    "position": current,
+                    "goal": self.fixed_destination,
+                }
+
         if self._needs_new_route(current):
-            goal = self._choose_exploration_goal(nav_map, current)
+            goal = (
+                self.fixed_destination
+                if self.fixed_destination is not None
+                else self._choose_exploration_goal(nav_map, current)
+            )
             dense = astar(
                 nav_map,
                 current,
@@ -275,6 +303,13 @@ class WorldRoutePlanner:
             self.state.waypoint_index += 1
 
         if self.state.waypoint_index >= len(waypoints):
+            if self.fixed_destination is not None:
+                return None, {
+                    "status": "world_arrived",
+                    "map": self.state.map_name,
+                    "position": current,
+                    "goal": self.fixed_destination,
+                }
             self.state.waypoints = None
             return self.plan_heading(minimap_player, minimap_shape)
 
