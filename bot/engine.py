@@ -18,6 +18,7 @@ from bot.controls import (
     steer_held_walk,
 )
 from bot.vision import Vision
+from bot.minimap import MinimapNavigator
 from bot.window import find_game_window, focus_window
 
 
@@ -52,6 +53,13 @@ class RagnarokBot:
         self.walk_started = 0.0
         self.last_steer = 0.0
         self.next_major_turn = 0.0
+
+        minimap_cfg = self.config.get("minimap", {})
+        self.navigator = (
+            MinimapNavigator(minimap_cfg)
+            if minimap_cfg.get("enabled", False)
+            else None
+        )
 
     def _stop_walking(self):
         if self.walking:
@@ -108,12 +116,21 @@ class RagnarokBot:
             return False
         return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 <= radius
 
-    def _roam(self, hwnd, rect, player_xy, targeting, movement):
+    def _roam(self, hwnd, rect, player_xy, targeting, movement, frame):
         now = time.monotonic()
         radius = int(movement.get("hold_radius_px", 320))
 
-        if not self.walking:
-            # Keep headings for several seconds instead of picking random cells.
+        nav_heading = None
+        nav_info = None
+        if self.navigator is not None:
+            nav_heading, nav_info = self.navigator.plan(
+                frame,
+                self.walk_heading if self.walking else None,
+            )
+
+        if nav_heading is not None:
+            self.walk_heading = nav_heading
+        elif not self.walking:
             self.walk_heading = (
                 self.walk_heading
                 + random.uniform(
@@ -121,49 +138,34 @@ class RagnarokBot:
                     float(movement.get("new_heading_max_turn_radians", 1.2)),
                 )
             ) % math.tau
-            x, y = choose_walk_point(
-                rect,
-                player_xy,
-                targeting["excluded_regions"],
-                self.walk_heading,
-                radius,
-            )
+
+        x, y = choose_walk_point(
+            rect,
+            player_xy,
+            targeting["excluded_regions"],
+            self.walk_heading,
+            radius,
+        )
+
+        if not self.walking:
             begin_held_walk(hwnd, rect, x, y)
             self.walking = True
             self.walk_started = now
             self.last_steer = now
-            self.next_major_turn = now + random.uniform(
-                float(movement.get("heading_hold_min_seconds", 3.0)),
-                float(movement.get("heading_hold_max_seconds", 6.5)),
-            )
-            print(f"\n[BOT] Roaming continuously toward ({x},{y}).")
+            if nav_info and nav_info.get("status") == "ok":
+                print(
+                    f"\n[BOT] Minimap route -> ({x},{y}) "
+                    f"offset={nav_info['rotation_offset']:.2f}."
+                )
+            else:
+                print(f"\n[BOT] Roaming continuously toward ({x},{y}).")
             return
 
-        # Small steering corrections while keeping the mouse button held.
         steer_interval = float(movement.get("steer_interval_seconds", 0.45))
         if now - self.last_steer >= steer_interval:
-            jitter = float(movement.get("steer_jitter_radians", 0.08))
-            self.walk_heading = (self.walk_heading + random.uniform(-jitter, jitter)) % math.tau
-
-            if now >= self.next_major_turn:
-                max_turn = float(movement.get("major_turn_radians", 0.55))
-                self.walk_heading = (
-                    self.walk_heading + random.uniform(-max_turn, max_turn)
-                ) % math.tau
-                self.next_major_turn = now + random.uniform(
-                    float(movement.get("heading_hold_min_seconds", 3.0)),
-                    float(movement.get("heading_hold_max_seconds", 6.5)),
-                )
-
-            x, y = choose_walk_point(
-                rect,
-                player_xy,
-                targeting["excluded_regions"],
-                self.walk_heading,
-                radius,
-            )
             steer_held_walk(hwnd, rect, x, y)
             self.last_steer = now
+
 
     def run(self):
         window_cfg = self.config["window"]
@@ -296,7 +298,7 @@ class RagnarokBot:
                         movement.get("enabled", True)
                         and time.monotonic() - self.last_target_seen >= move_after
                     ):
-                        self._roam(hwnd, rect, player_xy, targeting, movement)
+                        self._roam(hwnd, rect, player_xy, targeting, movement, frame)
 
                     time.sleep(loop_delay)
 
