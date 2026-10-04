@@ -1,89 +1,74 @@
-# Ragnarok private-server auto hunter
+# Ragnarok Auto Hunter
 
-A screen-based Windows automation prototype for a Ragnarok Online private server.
+Screen-based automation for your own Ragnarok Online private server.
 
-It does **not** modify the game client or inject packets. It captures the Ragnarok window, detects configured monster templates, clicks the nearest target, estimates HP from the on-character HP bar, and can press configurable heal/emergency keys.
+The bot does not inject into Classic.exe and does not alter game packets. It watches the visible game client and sends normal Windows mouse/keyboard input.
 
-## Current features
+## What this version does
 
-- Find the Ragnarok window automatically
-- Screenshot only the game client
-- Template-match one or more monster types
-- Prefer the closest detected target
-- Ignore chat, status UI and minimap/quest areas
-- Estimate HP from the green bar below the character
-- Heal below a configurable threshold
-- Emergency key at critical HP
-- Random search movement if no target is found
-- F11 pause/resume
-- F12 emergency stop
-- PyAutoGUI mouse failsafe: move the mouse to the top-left corner
+- Prefers the real `Classic.exe` process instead of accidentally choosing the Soulbound launcher
+- Detects Obeaune and Cornutus from PNG templates
+- Uses color + grayscale + edge matching at multiple scales
+- Chooses the closest target to the player
+- Clicks the target and avoids rapid repeated clicks on the same monster
+- Walks/searches automatically when no target is visible
+- Avoids the chat, status bar and minimap/quest UI when searching/clicking
+- Estimates HP from the bar below your character
+- Healing/teleport actions are OFF by default until you configure the correct keys
+- F10 saves `debug_last.jpg` with detection boxes
+- F11 pauses/resumes
+- F12 stops
 
-## Setup
+## Easiest install
 
-Install Python 3.11+ on Windows.
+Install Python 3.12 on Windows.
 
-Then from this repository:
+Then double-click:
 
-```powershell
-py -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
+`setup_bot.bat`
 
-Add at least one cropped monster image to the `templates` folder. See [templates/README.md](templates/README.md).
+Wait until it says setup completed.
 
-## Configure keys
+## Start the bot
 
-Open `config.yaml`.
+1. Start Soulbound Journey and log your character in.
+2. Keep the Ragnarok client visible.
+3. Double-click `run_bot.bat`.
+4. Leave the PowerShell/console window open.
 
-The defaults currently use:
+Controls:
 
-- Heal: `F8`
-- Emergency/teleport: `F9`
-- Pause: `F11`
-- Stop: `F12`
+- F10 = save detection debug image
+- F11 = pause/resume
+- F12 = stop
 
-Change these to match your Ragnarok hotbar before running the bot.
+## Manual start
 
-## Run
-
-1. Start Ragnarok.
-2. Enter the map you want to test on.
-3. Make sure the monster template exists in `templates/`.
-4. From PowerShell:
+If needed:
 
 ```powershell
+cd C:\Ragnarok-main
 .venv\Scripts\activate
 python main.py
 ```
 
-Keep your normal client zoom and UI layout while testing.
+## Healing
 
-## Initial calibration
-
-The supplied defaults are based on the 1600×900 screenshot used while building this prototype.
-
-The important values live in `config.yaml`:
-
-- `player.center_x_ratio`
-- `player.center_y_ratio`
-- `hp.roi`
-- `targeting.excluded_regions`
-
-The bot uses ratios, so resizing can still work reasonably, but recalibration may be needed.
-
-## First test recommendation
-
-For the first run, temporarily set:
+Healing is intentionally disabled initially:
 
 ```yaml
-movement:
+hp:
   enabled: false
 ```
 
-Put your character near one target monster and confirm the console repeatedly detects it correctly. After targeting works, enable movement.
+Once targeting/movement works, configure `heal_key` and `emergency_key`, then change it to `enabled: true`.
 
-## Safety
+## Detection troubleshooting
 
-This project sends real keyboard/mouse input. Test on your own server with an expendable character first. F12 stops the bot, and PyAutoGUI's top-left mouse failsafe remains enabled.
+If a visible Obeaune or Cornutus is not selected, press F10 while the monster is visible. The bot saves:
+
+`debug_last.jpg`
+
+That image shows what the detector currently sees and is the easiest way to tune recognition.
+
+The current settings were calibrated against the 1600x900 Soulbound screenshots supplied while building the bot.
