@@ -11,6 +11,7 @@ from core.models import BotProfile, ServerProfile
 from core.state import app_state
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
+from diagnostics.handshake_proxy import handshake_proxy
 
 
 ROOT = Path(__file__).resolve().parent
@@ -79,3 +80,24 @@ async def client_diagnostics(payload: dict):
         return scan_client(exe_path)
     except Exception as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.post("/api/diagnostics/handshake/start")
+async def start_handshake_proxy():
+    return await handshake_proxy.start()
+
+
+@app.post("/api/diagnostics/handshake/stop")
+async def stop_handshake_proxy():
+    return await handshake_proxy.stop()
+
+
+@app.post("/api/diagnostics/handshake/clear")
+async def clear_handshake_proxy():
+    handshake_proxy.clear()
+    return handshake_proxy.snapshot()
+
+
+@app.get("/api/diagnostics/handshake")
+async def handshake_state():
+    return handshake_proxy.snapshot()
