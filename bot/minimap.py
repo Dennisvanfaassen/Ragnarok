@@ -259,6 +259,55 @@ class MinimapNavigator:
 
         return math.atan2(dy, dx)
 
+    def observe_player(self, frame, command_screen_heading=None):
+        """Track the minimap arrow without choosing a visual route.
+
+        World-aware navigation uses this to obtain the player's minimap
+        position and to keep learning the screen/minimap rotation offset.
+        """
+        minimap = self._crop(frame)
+        if minimap.size == 0:
+            self.last_status = "bad_roi"
+            return None, {"status": self.last_status}
+
+        player = self._find_player(minimap)
+        if player is None:
+            self.last_status = "arrow_not_found"
+            return None, {"status": self.last_status}
+
+        moved = 0.0
+        if self.last_player is not None:
+            dx = player[0] - self.last_player[0]
+            dy = player[1] - self.last_player[1]
+            moved = math.hypot(dx, dy)
+
+            if moved >= float(self.cfg.get("calibration_min_move_pixels", 1.2)):
+                self.still_frames = 0
+                if self.auto_calibrate and self.last_command_screen_heading is not None:
+                    observed_map_heading = math.atan2(dy, dx)
+                    measured_offset = _angle_diff(
+                        self.last_command_screen_heading,
+                        observed_map_heading,
+                    )
+                    alpha = float(self.cfg.get("calibration_alpha", 0.18))
+                    delta = _angle_diff(measured_offset, self.rotation_offset)
+                    self.rotation_offset += alpha * delta
+            else:
+                self.still_frames += 1
+
+        self.last_player = player
+        if command_screen_heading is not None:
+            self.last_command_screen_heading = command_screen_heading
+
+        self.last_status = "tracking"
+        return player, {
+            "status": self.last_status,
+            "player": player,
+            "moved": moved,
+            "rotation_offset": self.rotation_offset,
+            "minimap_shape": minimap.shape[:2],
+        }
+
     def plan(self, frame, command_screen_heading=None):
         minimap = self._crop(frame)
         if minimap.size == 0:
