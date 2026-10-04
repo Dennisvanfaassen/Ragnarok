@@ -104,19 +104,20 @@ minimap:
 
 world:
   enabled: true
-  # Current test map: Byalan Dungeon F3.
-  # Later this will be detected automatically on map changes.
-  current_map: "iz_dun02"
 
-  # Leave blank to auto-discover Desktop\Ragnarokmap\processed.
+  # Deterministic navigation test:
+  # Izlude -> Tool Dealer. Towninfo.lub lists the Tool Dealer at (112,179).
+  current_map: "izlude"
+  destination:
+    name: "Tool Dealer"
+    x: 112
+    y: 179
+
+  # Leave blank to auto-discover Desktop\\Ragnarokmap\\processed.
   database_path: ""
 
-  # The in-game minimap shows the whole map. Localization now aspect-fits
-  # the real GAT dimensions automatically instead of guessing padding.
   invert_y: true
 
-  # Standard Ragnarok isometric projection seed. The bot refines this from
-  # real minimap movement while walking.
   world_to_screen_matrix:
     - [1.0, 0.52]
     - [-1.0, 0.52]
@@ -124,14 +125,10 @@ world:
   transform_sample_count: 40
   transform_learning_alpha: 0.15
 
-  exploration_min_distance_cells: 45
-  exploration_max_distance_cells: 120
-  exploration_sample_stride: 12
-  exploration_repeat_penalty: 80.0
   snap_radius_cells: 12
-  waypoint_spacing_cells: 8
-  waypoint_reached_radius_cells: 4.0
-  goal_reached_radius_cells: 5.0
+  waypoint_spacing_cells: 5
+  waypoint_reached_radius_cells: 3.0
+  goal_reached_radius_cells: 4.0
 
 loot:
   enabled: true
