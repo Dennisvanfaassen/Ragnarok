@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import math
+import random
 import time
 from pathlib import Path
 
 import keyboard
 import yaml
 
-from bot.controls import click_relative, loot_sweep, move_randomly, press_key
+from bot.controls import (
+    begin_held_walk,
+    choose_walk_point,
+    click_relative,
+    end_held_walk,
+    loot_sweep,
+    press_key,
+    steer_held_walk,
+)
 from bot.vision import Vision
 from bot.window import find_game_window, focus_window
 
@@ -36,12 +46,27 @@ class RagnarokBot:
         self.last_target_xy = None
         self.had_target_last_frame = False
 
+        # Continuous roaming state.
+        self.walking = False
+        self.walk_heading = random.uniform(0, math.tau)
+        self.walk_started = 0.0
+        self.last_steer = 0.0
+        self.next_major_turn = 0.0
+
+    def _stop_walking(self):
+        if self.walking:
+            end_held_walk()
+            self.walking = False
+
     def stop(self):
+        self._stop_walking()
         print("\n[BOT] Stop requested.")
         self.running = False
 
     def toggle_pause(self):
         self.paused = not self.paused
+        if self.paused:
+            self._stop_walking()
         print(f"\n[BOT] {'Paused' if self.paused else 'Resumed'}.")
 
     def request_debug(self):
@@ -61,6 +86,7 @@ class RagnarokBot:
         cooldown = float(hp_cfg["cooldown_seconds"])
 
         if hp <= float(hp_cfg["emergency_below_percent"]):
+            self._stop_walking()
             if now - self.last_heal >= cooldown:
                 print("\n[BOT] Critical HP -> emergency key.")
                 press_key(hp_cfg["emergency_key"])
@@ -81,6 +107,63 @@ class RagnarokBot:
         if a is None or b is None:
             return False
         return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 <= radius
+
+    def _roam(self, hwnd, rect, player_xy, targeting, movement):
+        now = time.monotonic()
+        radius = int(movement.get("hold_radius_px", 320))
+
+        if not self.walking:
+            # Keep headings for several seconds instead of picking random cells.
+            self.walk_heading = (
+                self.walk_heading
+                + random.uniform(
+                    -float(movement.get("new_heading_max_turn_radians", 1.2)),
+                    float(movement.get("new_heading_max_turn_radians", 1.2)),
+                )
+            ) % math.tau
+            x, y = choose_walk_point(
+                rect,
+                player_xy,
+                targeting["excluded_regions"],
+                self.walk_heading,
+                radius,
+            )
+            begin_held_walk(hwnd, rect, x, y)
+            self.walking = True
+            self.walk_started = now
+            self.last_steer = now
+            self.next_major_turn = now + random.uniform(
+                float(movement.get("heading_hold_min_seconds", 3.0)),
+                float(movement.get("heading_hold_max_seconds", 6.5)),
+            )
+            print(f"\n[BOT] Roaming continuously toward ({x},{y}).")
+            return
+
+        # Small steering corrections while keeping the mouse button held.
+        steer_interval = float(movement.get("steer_interval_seconds", 0.45))
+        if now - self.last_steer >= steer_interval:
+            jitter = float(movement.get("steer_jitter_radians", 0.08))
+            self.walk_heading = (self.walk_heading + random.uniform(-jitter, jitter)) % math.tau
+
+            if now >= self.next_major_turn:
+                max_turn = float(movement.get("major_turn_radians", 0.55))
+                self.walk_heading = (
+                    self.walk_heading + random.uniform(-max_turn, max_turn)
+                ) % math.tau
+                self.next_major_turn = now + random.uniform(
+                    float(movement.get("heading_hold_min_seconds", 3.0)),
+                    float(movement.get("heading_hold_max_seconds", 6.5)),
+                )
+
+            x, y = choose_walk_point(
+                rect,
+                player_xy,
+                targeting["excluded_regions"],
+                self.walk_heading,
+                radius,
+            )
+            steer_held_walk(hwnd, rect, x, y)
+            self.last_steer = now
 
     def run(self):
         window_cfg = self.config["window"]
@@ -122,110 +205,106 @@ class RagnarokBot:
         move_after = float(bot_cfg["no_target_move_after_seconds"])
         reclick_cooldown = float(bot_cfg.get("target_reclick_cooldown_seconds", 2.0))
 
-        while self.running:
-            if self.paused:
-                time.sleep(0.15)
-                continue
-
-            try:
-                hwnd, rect, _title = find_game_window(
-                    window_cfg.get("process_names", []),
-                    window_cfg.get("title_contains", []),
-                )
-                current_width = rect[2] - rect[0]
-                current_height = rect[3] - rect[1]
-                player_xy = (
-                    int(float(player_cfg["center_x_ratio"]) * current_width),
-                    int(float(player_cfg["center_y_ratio"]) * current_height),
-                )
-
-                frame = self.vision.capture(rect)
-
-                if self._handle_hp(frame):
-                    time.sleep(loop_delay)
+        try:
+            while self.running:
+                if self.paused:
+                    time.sleep(0.15)
                     continue
 
-                detections = self.vision.find_targets(
-                    frame,
-                    player_xy,
-                    targeting["excluded_regions"],
-                    float(targeting["max_target_distance_px"]),
-                    float(targeting.get("min_target_distance_px", 35)),
-                )
-
-                if self.debug_requested:
-                    path = debug_cfg.get("output_path", "debug_last.jpg")
-                    self.vision.save_debug(frame, detections, player_xy, path)
-                    print(f"\n[BOT] Debug screenshot saved: {path}")
-                    self.debug_requested = False
-
-                if detections:
-                    x, y, name, score, distance, _tw, _th = detections[0]
-                    y += int(targeting.get("click_y_offset", 0))
-                    now = time.monotonic()
-
-                    target_xy = (x, y)
-                    if (
-                        not self._same_target(target_xy, self.last_target_xy)
-                        or now - self.last_target_click >= reclick_cooldown
-                    ):
-                        print(
-                            f"\n[BOT] Target {name} at ({x},{y}) "
-                            f"score={score:.2f} distance={distance:.0f}px -> CLICK"
-                        )
-                        click_relative(hwnd, rect, x, y)
-                        self.last_target_click = now
-                        self.last_target_xy = target_xy
-
-                    self.last_target_seen = now
-                    self.had_target_last_frame = True
-                    time.sleep(attack_wait)
-                    continue
-
-                # A target was visible previously and has now disappeared.
-                # Treat that as the likely kill moment and sweep the drop area.
-                if (
-                    self.had_target_last_frame
-                    and self.last_target_xy is not None
-                    and loot_cfg.get("enabled", True)
-                    and loot_cfg.get("sweep_after_target_disappears", True)
-                ):
-                    time.sleep(float(loot_cfg.get("settle_delay_seconds", 0.18)))
-                    print("\n[BOT] Target disappeared -> looting drop area.")
-                    loot_sweep(
-                        hwnd,
-                        rect,
-                        self.last_target_xy,
-                        int(loot_cfg.get("radius_px", 24)),
-                        int(loot_cfg.get("rings", 2)),
-                        int(loot_cfg.get("points_per_ring", 8)),
-                        float(loot_cfg.get("click_delay_seconds", 0.045)),
+                try:
+                    hwnd, rect, _title = find_game_window(
+                        window_cfg.get("process_names", []),
+                        window_cfg.get("title_contains", []),
                     )
-                    self.last_target_seen = time.monotonic()
+                    current_width = rect[2] - rect[0]
+                    current_height = rect[3] - rect[1]
+                    player_xy = (
+                        int(float(player_cfg["center_x_ratio"]) * current_width),
+                        int(float(player_cfg["center_y_ratio"]) * current_height),
+                    )
 
-                self.had_target_last_frame = False
-                self.last_target_xy = None
+                    frame = self.vision.capture(rect)
 
-                if (
-                    movement.get("enabled", True)
-                    and time.monotonic() - self.last_target_seen >= move_after
-                ):
-                    mx, my = move_randomly(
-                        hwnd,
-                        rect,
+                    if self._handle_hp(frame):
+                        time.sleep(loop_delay)
+                        continue
+
+                    detections = self.vision.find_targets(
+                        frame,
                         player_xy,
                         targeting["excluded_regions"],
-                        int(movement["min_radius_px"]),
-                        int(movement["max_radius_px"]),
-                        float(movement.get("click_delay_seconds", 0.20)),
+                        float(targeting["max_target_distance_px"]),
+                        float(targeting.get("min_target_distance_px", 35)),
                     )
-                    print(f"\n[BOT] No target -> walking to ({mx},{my}).")
-                    self.last_target_seen = time.monotonic()
 
-                time.sleep(loop_delay)
+                    if self.debug_requested:
+                        path = debug_cfg.get("output_path", "debug_last.jpg")
+                        self.vision.save_debug(frame, detections, player_xy, path)
+                        print(f"\n[BOT] Debug screenshot saved: {path}")
+                        self.debug_requested = False
 
-            except Exception as exc:
-                print(f"\n[BOT] Error: {exc}")
-                time.sleep(0.5)
+                    if detections:
+                        # Release held movement immediately before engaging.
+                        self._stop_walking()
+
+                        x, y, name, score, distance, _tw, _th = detections[0]
+                        y += int(targeting.get("click_y_offset", 0))
+                        now = time.monotonic()
+
+                        target_xy = (x, y)
+                        if (
+                            not self._same_target(target_xy, self.last_target_xy)
+                            or now - self.last_target_click >= reclick_cooldown
+                        ):
+                            print(
+                                f"\n[BOT] Target {name} at ({x},{y}) "
+                                f"score={score:.2f} distance={distance:.0f}px -> CLICK"
+                            )
+                            click_relative(hwnd, rect, x, y)
+                            self.last_target_click = now
+                            self.last_target_xy = target_xy
+
+                        self.last_target_seen = now
+                        self.had_target_last_frame = True
+                        time.sleep(attack_wait)
+                        continue
+
+                    if (
+                        self.had_target_last_frame
+                        and self.last_target_xy is not None
+                        and loot_cfg.get("enabled", True)
+                        and loot_cfg.get("sweep_after_target_disappears", True)
+                    ):
+                        self._stop_walking()
+                        time.sleep(float(loot_cfg.get("settle_delay_seconds", 0.18)))
+                        print("\n[BOT] Target disappeared -> looting drop area.")
+                        loot_sweep(
+                            hwnd,
+                            rect,
+                            self.last_target_xy,
+                            int(loot_cfg.get("radius_px", 24)),
+                            int(loot_cfg.get("rings", 2)),
+                            int(loot_cfg.get("points_per_ring", 8)),
+                            float(loot_cfg.get("click_delay_seconds", 0.045)),
+                        )
+                        self.last_target_seen = time.monotonic()
+
+                    self.had_target_last_frame = False
+                    self.last_target_xy = None
+
+                    if (
+                        movement.get("enabled", True)
+                        and time.monotonic() - self.last_target_seen >= move_after
+                    ):
+                        self._roam(hwnd, rect, player_xy, targeting, movement)
+
+                    time.sleep(loop_delay)
+
+                except Exception as exc:
+                    self._stop_walking()
+                    print(f"\n[BOT] Error: {exc}")
+                    time.sleep(0.5)
+        finally:
+            self._stop_walking()
 
         print("\n[BOT] Stopped.")
