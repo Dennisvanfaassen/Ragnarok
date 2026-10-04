@@ -91,6 +91,19 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
     </section>
 
+    <section class="card full">
+      <h2>Handshake diagnostics</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Starts a local proxy on 127.0.0.1:16900 and forwards to Soulbound 88.214.58.232:6900.
+        It stores only packet direction, byte count, first 16-bit opcode, timestamp and SHA-256 — never raw payloads.
+      </div>
+      <div class="actions">
+        <button class="action secondary" onclick="startHandshake()">Start handshake proxy</button>
+        <button class="action secondary" onclick="refreshHandshake()">Refresh handshake</button>
+        <button class="action danger" onclick="stopHandshake()">Stop proxy</button>
+      </div>
+    </section>
+
     <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
   </div>
 </main>
@@ -131,6 +144,18 @@ async function scanClient(){
   });
   const data=await r.json();
   out(data);
+}
+async function startHandshake(){
+  const r=await fetch('/api/diagnostics/handshake/start',{method:'POST'});
+  out(await r.json());
+}
+async function refreshHandshake(){
+  const r=await fetch('/api/diagnostics/handshake');
+  out(await r.json());
+}
+async function stopHandshake(){
+  const r=await fetch('/api/diagnostics/handshake/stop',{method:'POST'});
+  out(await r.json());
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
