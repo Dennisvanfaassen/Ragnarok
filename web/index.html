@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RO Control</title>
+<style>
+:root{color-scheme:dark;--bg:#0a0d12;--panel:#121722;--line:#252d3d;--text:#f4f6fb;--muted:#939db0;--accent:#7c6cff;--green:#28d7a1}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#171b2c 0,#0a0d12 40%);color:var(--text)}
+.shell{display:grid;grid-template-columns:245px 1fr;min-height:100vh}.side{border-right:1px solid var(--line);padding:24px 18px;background:#0c1017cc}.brand{font-size:21px;font-weight:800;margin-bottom:28px}.brand span{color:var(--accent)}
+.nav{display:grid;gap:7px}.nav div{padding:12px 13px;border-radius:10px;color:var(--muted)}.nav .active{background:#171d29;color:#fff}
+.main{padding:28px;max-width:1320px;width:100%;margin:auto}.top{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:20px}
+h1{margin:0;font-size:27px}h2{margin:0 0 15px;font-size:15px}.muted{font-size:13px;color:var(--muted)}
+.status{display:flex;align-items:center;gap:8px;color:var(--muted)}.dot{width:9px;height:9px;border-radius:50%;background:#657087}.online{background:var(--green)}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}.card{grid-column:span 4;background:linear-gradient(180deg,#141a25,#10151e);border:1px solid var(--line);border-radius:16px;padding:18px}.wide{grid-column:span 8}.full{grid-column:1/-1}
+.metric{font-size:27px;font-weight:800;margin:7px 0}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+label{display:grid;gap:7px;font-size:12px;color:var(--muted);margin-bottom:13px}input,select{width:100%;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:#0b1018;color:#fff}
+.actions{display:flex;gap:10px;flex-wrap:wrap}.action{border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer;background:var(--accent);color:white}.secondary{background:#202838}.danger{background:#a64055}
+pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;color:#aab5c9;min-height:75px}
+@media(max-width:900px){.shell{grid-template-columns:1fr}.side{display:none}.card,.wide{grid-column:1/-1}.main{padding:18px}}
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="side">
+  <div class="brand">RO <span>Control</span></div>
+  <div class="nav">
+    <div class="active">Dashboard</div>
+    <div>Hunting</div>
+    <div>Town & Storage</div>
+    <div>Healing & Supplies</div>
+    <div>Server</div>
+    <div>Logs</div>
+  </div>
+</aside>
+<main class="main">
+  <div class="top">
+    <div><h1>Ragnarok Bot</h1><div class="muted">OpenKore-style core with a modern control layer</div></div>
+    <div class="status"><span id="dot" class="dot"></span><span id="status">stopped</span></div>
+  </div>
+  <div class="grid">
+    <section class="card"><h2>Current action</h2><div id="action" class="metric">Idle</div><div id="message" class="muted">Ready</div></section>
+    <section class="card"><h2>Location</h2><div id="location" class="metric">—</div><div class="muted">Exact map/X/Y will come from network state</div></section>
+    <section class="card"><h2>Target</h2><div id="target" class="metric">—</div><div class="muted">Combat queue</div></section>
+
+    <section class="card wide">
+      <h2>Bot profile</h2>
+      <div class="row">
+        <label>Profile name<input id="profileName" value="Default"></label>
+        <label>Server<select id="server"><option value="soulbound">Soulbound Journey</option></select></label>
+      </div>
+      <div class="row">
+        <label>Hunt map<input id="huntMap" placeholder="iz_dun02"></label>
+        <label>Monsters<input id="monsters" placeholder="Obeaune, Cornutus"></label>
+      </div>
+      <div class="row">
+        <label>Return at weight %<input id="weight" type="number" value="80"></label>
+        <label>Storage map<input id="storageMap" placeholder="izlude"></label>
+      </div>
+      <div class="row">
+        <label>Healing item<input id="healItem" placeholder="White Potion"></label>
+        <label>Heal below HP %<input id="healPercent" type="number" value="50"></label>
+      </div>
+      <div class="actions">
+        <button class="action" onclick="saveProfile()">Save profile</button>
+        <button class="action secondary" onclick="probe()">Test server</button>
+        <button class="action" onclick="startBot()">Start</button>
+        <button class="action danger" onclick="stopBot()">Stop</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Connection</h2>
+      <div class="muted">Soulbound login server</div>
+      <div class="metric" style="font-size:18px">88.214.58.232:6900</div>
+      <div class="muted">Packet profile: not verified yet</div>
+    </section>
+
+    <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
+  </div>
+</main>
+</div>
+<script>
+function out(value){document.getElementById('log').textContent=typeof value==='string'?value:JSON.stringify(value,null,2)}
+async function refresh(){
+  const r=await fetch('/api/state'); const s=await r.json();
+  document.getElementById('status').textContent=s.status;
+  document.getElementById('action').textContent=s.current_action||'Idle';
+  document.getElementById('message').textContent=s.message||'';
+  document.getElementById('location').textContent=s.map ? s.map+' ('+(s.x??'?')+', '+(s.y??'?')+')' : '—';
+  document.getElementById('target').textContent=s.target||'—';
+  document.getElementById('dot').className='dot '+(s.status==='online'?'online':'');
+}
+async function saveProfile(){
+  const body={
+    name:document.getElementById('profileName').value,
+    server_profile:document.getElementById('server').value,
+    hunt:{map:document.getElementById('huntMap').value,monsters:document.getElementById('monsters').value.split(',').map(function(x){return x.trim()}).filter(Boolean),loot_all:true},
+    healing:{enabled:!!document.getElementById('healItem').value,item:document.getElementById('healItem').value,hp_below_percent:+document.getElementById('healPercent').value},
+    town:{storage_map:document.getElementById('storageMap').value,storage_npc:'',return_weight_percent:+document.getElementById('weight').value,butterfly_wing_item:'Butterfly Wing'}
+  };
+  const r=await fetch('/api/profile',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  out(await r.json());
+}
+async function probe(){
+  const r=await fetch('/api/server/'+document.getElementById('server').value+'/probe',{method:'POST'});
+  out(await r.json());
+}
+async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
+async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
+refresh();setInterval(refresh,1000);
+</script>
+</body>
+</html>
