@@ -10,6 +10,7 @@ from core.engine import engine
 from core.models import BotProfile, ServerProfile
 from core.state import app_state
 from network.session import RagnarokSession
+from diagnostics.client_scan import scan_client
 
 
 ROOT = Path(__file__).resolve().parent
@@ -67,3 +68,14 @@ async def start_bot():
 async def stop_bot():
     engine.stop()
     return app_state.get_runtime()
+
+
+@app.post("/api/diagnostics/client")
+async def client_diagnostics(payload: dict):
+    exe_path = str(payload.get("exe_path", "")).strip()
+    if not exe_path:
+        raise HTTPException(400, "exe_path is required")
+    try:
+        return scan_client(exe_path)
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
