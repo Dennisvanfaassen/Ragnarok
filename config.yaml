@@ -10,10 +10,10 @@ bot:
   stop_hotkey: "f12"
   pause_hotkey: "f11"
   debug_hotkey: "f10"
-  loop_delay_ms: 120
-  attack_wait_seconds: 1.15
-  no_target_move_after_seconds: 0.75
-  target_reclick_cooldown_seconds: 1.8
+  loop_delay_ms: 80
+  no_target_move_after_seconds: 0.20
+  target_reclick_cooldown_seconds: 0.55
+  combat_clear_seconds: 0.65
 
 player:
   center_x_ratio: 0.50
@@ -48,8 +48,9 @@ targeting:
 movement:
   enabled: true
   # Hold the mouse button and continuously travel in one direction.
-  hold_radius_px: 330
-  steer_interval_seconds: 0.45
+  hold_radius_px: 300
+  steer_interval_seconds: 0.18
+  navigation_log_interval_seconds: 2.0
   steer_jitter_radians: 0.06
   heading_hold_min_seconds: 3.5
   heading_hold_max_seconds: 7.0
@@ -110,13 +111,18 @@ world:
   # Leave blank to auto-discover Desktop\Ragnarokmap\processed.
   database_path: ""
 
-  # The in-game minimap shows the whole map. These values convert the
-  # white arrow location to real GAT cell coordinates.
+  # The in-game minimap shows the whole map. Localization now aspect-fits
+  # the real GAT dimensions automatically instead of guessing padding.
   invert_y: true
-  minimap_padding_left_ratio: 0.03
-  minimap_padding_right_ratio: 0.03
-  minimap_padding_top_ratio: 0.03
-  minimap_padding_bottom_ratio: 0.08
+
+  # Standard Ragnarok isometric projection seed. The bot refines this from
+  # real minimap movement while walking.
+  world_to_screen_matrix:
+    - [1.0, 0.52]
+    - [-1.0, 0.52]
+  transform_min_motion_pixels: 1.0
+  transform_sample_count: 40
+  transform_learning_alpha: 0.15
 
   exploration_min_distance_cells: 45
   exploration_max_distance_cells: 120
@@ -129,11 +135,11 @@ world:
 loot:
   enabled: true
   sweep_after_target_disappears: true
-  settle_delay_seconds: 0.18
-  radius_px: 24
-  rings: 2
-  points_per_ring: 8
-  click_delay_seconds: 0.045
+  settle_delay_seconds: 0.12
+  radius_px: 20
+  rings: 1
+  points_per_ring: 6
+  click_delay_seconds: 0.035
 
 debug:
   save_detection_frame: true
