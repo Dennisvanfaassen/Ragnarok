@@ -76,6 +76,21 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <div class="muted">Packet profile: not verified yet</div>
     </section>
 
+    <section class="card full">
+      <h2>Client diagnostics</h2>
+      <div class="row">
+        <label>Classic.exe path
+          <input id="exePath" placeholder="C:\\SoulBoundRO\\Soubound_Journey_Client\\Classic.exe">
+        </label>
+        <label>Protocol discovery
+          <input value="Local metadata + executable fingerprint" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action secondary" onclick="scanClient()">Scan client</button>
+      </div>
+    </section>
+
     <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
   </div>
 </main>
@@ -105,6 +120,17 @@ async function saveProfile(){
 async function probe(){
   const r=await fetch('/api/server/'+document.getElementById('server').value+'/probe',{method:'POST'});
   out(await r.json());
+}
+async function scanClient(){
+  const path=document.getElementById('exePath').value.trim();
+  if(!path){out('Enter the full path to Classic.exe first.');return}
+  const r=await fetch('/api/diagnostics/client',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({exe_path:path})
+  });
+  const data=await r.json();
+  out(data);
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
