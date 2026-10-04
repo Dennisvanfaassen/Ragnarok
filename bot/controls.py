@@ -73,10 +73,10 @@ def _send_mouse(flags: int, dx: int = 0, dy: int = 0) -> bool:
 
 
 def _absolute_coords(screen_x: int, screen_y: int) -> tuple[int, int]:
-    vx = user32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
-    vy = user32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
-    vw = user32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
-    vh = user32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+    vx = user32.GetSystemMetrics(76)
+    vy = user32.GetSystemMetrics(77)
+    vw = user32.GetSystemMetrics(78)
+    vh = user32.GetSystemMetrics(79)
 
     if vw <= 1 or vh <= 1:
         vw = user32.GetSystemMetrics(0)
@@ -100,70 +100,84 @@ def _move_cursor(screen_x: int, screen_y: int) -> None:
         pyautogui.moveTo(int(screen_x), int(screen_y), duration=0.05)
 
 
-def _left_click() -> None:
-    down = _send_mouse(MOUSEEVENTF_LEFTDOWN)
-    time.sleep(0.035)
-    up = _send_mouse(MOUSEEVENTF_LEFTUP)
-
-    if not (down and up):
+def mouse_down() -> None:
+    if not _send_mouse(MOUSEEVENTF_LEFTDOWN):
         pyautogui.mouseDown(button="left")
-        time.sleep(0.035)
+
+
+def mouse_up() -> None:
+    if not _send_mouse(MOUSEEVENTF_LEFTUP):
         pyautogui.mouseUp(button="left")
 
 
-def click_relative(hwnd: int, window_rect, x: int, y: int, clicks: int = 1) -> None:
-    left, top, _right, _bottom = window_rect
-    sx = int(left + x)
-    sy = int(top + y)
+def _left_click() -> None:
+    mouse_down()
+    time.sleep(0.035)
+    mouse_up()
 
+
+def move_cursor_relative(hwnd: int, window_rect, x: int, y: int) -> None:
+    left, top, _right, _bottom = window_rect
     _activate(hwnd)
-    time.sleep(0.06)
-    _move_cursor(sx, sy)
-    time.sleep(0.05)
+    _move_cursor(int(left + x), int(top + y))
+
+
+def click_relative(hwnd: int, window_rect, x: int, y: int, clicks: int = 1) -> None:
+    move_cursor_relative(hwnd, window_rect, x, y)
+    time.sleep(0.045)
 
     for _ in range(max(1, clicks)):
         _left_click()
-        time.sleep(0.065)
+        time.sleep(0.06)
+
+
+def begin_held_walk(hwnd: int, window_rect, x: int, y: int) -> None:
+    move_cursor_relative(hwnd, window_rect, x, y)
+    time.sleep(0.04)
+    mouse_down()
+
+
+def steer_held_walk(hwnd: int, window_rect, x: int, y: int) -> None:
+    move_cursor_relative(hwnd, window_rect, x, y)
+
+
+def end_held_walk() -> None:
+    mouse_up()
 
 
 def press_key(key: str) -> None:
     pyautogui.press(key)
 
 
-def move_randomly(
-    hwnd: int,
+def choose_walk_point(
     window_rect,
     player_xy,
     excluded_regions,
-    min_radius=150,
-    max_radius=330,
-    click_delay=0.20,
+    heading: float,
+    radius: int,
 ) -> tuple[int, int]:
     left, top, right, bottom = window_rect
     width = right - left
     height = bottom - top
     px, py = player_xy
 
-    for _ in range(20):
-        angle = random.uniform(0, math.tau)
-        radius = random.randint(min_radius, max_radius)
+    # Try the requested heading first, then progressively fan out around it.
+    offsets = [0.0, 0.18, -0.18, 0.36, -0.36, 0.60, -0.60, 0.9, -0.9]
+    for offset in offsets:
+        angle = heading + offset
         x = int(px + radius * math.cos(angle))
         y = int(py + radius * math.sin(angle))
 
-        x = max(45, min(width - 45, x))
-        y = max(100, min(height - 70, y))
+        x = max(55, min(width - 55, x))
+        y = max(105, min(height - 80, y))
 
         blocked = False
         for x1r, y1r, x2r, y2r in excluded_regions:
             if x1r * width <= x <= x2r * width and y1r * height <= y <= y2r * height:
                 blocked = True
                 break
-        if blocked:
-            continue
-
-        click_relative(hwnd, window_rect, x, y)
-        time.sleep(click_delay)
-        return x, y
+        if not blocked:
+            return x, y
 
     return px, py
 
