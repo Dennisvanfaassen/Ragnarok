@@ -40,6 +40,7 @@ class WorldRoutePlanner:
         )
         self._calibration_world = []
         self._calibration_screen = []
+        self._goal_visits: dict[tuple[int, int], int] = {}
 
     @staticmethod
     def _resolve_database_path(configured):
@@ -165,30 +166,53 @@ class WorldRoutePlanner:
         return math.atan2(float(screen[1]), float(screen[0]))
 
     def _choose_exploration_goal(self, nav_map, start: tuple[int, int]) -> tuple[int, int]:
+        """Choose a sensible patrol destination instead of a random cell.
+
+        We sample the real walkable grid and prefer destinations that are far
+        enough away and have been used least often. This produces long,
+        map-covering patrol routes rather than visibly random wandering.
+        """
         min_dist = int(self.cfg.get("exploration_min_distance_cells", 45))
         max_dist = int(self.cfg.get("exploration_max_distance_cells", 120))
-        attempts = int(self.cfg.get("exploration_attempts", 200))
+        stride = max(4, int(self.cfg.get("exploration_sample_stride", 12)))
 
-        best = None
-        best_dist = -1.0
+        candidates = []
+        for y in range(0, nav_map.height, stride):
+            for x in range(0, nav_map.width, stride):
+                if not nav_map.walkable(x, y):
+                    continue
+                dist = math.hypot(x - start[0], y - start[1])
+                if dist < min_dist or dist > max_dist:
+                    continue
 
-        for _ in range(attempts):
-            angle = random.uniform(0.0, math.tau)
-            distance = random.uniform(min_dist, max_dist)
-            x = int(round(start[0] + math.cos(angle) * distance))
-            y = int(round(start[1] + math.sin(angle) * distance))
+                visits = self._goal_visits.get((x, y), 0)
+                score = dist - visits * float(
+                    self.cfg.get("exploration_repeat_penalty", 80.0)
+                )
+                candidates.append((score, -visits, dist, x, y))
 
-            if not nav_map.walkable(x, y):
-                continue
+        if not candidates:
+            # Fall back to any distant walkable point if the radius ring is
+            # sparse on an unusual map.
+            for y in range(0, nav_map.height, stride):
+                for x in range(0, nav_map.width, stride):
+                    if not nav_map.walkable(x, y):
+                        continue
+                    dist = math.hypot(x - start[0], y - start[1])
+                    if dist >= min_dist:
+                        visits = self._goal_visits.get((x, y), 0)
+                        score = dist - visits * float(
+                            self.cfg.get("exploration_repeat_penalty", 80.0)
+                        )
+                        candidates.append((score, -visits, dist, x, y))
 
-            d = math.hypot(x - start[0], y - start[1])
-            if d > best_dist:
-                best = (x, y)
-                best_dist = d
-
-        if best is None:
+        if not candidates:
             raise RuntimeError("Could not find a walkable exploration goal.")
-        return best
+
+        candidates.sort(reverse=True)
+        _score, _neg_visits, _dist, x, y = candidates[0]
+        self._goal_visits[(x, y)] = self._goal_visits.get((x, y), 0) + 1
+        return x, y
 
     def _needs_new_route(self, current: tuple[int, int]) -> bool:
         if not self.state.waypoints:
