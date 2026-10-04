@@ -1,0 +1,11 @@
+id: soulbound
+name: Soulbound Journey
+host: 88.214.58.232
+port: 6900
+version: 55
+service_type: korea
+server_type: primary
+packet_version:
+notes: >
+  Connection values are from the client's data/clientinfo.xml.
+  packet_version is intentionally blank until verified.
