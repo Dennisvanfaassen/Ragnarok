@@ -1,8 +1,21 @@
 from __future__ import annotations
 
+import ctypes
+
 import psutil
 import win32gui
 import win32process
+
+
+# Keep screenshot coordinates, ClientToScreen coordinates and mouse coordinates
+# in the same physical pixel coordinate system on scaled Windows desktops.
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 
 def _client_rect(hwnd: int) -> tuple[int, int, int, int]:
