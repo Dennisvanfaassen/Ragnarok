@@ -30,7 +30,7 @@ hp:
   cooldown_seconds: 0.8
 
 targeting:
-  template_threshold: 0.80
+  template_threshold: 0.62
   click_y_offset: 0
   max_target_distance_px: 650
   # Rectangles are [x1_ratio, y1_ratio, x2_ratio, y2_ratio].
