@@ -12,7 +12,7 @@ bot:
   debug_hotkey: "f10"
   loop_delay_ms: 120
   attack_wait_seconds: 1.15
-  no_target_move_after_seconds: 1.5
+  no_target_move_after_seconds: 0.75
   target_reclick_cooldown_seconds: 1.8
 
 player:
@@ -47,14 +47,17 @@ targeting:
 
 movement:
   enabled: true
-  min_radius_px: 150
-  max_radius_px: 330
-  click_delay_seconds: 0.20
+  # Hold the mouse button and continuously travel in one direction.
+  hold_radius_px: 330
+  steer_interval_seconds: 0.45
+  steer_jitter_radians: 0.06
+  heading_hold_min_seconds: 3.5
+  heading_hold_max_seconds: 7.0
+  major_turn_radians: 0.50
+  new_heading_max_turn_radians: 1.10
 
 loot:
   enabled: true
-  # Your server already reports "Pet auto-loot enabled". This click sweep is
-  # an extra fallback for anything that still appears on the ground.
   sweep_after_target_disappears: true
   settle_delay_seconds: 0.18
   radius_px: 24
