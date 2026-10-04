@@ -292,8 +292,8 @@ class MinimapNavigator:
                         observed_map_heading,
                     )
                     alpha = float(self.cfg.get("calibration_alpha", 0.18))
-                    delta = _angle_diff(measured_offset, self.rotation_offset)
-                    self.rotation_offset += alpha * delta
+                    rotation_delta = _angle_diff(measured_offset, self.rotation_offset)
+                    self.rotation_offset += alpha * rotation_delta
             else:
                 self.still_frames += 1
 
