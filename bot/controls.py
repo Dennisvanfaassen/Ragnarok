@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 import time
 
@@ -19,20 +20,38 @@ def press_key(key: str) -> None:
     pyautogui.press(key)
 
 
-def move_randomly(window_rect, player_xy, min_radius=120, max_radius=260) -> None:
+def move_randomly(
+    window_rect,
+    player_xy,
+    excluded_regions,
+    min_radius=150,
+    max_radius=330,
+    click_delay=0.20,
+) -> tuple[int, int]:
     left, top, right, bottom = window_rect
     width = right - left
     height = bottom - top
     px, py = player_xy
 
-    angle = random.uniform(0, 6.28318530718)
-    radius = random.randint(min_radius, max_radius)
+    for _ in range(20):
+        angle = random.uniform(0, math.tau)
+        radius = random.randint(min_radius, max_radius)
+        x = int(px + radius * math.cos(angle))
+        y = int(py + radius * math.sin(angle))
 
-    x = int(px + radius * __import__("math").cos(angle))
-    y = int(py + radius * __import__("math").sin(angle))
+        x = max(45, min(width - 45, x))
+        y = max(100, min(height - 70, y))
 
-    x = max(40, min(width - 40, x))
-    y = max(90, min(height - 60, y))
+        blocked = False
+        for x1r, y1r, x2r, y2r in excluded_regions:
+            if x1r * width <= x <= x2r * width and y1r * height <= y <= y2r * height:
+                blocked = True
+                break
+        if blocked:
+            continue
 
-    click_relative(window_rect, x, y)
-    time.sleep(0.15)
+        click_relative(window_rect, x, y)
+        time.sleep(click_delay)
+        return x, y
+
+    return px, py
