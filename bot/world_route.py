@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 
+import numpy as np
+
 from bot.world_nav import WorldDatabase, astar, simplify_path
 
 
@@ -24,6 +26,20 @@ class WorldRoutePlanner:
         db_path = self._resolve_database_path(cfg.get("database_path"))
         self.db = WorldDatabase(db_path)
         self.state = WorldRouteState(map_name=str(cfg.get("current_map", "")).lower())
+
+        # World-vector -> screen-vector calibration. Ragnarok uses an
+        # isometric projection, so a pure angle/rotation is not sufficient.
+        # Seed with the standard RO isometric basis and refine it from actual
+        # minimap movement while the bot walks.
+        self._screen_matrix = np.array(
+            cfg.get(
+                "world_to_screen_matrix",
+                [[1.0, 0.52], [-1.0, 0.52]],
+            ),
+            dtype=np.float64,
+        )
+        self._calibration_world = []
+        self._calibration_screen = []
 
     @staticmethod
     def _resolve_database_path(configured):
@@ -61,31 +77,92 @@ class WorldRoutePlanner:
         minimap_player: tuple[int, int],
         minimap_shape: tuple[int, int],
     ) -> tuple[int, int]:
+        """Convert minimap pixels to GAT cells using aspect-fit scaling.
+
+        Ragnarok fits the full map into the minimap while preserving aspect
+        ratio. Using the actual GAT width/height is much more accurate than
+        guessed percentage padding.
+        """
         mh, mw = minimap_shape
         px, py = minimap_player
 
-        pad_left = float(self.cfg.get("minimap_padding_left_ratio", 0.0))
-        pad_right = float(self.cfg.get("minimap_padding_right_ratio", 0.0))
-        pad_top = float(self.cfg.get("minimap_padding_top_ratio", 0.0))
-        pad_bottom = float(self.cfg.get("minimap_padding_bottom_ratio", 0.0))
+        scale = min(
+            mw / max(1.0, float(nav_map.width)),
+            mh / max(1.0, float(nav_map.height)),
+        )
+        display_w = nav_map.width * scale
+        display_h = nav_map.height * scale
+        offset_x = (mw - display_w) * 0.5
+        offset_y = (mh - display_h) * 0.5
 
-        usable_x0 = mw * pad_left
-        usable_x1 = mw * (1.0 - pad_right)
-        usable_y0 = mh * pad_top
-        usable_y1 = mh * (1.0 - pad_bottom)
+        gx = int(round((px - offset_x) / max(scale, 1e-6)))
+        image_gy = (py - offset_y) / max(scale, 1e-6)
 
-        nx = (px - usable_x0) / max(1.0, usable_x1 - usable_x0)
-        ny = (py - usable_y0) / max(1.0, usable_y1 - usable_y0)
-        nx = max(0.0, min(1.0, nx))
-        ny = max(0.0, min(1.0, ny))
-
-        gx = int(round(nx * (nav_map.width - 1)))
         if self.cfg.get("invert_y", True):
-            gy = int(round((1.0 - ny) * (nav_map.height - 1)))
+            gy = int(round((nav_map.height - 1) - image_gy))
         else:
-            gy = int(round(ny * (nav_map.height - 1)))
+            gy = int(round(image_gy))
 
+        gx = max(0, min(nav_map.width - 1, gx))
+        gy = max(0, min(nav_map.height - 1, gy))
         return gx, gy
+
+    def observe_motion(
+        self,
+        minimap_delta: tuple[float, float] | None,
+        commanded_screen_heading: float | None,
+    ) -> None:
+        """Learn the isometric/camera transform from real movement."""
+        if minimap_delta is None or commanded_screen_heading is None:
+            return
+
+        dx, dy_image = minimap_delta
+        if math.hypot(dx, dy_image) < float(
+            self.cfg.get("transform_min_motion_pixels", 1.0)
+        ):
+            return
+
+        # Minimap image Y increases downward; GAT/world Y increases upward.
+        world = np.array([dx, -dy_image], dtype=np.float64)
+        norm = np.linalg.norm(world)
+        if norm <= 1e-6:
+            return
+        world /= norm
+
+        screen = np.array(
+            [math.cos(commanded_screen_heading), math.sin(commanded_screen_heading)],
+            dtype=np.float64,
+        )
+
+        self._calibration_world.append(world)
+        self._calibration_screen.append(screen)
+        keep = int(self.cfg.get("transform_sample_count", 40))
+        self._calibration_world = self._calibration_world[-keep:]
+        self._calibration_screen = self._calibration_screen[-keep:]
+
+        if len(self._calibration_world) < 6:
+            return
+
+        w = np.vstack(self._calibration_world)
+        scr = np.vstack(self._calibration_screen)
+
+        # Only fit when movement samples cover at least two independent axes.
+        if np.linalg.matrix_rank(w) < 2:
+            return
+
+        fitted, _residuals, _rank, _singular = np.linalg.lstsq(w, scr, rcond=None)
+        alpha = float(self.cfg.get("transform_learning_alpha", 0.15))
+        self._screen_matrix = (
+            (1.0 - alpha) * self._screen_matrix
+            + alpha * fitted
+        )
+
+    def world_vector_to_screen_heading(self, dx: float, dy: float) -> float:
+        vec = np.array([dx, dy], dtype=np.float64)
+        screen = vec @ self._screen_matrix
+        if np.linalg.norm(screen) <= 1e-6:
+            return 0.0
+        return math.atan2(float(screen[1]), float(screen[0]))
 
     def _choose_exploration_goal(self, nav_map, start: tuple[int, int]) -> tuple[int, int]:
         min_dist = int(self.cfg.get("exploration_min_distance_cells", 45))
@@ -181,10 +258,9 @@ class WorldRoutePlanner:
         dx = target[0] - current[0]
         dy = target[1] - current[1]
 
-        # GAT Y grows north/up, while screen/minimap image Y grows downward.
-        map_heading = math.atan2(-dy, dx)
+        screen_heading = self.world_vector_to_screen_heading(dx, dy)
 
-        return map_heading, {
+        return screen_heading, {
             "status": "world_ok",
             "map": self.state.map_name,
             "position": current,
@@ -193,4 +269,5 @@ class WorldRoutePlanner:
             "path_cells": len(self.state.path or []),
             "waypoint": self.state.waypoint_index,
             "waypoint_count": len(waypoints),
+            "world_delta": (dx, dy),
         }
