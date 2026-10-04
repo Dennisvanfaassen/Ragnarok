@@ -113,3 +113,4 @@ loot:
 debug:
   save_detection_frame: true
   output_path: "debug_last.jpg"
+  minimap_output_path: "debug_minimap.jpg"
