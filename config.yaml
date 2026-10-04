@@ -1,0 +1,45 @@
+window:
+  title_contains:
+    - "Soulbound"
+    - "Ragnarok"
+    - "Classic"
+
+bot:
+  stop_hotkey: "f12"
+  pause_hotkey: "f11"
+  loop_delay_ms: 120
+  attack_wait_seconds: 1.1
+  no_target_move_after_seconds: 2.0
+
+player:
+  # Relative to a 1600x900 game window from the screenshot you provided.
+  center_x_ratio: 0.50
+  center_y_ratio: 0.46
+
+hp:
+  # Small HP bar below the character. Ratios are relative to the game window.
+  roi:
+    x_ratio: 0.480
+    y_ratio: 0.514
+    width_ratio: 0.040
+    height_ratio: 0.012
+  heal_below_percent: 60
+  emergency_below_percent: 20
+  heal_key: "f8"
+  emergency_key: "f9"
+  cooldown_seconds: 0.8
+
+targeting:
+  template_threshold: 0.80
+  click_y_offset: 0
+  max_target_distance_px: 650
+  # Rectangles are [x1_ratio, y1_ratio, x2_ratio, y2_ratio].
+  excluded_regions:
+    - [0.00, 0.00, 0.41, 0.09]   # top-left status / hotbar
+    - [0.00, 0.66, 0.38, 1.00]   # chat
+    - [0.77, 0.00, 1.00, 0.34]   # minimap / quests
+
+movement:
+  enabled: true
+  min_radius_px: 120
+  max_radius_px: 260
