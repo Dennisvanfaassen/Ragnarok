@@ -69,6 +69,14 @@ class HuntSettings(BaseModel):
     loot_after_aggressors: bool = True
     exploration_frontier_bias: bool = True
 
+    # Hunting pacing/recovery.
+    loot_drop_delay_min: float = 0.40
+    loot_drop_delay_max: float = 0.75
+    loot_between_items_min: float = 0.18
+    loot_between_items_max: float = 0.38
+    unreachable_target_cooldown_seconds: float = 8.0
+    combat_no_progress_timeout: float = 1.6
+
 
 class HealingSettings(BaseModel):
     enabled: bool = True
