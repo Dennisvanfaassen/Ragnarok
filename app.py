@@ -239,6 +239,19 @@ async def native_action_move(payload: dict):
     return result
 
 
+@app.post("/api/native-action/storage/add")
+async def native_action_storage_add(payload: dict):
+    try:
+        inventory_index = int(payload.get("inventory_index"))
+        amount = int(payload.get("amount"))
+    except Exception:
+        raise HTTPException(400, "inventory_index and amount are required")
+    result = native_action_bridge.storage_add(inventory_index, amount)
+    if not result.get("ok"):
+        raise HTTPException(400, result)
+    return result
+
+
 @app.post("/api/native-action/interaction-trace/start")
 async def native_action_interaction_trace_start(payload: dict | None = None):
     payload = payload or {}
