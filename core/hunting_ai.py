@@ -406,6 +406,41 @@ class HuntingAI:
         point = path_preview[index]
         return int(point["x"]), int(point["y"])
 
+    def _loot_allowed_for_kill(
+        self,
+        monster_name: str | None,
+        item: dict[str, Any],
+    ) -> bool:
+        hunt = app_state.get_profile().hunt
+        normalized_monster = str(monster_name or "").strip().lower()
+        rule = next(
+            (
+                row for row in hunt.monster_rules
+                if str(row.monster or "").strip().lower() == normalized_monster
+            ),
+            None,
+        )
+        if rule is None:
+            return bool(hunt.loot_all)
+        if not rule.enabled:
+            return False
+
+        mode = str(rule.loot_mode or "all").strip().lower()
+        if mode == "none":
+            return False
+
+        name_id = item.get("name_id")
+        resolved = item_name(int(name_id)) if name_id is not None else ""
+        normalized_item = resolved.strip().lower()
+        include = {str(x).strip().lower() for x in rule.include_items if str(x).strip()}
+        exclude = {str(x).strip().lower() for x in rule.exclude_items if str(x).strip()}
+
+        if mode == "selected":
+            return normalized_item in include
+        if mode == "excluded":
+            return normalized_item not in exclude
+        return normalized_item not in exclude
+
     def _loot_candidates(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         if not app_state.get_profile().hunt.loot_all:
             return []
