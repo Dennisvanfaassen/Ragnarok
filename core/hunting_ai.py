@@ -1521,6 +1521,22 @@ class HuntingAI:
                     },
                     "exploration": exploration_planner.snapshot(),
                 },
+                "navigation_debug": {
+                    "wander_goal": (
+                        {"x": self.wander_goal[0], "y": self.wander_goal[1]}
+                        if self.wander_goal else None
+                    ),
+                    "wander_progress_index": self.wander_progress_index,
+                    "straight_segment_index": self.wander_line_index,
+                    "astar_path": [
+                        {"x": x, "y": y}
+                        for x, y in self.wander_path
+                    ],
+                    "straight_segments": [
+                        {"x": x, "y": y}
+                        for x, y in self.wander_line_points
+                    ],
+                },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
                 "actions": self.actions[-30:],
                 "architecture": (
