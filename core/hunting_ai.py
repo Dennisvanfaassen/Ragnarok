@@ -554,6 +554,106 @@ class HuntingAI:
         )
         return True
 
+    @staticmethod
+    def _angle_between_vectors(
+        a: tuple[int, int],
+        b: tuple[int, int],
+    ) -> float:
+        alen = math.hypot(a[0], a[1])
+        blen = math.hypot(b[0], b[1])
+        if alen < 1e-6 or blen < 1e-6:
+            return 180.0
+        dot = max(
+            -1.0,
+            min(1.0, (a[0] * b[0] + a[1] * b[1]) / (alen * blen)),
+        )
+        return math.degrees(math.acos(dot))
+
+    def _merge_shallow_wander_bends(
+        self,
+        grid,
+        points: list[tuple[int, int]],
+    ) -> list[tuple[int, int]]:
+        """Remove route vertices that create only a very shallow bend."""
+        if len(points) <= 2:
+            return points[:]
+
+        merged = [points[0]]
+        i = 1
+        while i < len(points) - 1:
+            prev = merged[-1]
+            current = points[i]
+            nxt = points[i + 1]
+
+            v1 = (current[0] - prev[0], current[1] - prev[1])
+            v2 = (nxt[0] - current[0], nxt[1] - current[1])
+            angle = self._angle_between_vectors(v1, v2)
+            total_distance = max(
+                abs(nxt[0] - prev[0]),
+                abs(nxt[1] - prev[1]),
+            )
+
+            if (
+                angle <= 11.0
+                and total_distance <= 24
+                and clear_walk_line(grid, prev, nxt)
+            ):
+                i += 1
+                continue
+
+            merged.append(current)
+            i += 1
+
+        merged.append(points[-1])
+        return merged
+
+    def _anticipated_wander_direction(
+        self,
+        grid,
+        player: tuple[int, int],
+        destination: tuple[int, int],
+    ) -> tuple[int, int]:
+        """Preview a safe bend shortly before the current segment ends."""
+        if self.wander_line_index >= len(self.wander_line_points) - 1:
+            return (
+                destination[0] - player[0],
+                destination[1] - player[1],
+            )
+
+        if self._tile_distance(player, destination) > 5:
+            return (
+                destination[0] - player[0],
+                destination[1] - player[1],
+            )
+
+        next_destination = self.wander_line_points[self.wander_line_index + 1]
+        vx = next_destination[0] - destination[0]
+        vy = next_destination[1] - destination[1]
+        length = max(abs(vx), abs(vy), 1)
+
+        # Preview only a few cells into the next segment. The preview itself
+        # must have a completely walkable line from the current player cell.
+        preview_steps = min(3, length)
+        preview = (
+            int(round(destination[0] + vx * preview_steps / length)),
+            int(round(destination[1] + vy * preview_steps / length)),
+        )
+        if not grid.walkable(*preview):
+            return (
+                destination[0] - player[0],
+                destination[1] - player[1],
+            )
+        if not clear_walk_line(grid, player, preview):
+            return (
+                destination[0] - player[0],
+                destination[1] - player[1],
+            )
+
+        return (
+            preview[0] - player[0],
+            preview[1] - player[1],
+        )
+
     def _build_straight_wander_segments(
         self,
         grid,
@@ -582,7 +682,7 @@ class HuntingAI:
             result.append(path[chosen])
             anchor_index = chosen
 
-        return result
+        return self._merge_shallow_wander_bends(grid, result)
 
     def _set_wander_route(
         self,
@@ -1410,8 +1510,11 @@ class HuntingAI:
                 self._stop.wait(0.12)
                 return
 
-        dx = destination[0] - player[0]
-        dy = destination[1] - player[1]
+        dx, dy = self._anticipated_wander_direction(
+            grid,
+            player,
+            destination,
+        )
 
         narrow_corridor = self._wander_corridor_is_narrow(
             grid,
@@ -1419,7 +1522,7 @@ class HuntingAI:
             destination,
         )
         steering_radius = 115 if narrow_corridor else 185
-        turn_threshold = 12 if narrow_corridor else 28
+        turn_threshold = 10 if narrow_corridor else 22
 
         result = mouse_game_adapter.update_hold_direction(
             dx,
@@ -1622,7 +1725,8 @@ class HuntingAI:
                     "combat_click_mode": "fresh-frame_0437-confirmed_lock_until_death",
                     "attack_precision": mouse_game_adapter.precision_snapshot(),
                     "wander_corridor_mode": "astar_clear_line_only",
-                    "wander_progress_mode": "forward_only_straight_segments",
+                    "wander_progress_mode": "forward_only_smoothed_segments",
+                    "steering_mode": "heading_dead_zone_velocity_curve_corner_preview",
                     "saved_hunt_route": {
                         "map": self.saved_route_map,
                         "waypoint_index": self.saved_route_waypoint_index,
