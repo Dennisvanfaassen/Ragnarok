@@ -20,6 +20,8 @@ class ServerProfile(BaseModel):
     host: str
     port: int
     version: int | None = None
+    login_version: int | None = None
+    master_version: int | None = None
     service_type: str | None = None
     server_type: str | None = None
     packet_version: str | None = None
