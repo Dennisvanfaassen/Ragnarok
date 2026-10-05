@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.hunting_ai import hunting_ai
-from core.mouse_adapter import mouse_game_adapter
+from core.game_actions import game_actions
 
 
 class ActiveHuntController:
@@ -25,15 +25,15 @@ class ActiveHuntController:
     def start_calibration(self) -> dict[str, Any]:
         if hunting_ai.running:
             raise RuntimeError("Stop active hunt before calibrating.")
-        return mouse_game_adapter.start_calibration()
+        return game_actions.start_calibration()
 
     def clear_calibration(self) -> dict[str, Any]:
         if hunting_ai.running:
             raise RuntimeError("Stop active hunt before clearing calibration.")
-        return mouse_game_adapter.clear_calibration()
+        return game_actions.clear_calibration()
 
     def calibration_snapshot(self) -> dict[str, Any]:
-        return mouse_game_adapter.calibration_snapshot()
+        return game_actions.calibration_snapshot()
 
 
 active_hunt_controller = ActiveHuntController()
