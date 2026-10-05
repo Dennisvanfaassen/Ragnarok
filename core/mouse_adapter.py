@@ -42,6 +42,7 @@ class MouseGameAdapter:
     def __init__(self):
         self.sprite_y_offset = -24
         self.learned_attack_y_offset: int | None = None
+        self.learned_attack_y_offsets: dict[str, int] = {}
         self._calibration_path = (
             Path(__file__).resolve().parents[1] / "screen_calibration.json"
         )
@@ -569,15 +570,28 @@ class MouseGameAdapter:
             # curvature only causes tiny cursor movement; actual corners move
             # the cursor much faster so the character turns decisively.
             if distance >= min_pixel_change:
+                now = time.time()
                 if distance < 45:
-                    max_step = 5.0
+                    max_step = 3.0
                     turn_kind = "micro"
+                    min_interval = 0.22
                 elif distance < 110:
-                    max_step = 14.0
+                    max_step = 10.0
                     turn_kind = "bend"
+                    min_interval = 0.12
                 else:
-                    max_step = 70.0
+                    max_step = 75.0
                     turn_kind = "corner"
+                    min_interval = 0.035
+
+                if now - self._hold_last_update < min_interval:
+                    return {
+                        "ok": True,
+                        "screen": {"x": last[0], "y": last[1]},
+                        "desired_screen": {"x": point[0], "y": point[1]},
+                        "direction": {"dx": dx, "dy": dy},
+                        "held": True,
+                    }
 
                 if distance <= max_step:
                     next_point = point
@@ -749,10 +763,11 @@ class MouseGameAdapter:
 
     def attack(
         self,
-        player: tuple[int, int],
-        target: tuple[int, int],
+        player: tuple[float, float],
+        target: tuple[float, float],
         *,
         retry_index: int = 0,
+        target_key: str | None = None,
     ) -> dict[str, Any]:
         hwnd = self._find_window()
         if not hwnd:
@@ -763,10 +778,10 @@ class MouseGameAdapter:
 
         # Keep aiming deterministic. Retry only changes the vertical sprite
         # offset slightly; it does not scan/probe the screen with the cursor.
-        base_offset = (
-            self.learned_attack_y_offset
-            if self.learned_attack_y_offset is not None
-            else self.sprite_y_offset
+        normalized_key = (target_key or "").strip().lower()
+        base_offset = self.learned_attack_y_offsets.get(
+            normalized_key,
+            self.sprite_y_offset,
         )
         offsets = [
             base_offset,
@@ -794,6 +809,7 @@ class MouseGameAdapter:
                 "map_target": {"x": target[0], "y": target[1]},
                 "sprite_y_offset": offset,
                 "retry_index": retry_index,
+                "target_key": target_key,
             },
             screenshot=True,
         )
@@ -807,23 +823,34 @@ class MouseGameAdapter:
             "precision_method": "stable_calibration",
         }
 
-    def note_attack_registered(self, retry_index: int):
-        """Learn the vertical sprite offset from a click Classic.exe accepted."""
-        base = (
-            self.learned_attack_y_offset
-            if self.learned_attack_y_offset is not None
-            else self.sprite_y_offset
+    def note_attack_registered(
+        self,
+        retry_index: int,
+        *,
+        target_key: str | None = None,
+    ):
+        """Learn a vertical click offset for this monster type only."""
+        normalized_key = (target_key or "").strip().lower()
+        base = self.learned_attack_y_offsets.get(
+            normalized_key,
+            self.sprite_y_offset,
         )
         accepted = base if retry_index <= 0 else base - 10
-        self.learned_attack_y_offset = max(-80, min(30, int(accepted)))
+        accepted = max(-80, min(30, int(accepted)))
+        if normalized_key:
+            self.learned_attack_y_offsets[normalized_key] = accepted
+        self.learned_attack_y_offset = accepted
+
 
     def reset_attack_learning(self):
         self.learned_attack_y_offset = None
+        self.learned_attack_y_offsets.clear()
 
     def precision_snapshot(self) -> dict[str, Any]:
         return {
             "configured_sprite_y_offset": self.sprite_y_offset,
             "learned_attack_y_offset": self.learned_attack_y_offset,
+            "learned_attack_y_offsets": dict(self.learned_attack_y_offsets),
             "projection_mode": "stable_calibration",
         }
 
