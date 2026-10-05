@@ -61,6 +61,8 @@ class ActiveHuntController:
         self.max_screen_y = 210
         self.direct_click_range = 4
         self.combat_confirm_timeout = 1.8
+        self.monster_sprite_y_offset = -24
+        self.steer_interval = 0.12
 
     def configure(self, payload: dict[str, Any]):
         with self._lock:
@@ -79,6 +81,10 @@ class ActiveHuntController:
             self.attack_range_tiles = max(
                 1,
                 min(8, int(payload.get("attack_range", self.attack_range_tiles))),
+            )
+            self.monster_sprite_y_offset = max(
+                -80,
+                min(30, int(payload.get("sprite_y_offset", self.monster_sprite_y_offset))),
             )
 
     def _log(self, action: str, **details):
@@ -147,6 +153,16 @@ class ActiveHuntController:
         time.sleep(0.035)
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
+    def _mouse_down_screen(self, hwnd: int, x: int, y: int):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetCursorPos(int(x), int(y))
+        time.sleep(0.02)
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+
+    def _mouse_up(self):
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
     def _click_map_position(
         self,
         hwnd: int,
@@ -172,6 +188,8 @@ class ActiveHuntController:
 
         click_x = center[0] + off_x
         click_y = center[1] + off_y
+        if kind == "attack_click":
+            click_y += self.monster_sprite_y_offset
         self._click_screen(hwnd, click_x, click_y)
 
         self._last_click = {
@@ -182,6 +200,24 @@ class ActiveHuntController:
         }
         self._log(kind, **self._last_click)
         return True
+
+    def _screen_point_for_map(
+        self,
+        hwnd: int,
+        player_x: int,
+        player_y: int,
+        target_x: int,
+        target_y: int,
+    ) -> tuple[int, int] | None:
+        center = self._client_center_screen(hwnd)
+        if not center:
+            return None
+        dx = target_x - player_x
+        dy = target_y - player_y
+        off_x, off_y = self._map_delta_to_screen(dx, dy)
+        if abs(off_x) > self.max_screen_x or abs(off_y) > self.max_screen_y:
+            return None
+        return center[0] + off_x, center[1] + off_y
 
     @staticmethod
     def _find_actor(snapshot: dict[str, Any], target_id: int) -> dict[str, Any] | None:
@@ -259,6 +295,112 @@ class ActiveHuntController:
 
         first = path_preview[1]
         return int(first["x"]), int(first["y"])
+
+    def _hold_navigate_to_target(
+        self,
+        hwnd: int,
+        target_id: int,
+        target_name: str,
+    ):
+        """Hold left mouse down and steer along the current clear A* corridor."""
+        mouse_is_down = False
+        try:
+            while not self._stop.is_set():
+                snapshot = authenticated_client_monitor.snapshot()
+                actor = self._find_actor(snapshot, target_id)
+                if actor is None:
+                    return
+
+                world = (snapshot.get("live_state") or {}).get("world") or {}
+                px, py = world.get("x"), world.get("y")
+                map_name = world.get("map")
+                tx, ty = actor.get("x"), actor.get("y")
+                if None in (px, py, tx, ty) or not map_name:
+                    self._stop.wait(self.steer_interval)
+                    continue
+
+                start = (int(px), int(py))
+                target_point = (int(tx), int(ty))
+                dx = target_point[0] - start[0]
+                dy = target_point[1] - start[1]
+                distance = max(abs(dx), abs(dy))
+
+                try:
+                    grid, _ = nav_repository.load(str(map_name))
+                except Exception:
+                    return
+
+                # Close enough for the dedicated sprite click: stop walking.
+                if (
+                    distance <= self.direct_click_range
+                    and clear_walk_line(grid, start, target_point)
+                    and self._screen_offset_is_safe(dx, dy)
+                ):
+                    return
+
+                profile = app_state.get_profile()
+                targeting = {
+                    "selected": {
+                        "id": target_id,
+                        "name": target_name,
+                        "x": target_point[0],
+                        "y": target_point[1],
+                    }
+                }
+                pathing = build_pathing_state(snapshot, targeting, nav_repository)
+                path_preview = pathing.get("path_preview") or []
+                if not pathing.get("path_found") or len(path_preview) < 2:
+                    return
+
+                move_point = self._furthest_visible_clear_path_point(
+                    grid, start, path_preview
+                )
+                if move_point is None:
+                    return
+
+                screen_point = self._screen_point_for_map(
+                    hwnd,
+                    start[0],
+                    start[1],
+                    move_point[0],
+                    move_point[1],
+                )
+                if screen_point is None:
+                    self._stop.wait(self.steer_interval)
+                    continue
+
+                if not mouse_is_down:
+                    self._mouse_down_screen(hwnd, screen_point[0], screen_point[1])
+                    mouse_is_down = True
+                    self._log(
+                        "move_hold_start",
+                        target_id=target_id,
+                        target_name=target_name,
+                        map_from={"x": start[0], "y": start[1]},
+                        map_to={"x": move_point[0], "y": move_point[1]},
+                    )
+                else:
+                    user32.SetCursorPos(int(screen_point[0]), int(screen_point[1]))
+
+                self._status = "walking"
+                self._message = (
+                    f"Holding movement toward {target_name} via "
+                    f"{move_point[0]},{move_point[1]}"
+                )
+                app_state.patch_runtime(
+                    current_action="Navigating to target",
+                    message=self._message,
+                )
+
+                self._stop.wait(self.steer_interval)
+        finally:
+            if mouse_is_down:
+                self._mouse_up()
+                self._log(
+                    "move_hold_end",
+                    target_id=target_id,
+                    target_name=target_name,
+                )
 
     def _combat_confirmed(self, target_id: int, since: float) -> bool:
         snapshot = authenticated_client_monitor.snapshot()
@@ -425,53 +567,14 @@ class ActiveHuntController:
                         self._status = "running"
                         self._message = "Monster click was not confirmed; repositioning"
 
-            # Direct path is blocked (or target is outside our safe click area).
-            # Use A* only to get around the obstacle, then click as far along the
-            # currently clear corridor as possible with one movement click.
-            pathing = build_pathing_state(snapshot, targeting, nav_repository)
-            path_preview = pathing.get("path_preview") or []
-            if not pathing.get("path_found") or len(path_preview) < 2:
-                self._status = "path_error"
-                self._message = pathing.get("message") or "No route to target"
-                app_state.patch_runtime(
-                    current_action="Path blocked",
-                    message=self._message,
-                )
-                self._stop.wait(0.5)
-                continue
-
-            move_point = self._furthest_visible_clear_path_point(
-                grid,
-                start,
-                path_preview,
-            )
-            if move_point is None:
-                self._status = "path_error"
-                self._message = "No visible clear movement point found"
-                self._stop.wait(0.5)
-                continue
-
-            mx, my = move_point
-            self._status = "walking"
-            self._message = (
-                f"Path blocked; moving toward {target.get('name')} via {mx},{my}"
-            )
-            app_state.patch_runtime(
-                current_action="Walking around obstacle",
-                message=self._message,
-            )
-
-            if self._click_map_position(
+            # Not yet in reliable sprite-click range. Hold the left mouse
+            # button and steer continuously along the currently clear path.
+            self._hold_navigate_to_target(
                 hwnd,
-                start[0],
-                start[1],
-                mx,
-                my,
-                kind="move_click",
-            ):
-                self._wait_for_movement_to_finish(mx, my, target_id)
-            else:
-                self._message = "Movement point was outside safe viewport"
+                target_id,
+                str(target.get("name") or "monster"),
+            )
+            self._stop.wait(0.08)
 
             self._stop.wait(0.15)
 
@@ -507,6 +610,10 @@ class ActiveHuntController:
 
     def stop(self) -> dict[str, Any]:
         self._stop.set()
+        try:
+            self._mouse_up()
+        except Exception:
+            pass
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=1.5)
@@ -538,6 +645,8 @@ class ActiveHuntController:
                     "attack_range": self.attack_range_tiles,
                     "direct_click_range": self.direct_click_range,
                     "combat_confirm_timeout": self.combat_confirm_timeout,
+                    "sprite_y_offset": self.monster_sprite_y_offset,
+                    "movement_mode": "hold_and_steer",
                 },
                 "last_click": self._last_click,
                 "actions": self._actions[-20:],
