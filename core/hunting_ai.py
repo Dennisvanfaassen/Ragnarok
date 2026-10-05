@@ -442,7 +442,8 @@ class HuntingAI:
         return normalized_item not in exclude
 
     def _loot_candidates(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-        if not app_state.get_profile().hunt.loot_all:
+        hunt = app_state.get_profile().hunt
+        if not hunt.loot_all and not hunt.monster_rules:
             return []
         items = list(((snapshot.get("live_state") or {}).get("floor_items") or []))
         if not items or not self.recent_kills:
@@ -467,7 +468,8 @@ class HuntingAI:
                 if seen + 1.0 < float(kill["time"]):
                     continue
                 if max(abs(int(ix) - kx), abs(int(iy) - ky)) <= self.loot_radius:
-                    result.append(item)
+                    if self._loot_allowed_for_kill(kill.get("monster"), item):
+                        result.append(item)
                     break
 
         player = self._position(snapshot)
