@@ -35,6 +35,43 @@ FIXED_PACKET_LENGTHS = {
 }
 VARIABLE_PACKET_OPCODES = {0x09FD, 0x09FE, 0x09FF}
 
+# OpenKore-compatible inventory/storage packet families. Different Ragexe
+# generations use different list opcodes, so we trace them first and only
+# enable a concrete decoder after observing the real Classic.exe traffic.
+ITEM_PACKET_CANDIDATES = {
+    0x00A0: "inventory_item_added_legacy",
+    0x029A: "inventory_item_added_v2",
+    0x0A37: "inventory_item_added_modern",
+    0x0A0A: "storage_item_added",
+    0x00AF: "inventory_item_removed",
+    0x00F4: "storage_item_removed",
+    0x00A3: "inventory_items_stackable",
+    0x01EE: "inventory_items_stackable_v2",
+    0x02E8: "inventory_items_stackable_v3",
+    0x0900: "inventory_items_stackable_v5",
+    0x0991: "inventory_items_stackable_v6",
+    0x0B09: "item_list_stackable",
+    0x00A4: "inventory_items_nonstackable",
+    0x0295: "inventory_items_nonstackable_v2",
+    0x02D0: "inventory_items_nonstackable_v3",
+    0x0901: "inventory_items_nonstackable_v5",
+    0x0992: "inventory_items_nonstackable_v6",
+    0x0A0D: "inventory_items_nonstackable_v7",
+    0x0B0A: "item_list_nonstackable",
+    0x0B39: "item_list_nonstackable_v9",
+    0x00A5: "storage_items_stackable",
+    0x01F0: "storage_items_stackable_v2",
+    0x02EA: "storage_items_stackable_v3",
+    0x0975: "storage_items_stackable_v5",
+    0x0995: "storage_items_stackable_v6",
+    0x00A6: "storage_items_nonstackable",
+    0x0296: "storage_items_nonstackable_v2",
+    0x02D1: "storage_items_nonstackable_v3",
+    0x0976: "storage_items_nonstackable_v5",
+    0x0996: "storage_items_nonstackable_v6",
+    0x0A10: "storage_items_nonstackable_v7",
+}
+
 # rAthena/OpenKore SP_* values carried by 00B0.
 STAT_NAMES = {
     5: "hp",
@@ -98,6 +135,7 @@ class AuthenticatedClientMonitor:
         self._lock = threading.RLock()
         self._events: deque[dict[str, Any]] = deque(maxlen=500)
         self._client_action_trace: deque[dict[str, Any]] = deque(maxlen=200)
+        self._item_packet_trace: deque[dict[str, Any]] = deque(maxlen=200)
         self._sniffer: AsyncSniffer | None = None
         self._watcher: threading.Thread | None = None
         self._stop = threading.Event()
@@ -131,6 +169,7 @@ class AuthenticatedClientMonitor:
         self._floor_items: dict[int, dict[str, Any]] = {}
         self._aggressors: dict[int, float] = {}
         self._client_action_trace.clear()
+        self._item_packet_trace.clear()
         self._parsed_counts: dict[str, int] = {
             "map_change": 0,
             "invalid_map_change": 0,
@@ -436,6 +475,33 @@ class AuthenticatedClientMonitor:
         if opcode in VARIABLE_PACKET_OPCODES:
             self._parse_actor(opcode, data)
 
+    def _trace_item_candidates(self, payload: bytes):
+        size = len(payload)
+        for i in range(max(0, size - 1)):
+            if i + 2 > size:
+                break
+            opcode = int.from_bytes(payload[i:i + 2], "little")
+            name = ITEM_PACKET_CANDIDATES.get(opcode)
+            if name is None:
+                continue
+
+            declared_length = None
+            if i + 4 <= size:
+                candidate = int.from_bytes(payload[i + 2:i + 4], "little")
+                if 4 <= candidate <= 65535:
+                    declared_length = candidate
+
+            sample_end = min(size, i + 96)
+            self._item_packet_trace.append({
+                "timestamp": time.time(),
+                "opcode": f"0x{opcode:04X}",
+                "name": name,
+                "payload_offset": i,
+                "tcp_payload_length": size,
+                "declared_length": declared_length,
+                "sample_hex": payload[i:sample_end].hex(" "),
+            })
+
     def _parse_payload(self, payload: bytes):
         """Extract Live Game State packets from a TCP payload.
 
@@ -582,6 +648,7 @@ class AuthenticatedClientMonitor:
                 with self._lock:
                     if stage == "map":
                         if direction == "server_to_client":
+                            self._trace_item_candidates(payload)
                             self._parse_payload(payload)
                         else:
                             self._parse_client_payload(payload)
@@ -698,6 +765,23 @@ class AuthenticatedClientMonitor:
         with self._lock:
             self._client_action_trace.clear()
         return self.client_action_trace_snapshot()
+
+    def clear_item_packet_trace(self) -> dict[str, Any]:
+        with self._lock:
+            self._item_packet_trace.clear()
+        return self.item_packet_trace_snapshot()
+
+    def item_packet_trace_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            trace = list(self._item_packet_trace)
+        return {
+            "count": len(trace),
+            "packets": trace,
+            "note": (
+                "Read-only detector for OpenKore inventory/storage packet "
+                "families observed in authenticated Classic.exe traffic."
+            ),
+        }
 
     def client_action_trace_snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -852,6 +936,7 @@ class AuthenticatedClientMonitor:
                 },
                 "events": events[-100:],
                 "client_action_trace_count": len(self._client_action_trace),
+                "item_packet_trace_count": len(self._item_packet_trace),
                 "note": (
                     "Observer mode only. Live Game State is decoded from the "
                     "authenticated client's normal server traffic."
