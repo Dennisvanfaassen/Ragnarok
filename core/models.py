@@ -53,6 +53,7 @@ class HuntSettings(BaseModel):
     map: str = ""
     monsters: list[str] = Field(default_factory=list)
     loot_all: bool = True
+    loot_radius: int = 12
     monster_rules: list[MonsterLootRule] = Field(default_factory=list)
     teleport_item: str = "Fly Wing"
     emergency_hp_percent: int = 20
