@@ -15,6 +15,7 @@ from core.active_control import active_hunt_controller
 from core.hotkey import hunting_hotkey
 from core.world_route import world_route_planner
 from core.town_travel import town_travel_controller
+from core.map_dashboard import map_grid_payload, map_live_overlay
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -307,3 +308,13 @@ async def stop_town_travel():
 @app.get("/api/town-travel")
 async def town_travel_state():
     return town_travel_controller.snapshot()
+
+
+@app.get("/api/map/grid")
+async def live_map_grid():
+    return map_grid_payload()
+
+
+@app.get("/api/map/live")
+async def live_map_overlay():
+    return map_live_overlay()
