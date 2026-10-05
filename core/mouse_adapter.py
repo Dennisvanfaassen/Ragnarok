@@ -43,6 +43,7 @@ class MouseGameAdapter:
         self.sprite_y_offset = -24
         self.learned_attack_y_offset: int | None = None
         self.learned_attack_y_offsets: dict[str, int] = {}
+        self._last_attack_offset_by_target: dict[str, int] = {}
         self._calibration_path = (
             Path(__file__).resolve().parents[1] / "screen_calibration.json"
         )
@@ -601,7 +602,11 @@ class MouseGameAdapter:
             )
             angle_deg = math.degrees(math.acos(dot))
 
-        if angle_deg <= 5.5 and distance < max(36.0, min_pixel_change * 1.45):
+        # Keep the cursor genuinely still through tiny heading changes. The old
+        # distance condition allowed small directional noise to accumulate until
+        # it produced another 2-4 px correction every few frames.
+        if angle_deg <= 7.5 and distance < max(68.0, min_pixel_change * 2.75):
+            self._hold_velocity = max(0.0, self._hold_velocity - 24.0)
             return {
                 "ok": True,
                 "screen": {"x": last[0], "y": last[1]},
@@ -625,13 +630,13 @@ class MouseGameAdapter:
 
         # Cursor speed follows route curvature: slow acceleration through a
         # shallow bend, decisive movement only for a genuine corner.
-        if angle_deg < 12.0:
-            target_velocity = 18.0
-            min_interval = 0.16
+        if angle_deg < 14.0:
+            target_velocity = 14.0
+            min_interval = 0.28
             turn_kind = "micro"
         elif angle_deg < 32.0:
-            target_velocity = 45.0
-            min_interval = 0.075
+            target_velocity = 42.0
+            min_interval = 0.095
             turn_kind = "bend"
         else:
             target_velocity = 220.0
@@ -664,7 +669,11 @@ class MouseGameAdapter:
             )
 
         max_step = max(2.0, self._hold_velocity * elapsed)
-        if turn_kind == "corner":
+        if turn_kind == "micro":
+            # A shallow bend should look like a hand gradually leaning the
+            # mouse, not a stream of tiny mechanical corrections.
+            max_step = min(max_step, 4.0)
+        elif turn_kind == "corner":
             max_step = max(max_step, 22.0)
 
         if distance <= max_step:
@@ -876,6 +885,8 @@ class MouseGameAdapter:
             base_offset - 10,
         ]
         offset = offsets[min(retry_index, len(offsets) - 1)]
+        if normalized_key:
+            self._last_attack_offset_by_target[normalized_key] = int(offset)
 
         point = self._project(
             hwnd,
@@ -917,13 +928,15 @@ class MouseGameAdapter:
         *,
         target_key: str | None = None,
     ):
-        """Learn a vertical click offset for this monster type only."""
+        """Learn the exact vertical offset that Classic.exe accepted."""
         normalized_key = (target_key or "").strip().lower()
-        base = self.learned_attack_y_offsets.get(
+        accepted = self._last_attack_offset_by_target.get(
             normalized_key,
-            self.sprite_y_offset,
+            self.learned_attack_y_offsets.get(
+                normalized_key,
+                self.sprite_y_offset,
+            ),
         )
-        accepted = base if retry_index <= 0 else base - 10
         accepted = max(-80, min(30, int(accepted)))
         if normalized_key:
             self.learned_attack_y_offsets[normalized_key] = accepted
@@ -933,6 +946,7 @@ class MouseGameAdapter:
     def reset_attack_learning(self):
         self.learned_attack_y_offset = None
         self.learned_attack_y_offsets.clear()
+        self._last_attack_offset_by_target.clear()
 
     def precision_snapshot(self) -> dict[str, Any]:
         return {
