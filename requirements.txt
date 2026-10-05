@@ -3,3 +3,5 @@ uvicorn[standard]>=0.32
 pydantic>=2.9
 PyYAML>=6.0
 pefile>=2024.8.26
+dpkt>=1.9.8
+python-multipart>=0.0.12
