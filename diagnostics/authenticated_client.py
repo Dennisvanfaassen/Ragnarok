@@ -72,6 +72,23 @@ ITEM_PACKET_CANDIDATES = {
     0x0A10: "storage_items_nonstackable_v7",
 }
 
+# Confirmed modern item-list layouts from OpenKore ServerType0.
+# 0B09: header = len(v), type(C), then 34-byte stackable records.
+# 0B39: header = len(v), type(C), then 68-byte non-stackable type9 records.
+CONFIRMED_ITEM_LIST_LAYOUTS = {
+    0x0B09: {
+        "name": "item_list_stackable",
+        "record_len": 34,
+        "kind": "stackable",
+    },
+    0x0B39: {
+        "name": "item_list_nonstackable_v9",
+        "record_len": 68,
+        "kind": "nonstackable",
+    },
+}
+
+
 # rAthena/OpenKore SP_* values carried by 00B0.
 STAT_NAMES = {
     5: "hp",
@@ -475,31 +492,104 @@ class AuthenticatedClientMonitor:
         if opcode in VARIABLE_PACKET_OPCODES:
             self._parse_actor(opcode, data)
 
+    @staticmethod
+    def _decode_confirmed_item_record(
+        opcode: int,
+        record: bytes,
+    ) -> dict[str, Any] | None:
+        if opcode == 0x0B09 and len(record) == 34:
+            # OpenKore items_stackable type7:
+            # a2 V C v V a16 l C
+            return {
+                "index": int.from_bytes(record[0:2], "little"),
+                "name_id": int.from_bytes(record[2:6], "little"),
+                "item_type": int(record[6]),
+                "amount": int.from_bytes(record[7:9], "little"),
+                "type_equip": int.from_bytes(record[9:13], "little"),
+                "cards_hex": record[13:29].hex(" "),
+                "expire": int.from_bytes(record[29:33], "little", signed=True),
+                "identified": bool(record[33] & 0x01),
+                "stackable": True,
+            }
+
+        if opcode == 0x0B39 and len(record) == 68:
+            # OpenKore items_nonstackable type9:
+            # a2 V C V2 a16 l v2 C a25 C3
+            return {
+                "index": int.from_bytes(record[0:2], "little"),
+                "name_id": int.from_bytes(record[2:6], "little"),
+                "item_type": int(record[6]),
+                "type_equip": int.from_bytes(record[7:11], "little"),
+                "equipped": int.from_bytes(record[11:15], "little"),
+                "cards_hex": record[15:31].hex(" "),
+                "expire": int.from_bytes(record[31:35], "little", signed=True),
+                "bind_on_equip_type": int.from_bytes(record[35:37], "little"),
+                "sprite_id": int.from_bytes(record[37:39], "little"),
+                "num_options": int(record[39]),
+                "options_hex": record[40:65].hex(" "),
+                "upgrade": int(record[65]),
+                "grade": int(record[66]),
+                "identified": bool(record[67] & 0x01),
+                "amount": 1,
+                "stackable": False,
+            }
+        return None
+
     def _trace_item_candidates(self, payload: bytes):
+        """Trace only structurally valid modern item-list packets.
+
+        Earlier versions scanned every byte for any historical OpenKore item
+        opcode, which produced many false positives inside unrelated payload
+        data. A candidate is now accepted only when its declared packet length
+        fits this TCP payload and its body is exactly divisible by the OpenKore
+        record size for that opcode.
+        """
         size = len(payload)
-        for i in range(max(0, size - 1)):
-            if i + 2 > size:
+        for i in range(max(0, size - 4)):
+            if i + 5 > size:
                 break
+
             opcode = int.from_bytes(payload[i:i + 2], "little")
-            name = ITEM_PACKET_CANDIDATES.get(opcode)
-            if name is None:
+            layout = CONFIRMED_ITEM_LIST_LAYOUTS.get(opcode)
+            if layout is None:
                 continue
 
-            declared_length = None
-            if i + 4 <= size:
-                candidate = int.from_bytes(payload[i + 2:i + 4], "little")
-                if 4 <= candidate <= 65535:
-                    declared_length = candidate
+            declared_length = int.from_bytes(payload[i + 2:i + 4], "little")
+            record_len = int(layout["record_len"])
+            body_len = declared_length - 5
 
-            sample_end = min(size, i + 96)
+            if declared_length < 5:
+                continue
+            if i + declared_length > size:
+                continue
+            if body_len < 0 or body_len % record_len != 0:
+                continue
+
+            packet = payload[i:i + declared_length]
+            list_type = int(packet[4])
+            items = []
+            body = packet[5:]
+            for offset in range(0, len(body), record_len):
+                decoded = self._decode_confirmed_item_record(
+                    opcode,
+                    body[offset:offset + record_len],
+                )
+                if decoded is not None:
+                    items.append(decoded)
+
             self._item_packet_trace.append({
                 "timestamp": time.time(),
                 "opcode": f"0x{opcode:04X}",
-                "name": name,
+                "name": str(layout["name"]),
+                "kind": str(layout["kind"]),
                 "payload_offset": i,
                 "tcp_payload_length": size,
                 "declared_length": declared_length,
-                "sample_hex": payload[i:sample_end].hex(" "),
+                "list_type": list_type,
+                "record_length": record_len,
+                "item_count": len(items),
+                "items": items,
+                "packet_hex_prefix": packet[:96].hex(" "),
             })
 
     def _parse_payload(self, payload: bytes):
