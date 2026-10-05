@@ -514,6 +514,30 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </div>
       </section>
 
+      <section class="card full">
+        <h2>4. Avoid areas</h2>
+        <div class="muted" style="margin-bottom:12px">
+          Add rectangles the bot must not enter while hunting. Targets inside these zones are ignored and routes crossing them are rejected.
+        </div>
+        <div class="row">
+          <label>Label<input id="avoidLabel" placeholder="Merman corner"></label>
+          <label>Map<input id="avoidMap" placeholder="Uses hunting map when blank"></label>
+        </div>
+        <div class="row">
+          <label>X1<input id="avoidX1" type="number"></label>
+          <label>Y1<input id="avoidY1" type="number"></label>
+        </div>
+        <div class="row">
+          <label>X2<input id="avoidX2" type="number"></label>
+          <label>Y2<input id="avoidY2" type="number"></label>
+        </div>
+        <div class="actions">
+          <button class="action secondary" onclick="addAvoidZone()">Add avoid zone</button>
+          <button class="action secondary" onclick="clearAvoidZones()">Clear all</button>
+        </div>
+        <div id="avoidZoneList" class="drop-grid" style="margin-top:12px"></div>
+      </section>
+
       <section class="card">
         <h2>Healing</h2>
         <label>Enabled
@@ -609,6 +633,42 @@ async function refresh(){
 }
 let huntCatalogData={map:'',monsters:[]};
 let huntMonsterRules={};
+let huntAvoidZones=[];
+
+function renderAvoidZones(){
+  const box=document.getElementById('avoidZoneList');
+  if(!box) return;
+  if(!huntAvoidZones.length){
+    box.innerHTML='<span class="muted">No avoided areas configured.</span>';
+    return;
+  }
+  box.innerHTML=huntAvoidZones.map(function(z,i){
+    const map=z.map||document.getElementById('huntMap')?.value||'current map';
+    return '<span class="drop-chip">'+escapeHtml(z.label||'Avoid')+' · '+escapeHtml(map)+
+      ' ['+z.x1+','+z.y1+' → '+z.x2+','+z.y2+']'+
+      ' <button class="action danger" style="padding:3px 7px" onclick="removeAvoidZone('+i+')">×</button></span>';
+  }).join('');
+}
+function addAvoidZone(){
+  const value=function(id){return document.getElementById(id).value.trim()};
+  const x1=+value('avoidX1'),y1=+value('avoidY1'),x2=+value('avoidX2'),y2=+value('avoidY2');
+  if([x1,y1,x2,y2].some(Number.isNaN)){out('Enter X1, Y1, X2 and Y2 for the avoid area.');return}
+  huntAvoidZones.push({
+    map:value('avoidMap')||document.getElementById('huntMap').value.trim(),
+    x1,y1,x2,y2,
+    label:value('avoidLabel')
+  });
+  ['avoidLabel','avoidMap','avoidX1','avoidY1','avoidX2','avoidY2'].forEach(function(id){document.getElementById(id).value='';});
+  renderAvoidZones();
+}
+function removeAvoidZone(index){
+  huntAvoidZones.splice(index,1);
+  renderAvoidZones();
+}
+function clearAvoidZones(){
+  huntAvoidZones=[];
+  renderAvoidZones();
+}
 
 function currentMonsterRules(){
   return Object.values(huntMonsterRules).map(function(rule){
@@ -641,7 +701,8 @@ async function saveProfile(){
       teleport_item:document.getElementById('teleportItem').value.trim()||'Fly Wing',
       emergency_hp_percent:+document.getElementById('emergencyHp').value,
       emergency_action:document.getElementById('emergencyAction').value,
-      navigation_mode:document.getElementById('navigationMode').value
+      navigation_mode:document.getElementById('navigationMode').value,
+      avoid_zones:huntAvoidZones
     },
     healing:{
       enabled:document.getElementById('healEnabled').value==='true',
@@ -705,6 +766,8 @@ async function loadProfile(){
         exclude_items:new Set(rule.exclude_items||[])
       };
     });
+    huntAvoidZones=((p.hunt&&p.hunt.avoid_zones)||[]).map(function(z){return {...z};});
+    renderAvoidZones();
     document.getElementById('weight').value=(p.town&&p.town.return_weight_percent)||70;
     document.getElementById('storageMap').value=(p.town&&p.town.storage_map)||'';
     document.getElementById('healEnabled').value=(p.healing&&p.healing.enabled===false)?'false':'true';
