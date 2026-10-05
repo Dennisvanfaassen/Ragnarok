@@ -32,6 +32,7 @@ class PortalEdge:
     dest_x: int
     dest_y: int
     source: str = "openkore"
+    interactive: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +43,7 @@ class PortalEdge:
             "dest_x": self.dest_x,
             "dest_y": self.dest_y,
             "source": self.source,
+            "interactive": self.interactive,
         }
 
 
@@ -89,6 +91,7 @@ class WorldRoutePlanner:
                     dest_x=int(row["dest_x"]),
                     dest_y=int(row["dest_y"]),
                     source="learned",
+                    interactive=bool(row.get("interactive", False)),
                 )
                 for row in rows
             ]
@@ -127,6 +130,7 @@ class WorldRoutePlanner:
                     dest_map=dest_map,
                     dest_x=int(parts[4]),
                     dest_y=int(parts[5]),
+                    interactive=len(parts) > 6,
                 )
             )
         return edges
@@ -208,6 +212,7 @@ class WorldRoutePlanner:
                 dest_x=int(dest_x),
                 dest_y=int(dest_y),
                 source="learned",
+                interactive=False,
             )
         )
         self._save_learned()
@@ -236,8 +241,12 @@ class WorldRoutePlanner:
                 return map_name, route
 
             for edge in self._graph.get(map_name, []):
-                # Prefer learned/server-observed transitions slightly.
+                # Prefer learned/server-observed physical transitions.
+                # NPC/dialog warps remain available as a last resort but are
+                # intentionally expensive for the current mouse-only client.
                 edge_cost = 90 if edge.source == "learned" else 100
+                if edge.interactive:
+                    edge_cost += 1200
                 new_cost = cost + edge_cost
                 if new_cost >= best.get(edge.dest_map, 10**9):
                     continue
