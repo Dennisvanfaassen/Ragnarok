@@ -73,7 +73,34 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <h2>Connection</h2>
       <div class="muted">Soulbound login server</div>
       <div class="metric" style="font-size:18px">88.214.58.232:6900</div>
-      <div class="muted">Packet profile: not verified yet</div>
+      <div class="muted">Packet profile: kRO_2021-06-30</div>
+    </section>
+
+    <section class="card full">
+      <h2>Direct login test</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Tests whether Soulbound accepts a standalone Ragnarok login session.
+        Username/password are sent only for this request and are not saved.
+      </div>
+      <div class="row">
+        <label>Username
+          <input id="loginUser" autocomplete="off">
+        </label>
+        <label>Password
+          <input id="loginPass" type="password" autocomplete="off">
+        </label>
+      </div>
+      <div class="row">
+        <label>Client hash (optional for first test)
+          <input id="clientHash" placeholder="32 hex characters">
+        </label>
+        <label>Protocol
+          <input value="0x0064 / kRO_2021-06-30" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action" onclick="loginProbe()">Test direct login</button>
+      </div>
     </section>
 
     <section class="card full">
@@ -152,6 +179,21 @@ async function saveProfile(){
 async function probe(){
   const r=await fetch('/api/server/'+document.getElementById('server').value+'/probe',{method:'POST'});
   out(await r.json());
+}
+async function loginProbe(){
+  const username=document.getElementById('loginUser').value;
+  const password=document.getElementById('loginPass').value;
+  const client_hash=document.getElementById('clientHash').value.trim();
+  if(!username||!password){out('Enter your Soulbound username and password first.');return}
+  out('Connecting to Soulbound login server...');
+  const r=await fetch('/api/server/'+document.getElementById('server').value+'/login-probe',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({username,password,client_hash})
+  });
+  const data=await r.json();
+  document.getElementById('loginPass').value='';
+  out(data);
 }
 async function scanClient(){
   const path=document.getElementById('exePath').value.trim();
