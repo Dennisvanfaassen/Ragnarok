@@ -17,6 +17,7 @@ user32 = ctypes.windll.user32
 SW_RESTORE = 9
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+KEYEVENTF_KEYUP = 0x0002
 
 
 class POINT(ctypes.Structure):
@@ -211,6 +212,35 @@ class MouseGameAdapter:
         user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         time.sleep(0.035)
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+    def press_hotkey(self, key: str) -> dict[str, Any]:
+        hwnd = self._find_window()
+        if not hwnd:
+            return {"ok": False, "reason": "window_not_found"}
+
+        normalized = str(key or "").strip().upper()
+        key_map = {
+            "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
+            "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
+            "F1": 0x70, "F2": 0x71, "F3": 0x72, "F4": 0x73,
+            "F5": 0x74, "F6": 0x75, "F7": 0x76, "F8": 0x77,
+            "F9": 0x78, "F10": 0x79, "F11": 0x7A, "F12": 0x7B,
+        }
+        vk = key_map.get(normalized)
+        if vk is None:
+            return {"ok": False, "reason": "unsupported_hotkey", "key": normalized}
+
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        time.sleep(0.01)
+        user32.keybd_event(vk, 0, 0, 0)
+        time.sleep(0.035)
+        user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+        return {
+            "ok": True,
+            "key": normalized,
+            "input_mode": "windows_hotkey",
+        }
 
     def _position(self) -> tuple[int, int] | None:
         snapshot = authenticated_client_monitor.snapshot()
