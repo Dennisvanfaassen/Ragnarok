@@ -75,12 +75,15 @@ class HuntingAI:
         self.wander_progress_index = 0
         self.wander_line_points: list[tuple[int, int]] = []
         self.wander_line_index = 0
+        self.wander_reconnect_target: tuple[int, int] | None = None
+        self.wander_reconnect_route_index: int | None = None
         self.saved_route_map: str | None = None
         self.saved_route_waypoint_index = 0
         self.saved_route_direction = 1
         self.saved_route_mode = "loop"
         self._attack_reposition_required = False
         self._attack_reposition_origin: tuple[int, int] | None = None
+        self._attack_route_anchor: tuple[int, int] | None = None
 
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
@@ -248,6 +251,7 @@ class HuntingAI:
         self._combat_seen = False
         self._attack_reposition_required = False
         self._attack_reposition_origin = None
+        self._attack_route_anchor = None
 
     def _lock_actor(self, actor: dict[str, Any], reason: str) -> bool:
         x, y = actor.get("x"), actor.get("y")
@@ -341,9 +345,16 @@ class HuntingAI:
         destination: tuple[int, int],
         target_id: int,
     ) -> tuple[int, int] | None:
-        """Return on first useful movement instead of waiting for a full stop."""
+        """Let one issued movement click finish its useful travel.
+
+        Replanning on the first changed tile caused moving targets to produce a
+        ROUTING/APPROACHING loop every ~150 ms. Commit to the current segment
+        until we reach it, stop moving briefly, or hit the normal timeout.
+        """
         deadline = time.time() + self.move_settle_timeout
         last_pos = origin
+        last_change = time.time()
+        moved = False
 
         while not self._stop.is_set() and time.time() < deadline:
             self._stop.wait(0.06)
@@ -360,6 +371,12 @@ class HuntingAI:
                 return pos
 
             if pos != last_pos:
+                moved = True
+                last_pos = pos
+                last_change = time.time()
+                continue
+
+            if moved and time.time() - last_change >= 0.22:
                 return pos
 
         return last_pos
@@ -698,6 +715,8 @@ class HuntingAI:
             path,
         )
         self.wander_line_index = 1 if len(self.wander_line_points) > 1 else 0
+        self.wander_reconnect_target = None
+        self.wander_reconnect_route_index = None
 
     def _nearest_wander_index(self, player: tuple[int, int]) -> int:
         if not self.wander_path:
@@ -856,11 +875,34 @@ class HuntingAI:
         if self._attack_reposition_required and distance <= 3:
             self._attack_reposition_required = False
             self._attack_reposition_origin = None
+            self._attack_route_anchor = None
             self._set_state(
                 "ATTACK_READY",
                 f"Close retry on {self.target_name}",
             )
             return
+
+        # After a missed actor click, approach a latched monster position
+        # instead of rebuilding the route every time the monster moves one cell.
+        # Refresh that anchor only after we have actually reached the old one.
+        if self._attack_reposition_required:
+            if self._attack_route_anchor is None:
+                self._attack_route_anchor = self.target_pos
+            elif (
+                self._tile_distance(player, self._attack_route_anchor) <= 2
+                and distance > 3
+            ):
+                old_anchor = self._attack_route_anchor
+                self._attack_route_anchor = self.target_pos
+                self._log(
+                    "attack_route_anchor_refresh",
+                    target_id=self.target_id,
+                    from_pos={"x": old_anchor[0], "y": old_anchor[1]},
+                    to_pos={
+                        "x": self._attack_route_anchor[0],
+                        "y": self._attack_route_anchor[1],
+                    },
+                )
 
         # Player-like behavior: if the monster is already visible/clickable,
         # attack immediately and let Ragnarok perform the final approach.
@@ -894,12 +936,17 @@ class HuntingAI:
             )
             return
 
+        approach_target = (
+            self._attack_route_anchor
+            if self._attack_reposition_required and self._attack_route_anchor
+            else self.target_pos
+        )
         targeting = {
             "selected": {
                 "id": self.target_id,
                 "name": self.target_name,
-                "x": self.target_pos[0],
-                "y": self.target_pos[1],
+                "x": approach_target[0],
+                "y": approach_target[1],
             }
         }
         pathing = build_pathing_state(snapshot, targeting, nav_repository)
@@ -948,7 +995,7 @@ class HuntingAI:
                 self._set_state("ATTACK_READY", "At target approach position")
                 return
 
-        self.route_target_pos = self.target_pos
+        self.route_target_pos = approach_target
         self._set_state(
             "APPROACHING",
             f"Approaching {self.target_name} via {segment[0]},{segment[1]}",
@@ -1181,6 +1228,7 @@ class HuntingAI:
         self._combat_click_locked = False
         self._attack_reposition_required = True
         self._attack_reposition_origin = self._position(snapshot)
+        self._attack_route_anchor = self.target_pos
         self._set_state(
             "ROUTING",
             f"Click missed {self.target_name}; approaching within 3 tiles before retry",
@@ -1456,8 +1504,12 @@ class HuntingAI:
         destination = self.wander_line_points[self.wander_line_index]
 
         # Stay committed to one straight segment until its endpoint is reached.
-        # Only then turn the held mouse toward the next segment.
-        if self._tile_distance(player, destination) <= 2:
+        # Only then turn the held mouse toward the next segment. A latched
+        # reconnect owns steering until it has rejoined the route.
+        if (
+            self.wander_reconnect_target is None
+            and self._tile_distance(player, destination) <= 2
+        ):
             self.wander_line_index += 1
             if self.wander_line_index >= len(self.wander_line_points):
                 self.wander_path = []
@@ -1482,24 +1534,66 @@ class HuntingAI:
             default=999,
         )
 
-        if corridor_distance > 2:
-            remaining = [player] + self.wander_path[
-                min(route_index + 1, len(self.wander_path) - 1):
-            ]
-            recovery_segments = self._build_straight_wander_segments(
-                grid,
-                remaining,
-            )
-            if len(recovery_segments) >= 2:
-                self.wander_line_points = recovery_segments
-                self.wander_line_index = 1
-                destination = recovery_segments[1]
+        reconnecting = self.wander_reconnect_target is not None
+
+        if reconnecting:
+            reconnect = self.wander_reconnect_target
+            if (
+                corridor_distance <= 2
+                or self._tile_distance(player, reconnect) <= 2
+            ):
+                self._log(
+                    "wander_route_reconnect_complete",
+                    player={"x": player[0], "y": player[1]},
+                    destination={"x": reconnect[0], "y": reconnect[1]},
+                    corridor_distance=corridor_distance,
+                )
+                self.wander_reconnect_target = None
+                self.wander_reconnect_route_index = None
+                reconnecting = False
+            elif clear_walk_line(grid, player, reconnect):
+                destination = reconnect
+            else:
+                # The latched line became obstructed from our new cell. Drop it
+                # once and select a new forward re-entry point below.
+                self.wander_reconnect_target = None
+                self.wander_reconnect_route_index = None
+                reconnecting = False
+
+        if not reconnecting and corridor_distance > 2:
+            reconnect_index = None
+            reconnect = None
+            end = min(len(self.wander_path), route_index + 15)
+
+            # Prefer a point well ahead of current progress. This avoids
+            # waypoint-boundary U-turns caused by snapping to the nearest path
+            # cell behind the character.
+            for idx in range(end - 1, route_index, -1):
+                candidate = self.wander_path[idx]
+                if clear_walk_line(grid, player, candidate):
+                    reconnect_index = idx
+                    reconnect = candidate
+                    break
+
+            if reconnect is None and route_index + 1 < len(self.wander_path):
+                candidate = self.wander_path[route_index + 1]
+                if grid.walkable(*candidate):
+                    reconnect_index = route_index + 1
+                    reconnect = candidate
+
+            if reconnect is not None:
+                self.wander_reconnect_target = reconnect
+                self.wander_reconnect_route_index = reconnect_index
+                destination = reconnect
+                reconnecting = True
                 self._log(
                     "wander_route_reconnect",
                     player={"x": player[0], "y": player[1]},
                     destination={"x": destination[0], "y": destination[1]},
                     route_index=route_index,
+                    reconnect_index=reconnect_index,
                     corridor_distance=corridor_distance,
+                    latched=True,
                 )
             else:
                 mouse_game_adapter.release_hold_move()
@@ -1507,14 +1601,20 @@ class HuntingAI:
                 self.wander_goal = None
                 self.wander_line_points = []
                 self.wander_line_index = 0
+                self.wander_reconnect_target = None
+                self.wander_reconnect_route_index = None
                 self._stop.wait(0.12)
                 return
 
-        dx, dy = self._anticipated_wander_direction(
-            grid,
-            player,
-            destination,
-        )
+        if reconnecting:
+            dx = destination[0] - player[0]
+            dy = destination[1] - player[1]
+        else:
+            dx, dy = self._anticipated_wander_direction(
+                grid,
+                player,
+                destination,
+            )
 
         narrow_corridor = self._wander_corridor_is_narrow(
             grid,
