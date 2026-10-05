@@ -52,6 +52,8 @@ class MouseGameAdapter:
         self._hold_active = False
         self._hold_hwnd: int | None = None
         self._hold_point: tuple[int, int] | None = None
+        self._hold_desired_point: tuple[int, int] | None = None
+        self._hold_last_update = 0.0
         self._load_calibration()
 
     def configure(self, *, sprite_y_offset: int | None = None):
@@ -514,6 +516,8 @@ class MouseGameAdapter:
         self._hold_active = True
         self._hold_hwnd = hwnd
         self._hold_point = point
+        self._hold_desired_point = point
+        self._hold_last_update = time.time()
         hunting_diagnostic_recorder.event(
             "mouse",
             "hold_begin",
@@ -550,28 +554,77 @@ class MouseGameAdapter:
             return {"ok": False, "reason": "direction_not_projectable"}
 
         last = self._hold_point
-        if (
-            last is None
-            or abs(point[0] - last[0]) >= min_pixel_change
-            or abs(point[1] - last[1]) >= min_pixel_change
-        ):
+        self._hold_desired_point = point
+
+        if last is None:
             user32.SetCursorPos(int(point[0]), int(point[1]))
             self._hold_point = point
-            hunting_diagnostic_recorder.event(
-                "mouse",
-                "steering_turn",
-                {
-                    "from_screen": (
-                        {"x": last[0], "y": last[1]} if last else None
-                    ),
-                    "to_screen": {"x": point[0], "y": point[1]},
-                    "direction": {"dx": dx, "dy": dy},
-                    "radius_px": radius_px,
-                    "min_pixel_change": min_pixel_change,
-                },
-                screenshot=True,
-                screenshot_cooldown=0.40,
-            )
+            self._hold_last_update = time.time()
+        else:
+            delta_x = point[0] - last[0]
+            delta_y = point[1] - last[1]
+            distance = math.hypot(delta_x, delta_y)
+
+            # Keep the hand very steady during normal travel. Gentle route
+            # curvature only causes tiny cursor movement; actual corners move
+            # the cursor much faster so the character turns decisively.
+            if distance >= min_pixel_change:
+                if distance < 45:
+                    max_step = 5.0
+                    turn_kind = "micro"
+                elif distance < 110:
+                    max_step = 14.0
+                    turn_kind = "bend"
+                else:
+                    max_step = 70.0
+                    turn_kind = "corner"
+
+                if distance <= max_step:
+                    next_point = point
+                else:
+                    scale = max_step / distance
+                    next_point = (
+                        int(round(last[0] + delta_x * scale)),
+                        int(round(last[1] + delta_y * scale)),
+                    )
+
+                user32.SetCursorPos(
+                    int(next_point[0]),
+                    int(next_point[1]),
+                )
+                self._hold_point = next_point
+                self._hold_last_update = time.time()
+
+                hunting_diagnostic_recorder.event(
+                    "mouse",
+                    "steering_turn",
+                    {
+                        "from_screen": {
+                            "x": last[0],
+                            "y": last[1],
+                        },
+                        "desired_screen": {
+                            "x": point[0],
+                            "y": point[1],
+                        },
+                        "to_screen": {
+                            "x": next_point[0],
+                            "y": next_point[1],
+                        },
+                        "direction": {"dx": dx, "dy": dy},
+                        "radius_px": radius_px,
+                        "turn_kind": turn_kind,
+                        "remaining_px": round(
+                            math.hypot(
+                                point[0] - next_point[0],
+                                point[1] - next_point[1],
+                            ),
+                            1,
+                        ),
+                    },
+                    screenshot=turn_kind == "corner",
+                    screenshot_cooldown=0.40,
+                )
 
         return {
             "ok": True,
@@ -647,6 +700,8 @@ class MouseGameAdapter:
         self._hold_active = False
         self._hold_hwnd = None
         self._hold_point = None
+        self._hold_desired_point = None
+        self._hold_last_update = 0.0
         if was_active:
             hunting_diagnostic_recorder.event(
                 "mouse",
