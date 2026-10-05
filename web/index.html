@@ -47,7 +47,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     <div id="navDashboard" class="active" onclick="switchView('dashboard')">Dashboard</div>
     <div id="navHunting" onclick="switchView('hunting')">Hunting</div>
     <div id="navMap" onclick="switchView('map')">Map</div>
-    <div>Town & Storage</div>
+    <div id="navStorage" onclick="switchView('storage')">Selling & Storage</div>
     <div>Healing & Supplies</div>
     <div>Server</div>
     <div>Logs</div>
@@ -566,6 +566,83 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </div>
   </div>
 
+  <div id="storageView" class="view-hidden">
+    <div class="grid">
+      <section class="card full">
+        <div class="hunt-hero">
+          <div>
+            <h2 style="font-size:20px;margin-bottom:7px">Selling & Storage</h2>
+            <div class="muted">Configure exactly what happens when Full Automation reaches the town-cycle weight threshold.</div>
+          </div>
+          <div class="section-note">Town cycle: Butterfly Wing → Kafra storage → Tool Dealer selling → buy/restock → return to hunting map.</div>
+        </div>
+      </section>
+
+      <section class="card full">
+        <h2>1. Town cycle trigger</h2>
+        <div class="row">
+          <label>Return to town at weight %
+            <input id="storageWeight" type="number" min="1" max="99" value="70" onchange="syncTownWeight(this.value)">
+          </label>
+          <label>Unconfigured loot
+            <select id="defaultItemAction">
+              <option value="store" selected>Store automatically</option>
+              <option value="keep">Keep in inventory</option>
+            </select>
+          </label>
+        </div>
+        <div class="muted">Equipped items are always protected. Core consumables remain in inventory unless you explicitly add an override rule below.</div>
+      </section>
+
+      <section class="card full">
+        <h2>2. Inventory rules</h2>
+        <div class="muted" style="margin-bottom:12px">Your current live inventory is listed here. Choose Keep, Store or Sell for any item. Rules are saved by item ID/name and apply on future town trips too.</div>
+        <div class="actions" style="margin-bottom:12px">
+          <button class="action secondary" onclick="refreshTownInventory()">Refresh live inventory</button>
+          <button class="action secondary" onclick="clearTownItemRules()">Clear custom rules</button>
+        </div>
+        <div style="overflow:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead><tr>
+              <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Item</th>
+              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">ID</th>
+              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">Amount</th>
+              <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Town action</th>
+            </tr></thead>
+            <tbody id="townInventoryRows"><tr><td colspan="4" class="muted" style="padding:10px">Press Refresh live inventory while logged in.</td></tr></tbody>
+          </table>
+        </div>
+        <div id="townRuleSummary" class="drop-grid" style="margin-top:12px"></div>
+      </section>
+
+      <section class="card full">
+        <h2>3. Buy / restock each town trip</h2>
+        <div class="muted" style="margin-bottom:12px">Set a target inventory amount. RO Control buys only the missing amount from the Tool Dealer. Item ID is recommended for custom/private-server items.</div>
+        <div class="row">
+          <label>Item name<input id="townBuyName" placeholder="Fly Wing"></label>
+          <label>Item ID (optional)<input id="townBuyId" type="number" min="1" placeholder="601"></label>
+        </div>
+        <div class="row">
+          <label>Target amount in inventory<input id="townBuyTarget" type="number" min="0" value="1"></label>
+          <label>Meaning<input value="Buy only enough to reach this amount" disabled></label>
+        </div>
+        <div class="actions">
+          <button class="action secondary" onclick="addTownBuyRule()">Add / update buy rule</button>
+        </div>
+        <div id="townBuyRuleList" class="drop-grid" style="margin-top:12px"></div>
+      </section>
+
+      <section class="card full">
+        <h2>4. Town cycle controls</h2>
+        <div class="actions">
+          <button class="action" onclick="saveProfile()">Save Selling & Storage settings</button>
+          <button class="action secondary" onclick="forceTownCycle()">Test town cycle now</button>
+        </div>
+        <div class="section-note" style="margin-top:12px">Selling is a new native action and still needs its first live SoulBound validation. Use the test town cycle with low-value items first.</div>
+      </section>
+    </div>
+  </div>
+
   <div id="mapView" class="view-hidden">
     <section class="card full">
       <div class="map-toolbar">
@@ -634,6 +711,8 @@ async function refresh(){
 let huntCatalogData={map:'',monsters:[]};
 let huntMonsterRules={};
 let huntAvoidZones=[];
+let townItemRules=[];
+let townBuyRules=[];
 
 function renderAvoidZones(){
   const box=document.getElementById('avoidZoneList');
@@ -668,6 +747,128 @@ function removeAvoidZone(index){
 function clearAvoidZones(){
   huntAvoidZones=[];
   renderAvoidZones();
+}
+
+function syncTownWeight(value){
+  const v=Math.max(1,Math.min(99,+value||70));
+  const hunt=document.getElementById('weight');
+  const storage=document.getElementById('storageWeight');
+  if(hunt) hunt.value=v;
+  if(storage) storage.value=v;
+  const live=document.getElementById('liveReturnTrigger');
+  if(live) live.value=v+'%';
+}
+function townRuleFor(item){
+  const id=+(item.name_id??-1);
+  const name=String(item.name||'').trim().toLowerCase();
+  return townItemRules.find(function(r){
+    return (r.name_id!=null && +r.name_id===id) ||
+      (String(r.item_name||'').trim().toLowerCase()===name && !!name);
+  });
+}
+function setTownItemRule(name,nameId,action){
+  const id=+nameId;
+  const key=townItemRules.findIndex(function(r){
+    return (r.name_id!=null && +r.name_id===id) ||
+      String(r.item_name||'').trim().toLowerCase()===String(name||'').trim().toLowerCase();
+  });
+  const row={item_name:name||'',name_id:Number.isFinite(id)&&id>0?id:null,action};
+  if(key>=0) townItemRules[key]=row; else townItemRules.push(row);
+  renderTownRuleSummary();
+}
+function clearTownItemRules(){
+  townItemRules=[];
+  renderTownRuleSummary();
+  refreshTownInventory();
+}
+function renderTownRuleSummary(){
+  const box=document.getElementById('townRuleSummary');
+  if(!box) return;
+  if(!townItemRules.length){
+    box.innerHTML='<span class="muted">No custom item rules. The default action will be used.</span>';
+    return;
+  }
+  box.innerHTML=townItemRules.map(function(r,i){
+    return '<span class="drop-chip">'+escapeHtml(r.item_name||('Item #'+r.name_id))+
+      ' → '+escapeHtml(String(r.action||'store').toUpperCase())+
+      ' <button class="action danger" style="padding:3px 7px" onclick="removeTownItemRule('+i+')">×</button></span>';
+  }).join('');
+}
+function removeTownItemRule(i){
+  townItemRules.splice(i,1);
+  renderTownRuleSummary();
+  refreshTownInventory();
+}
+async function refreshTownInventory(){
+  const box=document.getElementById('townInventoryRows');
+  if(!box) return;
+  try{
+    const r=await fetch('/api/items/live');
+    const data=await r.json();
+    const items=(data.inventory||[]).slice().sort(function(a,b){
+      return String(a.name||'').localeCompare(String(b.name||''));
+    });
+    if(!items.length){
+      box.innerHTML='<tr><td colspan="4" class="muted" style="padding:10px">No live inventory detected.</td></tr>';
+      return;
+    }
+    const defaultAction=document.getElementById('defaultItemAction')?.value||'store';
+    box.innerHTML=items.map(function(item){
+      const rule=townRuleFor(item);
+      const equipped=+(item.equipped||0)!==0;
+      const action=equipped?'keep':(rule?.action||defaultAction);
+      const safeName=escapeHtml(item.name||('Item #'+item.name_id));
+      return '<tr>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+safeName+(equipped?' <span class="muted">· equipped</span>':'')+'</td>'+
+        '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+escapeHtml(String(item.name_id??'—'))+'</td>'+
+        '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+escapeHtml(String(item.amount??1))+'</td>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+
+          (equipped
+            ? '<span class="muted">KEEP · protected</span>'
+            : '<select onchange="setTownItemRule(\''+String(item.name||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")+'\','+Number(item.name_id||0)+',this.value)">'+
+              '<option value="keep" '+(action==='keep'?'selected':'')+'>Keep</option>'+
+              '<option value="store" '+(action==='store'?'selected':'')+'>Store</option>'+
+              '<option value="sell" '+(action==='sell'?'selected':'')+'>Sell</option>'+
+              '</select>')+
+        '</td></tr>';
+    }).join('');
+  }catch(e){
+    box.innerHTML='<tr><td colspan="4" class="muted" style="padding:10px">Could not load live inventory.</td></tr>';
+  }
+}
+function addTownBuyRule(){
+  const name=document.getElementById('townBuyName').value.trim();
+  const rawId=document.getElementById('townBuyId').value.trim();
+  const id=rawId?+rawId:null;
+  const target=Math.max(0,+document.getElementById('townBuyTarget').value||0);
+  if(!name && !id){out('Enter an item name or item ID.');return}
+  const key=townBuyRules.findIndex(function(r){
+    return (id && +r.name_id===id) ||
+      (name && String(r.item_name||'').toLowerCase()===name.toLowerCase());
+  });
+  const row={item_name:name,name_id:id||null,target_quantity:target};
+  if(key>=0) townBuyRules[key]=row; else townBuyRules.push(row);
+  document.getElementById('townBuyName').value='';
+  document.getElementById('townBuyId').value='';
+  renderTownBuyRules();
+}
+function removeTownBuyRule(i){
+  townBuyRules.splice(i,1);
+  renderTownBuyRules();
+}
+function renderTownBuyRules(){
+  const box=document.getElementById('townBuyRuleList');
+  if(!box) return;
+  if(!townBuyRules.length){
+    box.innerHTML='<span class="muted">No buy rules configured.</span>';
+    return;
+  }
+  box.innerHTML=townBuyRules.map(function(r,i){
+    const label=r.item_name||('Item #'+r.name_id);
+    return '<span class="drop-chip">'+escapeHtml(label)+' · target '+escapeHtml(String(r.target_quantity??0))+
+      (r.name_id?' · ID '+escapeHtml(String(r.name_id)):'')+
+      ' <button class="action danger" style="padding:3px 7px" onclick="removeTownBuyRule('+i+')">×</button></span>';
+  }).join('');
 }
 
 function currentMonsterRules(){
@@ -721,7 +922,10 @@ async function saveProfile(){
       supplies:{
         awakening_potions:+document.getElementById('awakeningTarget').value,
         butterfly_wings:+document.getElementById('butterflyTarget').value
-      }
+      },
+      default_item_action:document.getElementById('defaultItemAction').value,
+      item_rules:townItemRules,
+      buy_rules:townBuyRules
     }
   };
   const r=await fetch('/api/profile',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
@@ -777,6 +981,18 @@ async function loadProfile(){
     const supplies=(p.town&&p.town.supplies)||{};
     document.getElementById('awakeningTarget').value=supplies.awakening_potions??4;
     document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
+    document.getElementById('storageWeight').value=(p.town&&p.town.return_weight_percent)||70;
+    document.getElementById('defaultItemAction').value=(p.town&&p.town.default_item_action)||'store';
+    townItemRules=((p.town&&p.town.item_rules)||[]).map(function(row){return {...row};});
+    townBuyRules=((p.town&&p.town.buy_rules)||[]).map(function(row){return {...row};});
+    if(!townBuyRules.length){
+      townBuyRules=[
+        {item_name:'Awakening Potion',name_id:656,target_quantity:supplies.awakening_potions??4},
+        {item_name:'Butterfly Wing',name_id:602,target_quantity:supplies.butterfly_wings??1}
+      ];
+    }
+    renderTownRuleSummary();
+    renderTownBuyRules();
     document.getElementById('liveReturnTrigger').value=((p.town&&p.town.return_weight_percent)||70)+'%';
     document.getElementById('teleportItem').value=(p.hunt&&p.hunt.teleport_item)||'Fly Wing';
     document.getElementById('emergencyHp').value=(p.hunt&&p.hunt.emergency_hp_percent)||20;
@@ -1258,11 +1474,13 @@ function switchView(view){
   const views={
     dashboard:document.getElementById('dashboardView'),
     hunting:document.getElementById('huntingView'),
+    storage:document.getElementById('storageView'),
     map:document.getElementById('mapView')
   };
   const navs={
     dashboard:document.getElementById('navDashboard'),
     hunting:document.getElementById('navHunting'),
+    storage:document.getElementById('navStorage'),
     map:document.getElementById('navMap')
   };
   Object.keys(views).forEach(function(key){
@@ -1271,6 +1489,7 @@ function switchView(view){
   });
   if(view==='map') refreshMapLive(true);
   if(view==='hunting') loadHuntingCatalog();
+  if(view==='storage') refreshTownInventory();
 }
 
 function decodeWalkability(b64){
