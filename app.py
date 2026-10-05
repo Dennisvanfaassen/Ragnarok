@@ -18,6 +18,8 @@ from core.town_travel import town_travel_controller
 from core.map_dashboard import map_grid_payload, map_live_overlay
 from core.hunt_routes import hunt_route_store
 from core.game_actions import game_actions
+from core.full_automation import full_automation_controller
+from core.town_services import town_service_registry
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -428,6 +430,39 @@ async def stop_town_travel():
 @app.get("/api/town-travel")
 async def town_travel_state():
     return town_travel_controller.snapshot()
+
+
+@app.post("/api/full-automation/start")
+async def start_full_automation():
+    try:
+        return full_automation_controller.start()
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/full-automation/stop")
+async def stop_full_automation():
+    return full_automation_controller.stop()
+
+
+@app.get("/api/full-automation")
+async def full_automation_state():
+    return full_automation_controller.snapshot()
+
+
+@app.get("/api/town-services")
+async def town_services_state():
+    town_service_registry.observe_live(authenticated_client_monitor.snapshot())
+    return town_service_registry.snapshot()
+
+
+@app.get("/api/world-route/hunt")
+async def world_route_to_hunt():
+    snapshot = authenticated_client_monitor.snapshot()
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+    current_map = str(world.get("map") or "")
+    target_map = str(app_state.get_profile().hunt.map or "")
+    return world_route_planner.route_to_map(current_map, target_map)
 
 
 @app.get("/api/map/grid")
