@@ -261,8 +261,25 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <input id="spriteYOffset" type="number" value="-24">
         </label>
         <label>Window mode
-          <input value="Supported — coordinates are client-relative" disabled>
+          <input value="Supported — calibration is tied to this client size" disabled>
         </label>
+      </div>
+      <div class="row">
+        <label>Screen calibration
+          <input id="calibrationStatus" value="not calibrated" disabled>
+        </label>
+        <label>Calibration quality
+          <input id="calibrationQuality" value="—" disabled>
+        </label>
+      </div>
+      <div class="actions" style="margin-bottom:12px">
+        <button class="action secondary" onclick="startCalibration()">Calibrate screen</button>
+        <button class="action secondary" onclick="refreshCalibration()">Refresh calibration</button>
+        <button class="action danger" onclick="clearCalibration()">Clear calibration</button>
+      </div>
+      <div class="muted" style="margin-bottom:12px">
+        Before calibrating: stand in a large open area and do not touch the mouse for about 30 seconds.
+        RO Control will make several controlled movement clicks and learn the real map-to-screen projection for this exact window size.
       </div>
       <div class="row">
         <label>Movement behavior
@@ -505,6 +522,35 @@ async function stopAuthenticatedClient(){
   document.getElementById('authClientStatus').value=data.status||'stopped';
   out(data);
 }
+async function startCalibration(){
+  out('Starting screen calibration. Keep Classic.exe visible and do not touch the mouse...');
+  const r=await fetch('/api/active-hunt/calibrate',{method:'POST'});
+  const data=await r.json();
+  renderCalibration(data);
+  out(data);
+}
+async function refreshCalibration(){
+  const r=await fetch('/api/active-hunt/calibration');
+  const data=await r.json();
+  renderCalibration(data);
+  out(data);
+}
+async function clearCalibration(){
+  const r=await fetch('/api/active-hunt/calibration/clear',{method:'POST'});
+  const data=await r.json();
+  renderCalibration(data);
+  out(data);
+}
+function renderCalibration(data){
+  const status=document.getElementById('calibrationStatus');
+  const quality=document.getElementById('calibrationQuality');
+  if(status) status.value=(data&&data.status)||'unknown';
+  if(quality){
+    quality.value=(data&&data.ready)
+      ? ((data.rmse_px??'—')+' px RMSE · '+(data.sample_count??0)+' samples')
+      : ((data&&data.message)||'—');
+  }
+}
 async function startActiveHunt(){
   const body={
     tile_width:+document.getElementById('tileWidth').value,
@@ -537,6 +583,7 @@ async function refreshActiveHuntQuiet(){
     const r=await fetch('/api/active-hunt');
     const data=await r.json();
     renderActiveHunt(data);
+    if(data&&data.calibration) renderCalibration(data.calibration);
   }catch(e){}
 }
 async function analyzePcap(){
