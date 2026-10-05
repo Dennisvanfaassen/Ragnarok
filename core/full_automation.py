@@ -292,15 +292,9 @@ class FullAutomationController:
     def _open_kafra_storage(self, actor_id: int) -> bool:
         before = authenticated_client_monitor.item_state_snapshot().get("updated_at", {}).get("storage")
         steps = [
-            # SoulBound Kafra flow must finish the dialogue with one final
-            # "Next"/Enter after choosing Storage. Sending the explicit NPC
-            # close packet leaves the dialogue active on this client, and while
-            # that dialogue is still open the storage window will not accept
-            # inventory transfers.
             ("talk", lambda: native_action_bridge.talk_npc(actor_id, 1)),
             ("continue_to_menu", lambda: native_action_bridge.continue_npc(actor_id)),
             ("storage_option", lambda: native_action_bridge.choose_npc_option(actor_id, 2)),
-            ("continue_to_close_dialog", lambda: native_action_bridge.continue_npc(actor_id)),
         ]
         for name, fn in steps:
             result = fn()
@@ -309,6 +303,21 @@ class FullAutomationController:
                 self.last_error = f"Kafra dialogue failed at {name}: {result.get('reason')}"
                 return False
             self._stop.wait(0.30)
+
+        # SoulBound opens the storage window while the final Kafra dialogue is
+        # still visible. Native npc_continue does not dismiss that UI state.
+        # Match the manual flow exactly: press the physical Enter key once after
+        # choosing Storage, then wait before sending storage-move packets.
+        self._stop.wait(0.35)
+        enter_result = game_actions.press_hotkey("ENTER")
+        self._log("kafra_dialog", step="physical_enter_to_close_dialog", result=enter_result)
+        if not enter_result.get("ok"):
+            self.last_error = (
+                f"Could not press Enter to close Kafra dialogue: "
+                f"{enter_result.get('reason')}"
+            )
+            return False
+        self._stop.wait(0.65)
 
         deadline = time.time() + 5.0
         while not self._stop.is_set() and time.time() < deadline:
