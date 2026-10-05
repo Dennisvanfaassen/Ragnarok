@@ -1538,6 +1538,7 @@ class HuntingAI:
 
         if reconnecting:
             reconnect = self.wander_reconnect_target
+            reconnect_index = self.wander_reconnect_route_index
             if (
                 corridor_distance <= 2
                 or self._tile_distance(player, reconnect) <= 2
@@ -1548,17 +1549,77 @@ class HuntingAI:
                     destination={"x": reconnect[0], "y": reconnect[1]},
                     corridor_distance=corridor_distance,
                 )
+
+                # Rebuild the straight-segment view from the position where we
+                # actually rejoined. Keeping the old line list can point behind
+                # the player and create a large artificial U-turn.
+                suffix_index = max(
+                    route_index + 1,
+                    int(reconnect_index or route_index) + 1,
+                )
+                remaining = [player] + self.wander_path[
+                    min(suffix_index, len(self.wander_path) - 1):
+                ]
+                rebuilt = self._build_straight_wander_segments(
+                    grid,
+                    remaining,
+                )
+                if len(rebuilt) >= 2:
+                    self.wander_line_points = rebuilt
+                    self.wander_line_index = 1
+                    destination = rebuilt[1]
+
                 self.wander_reconnect_target = None
                 self.wander_reconnect_route_index = None
                 reconnecting = False
+
             elif clear_walk_line(grid, player, reconnect):
                 destination = reconnect
+
             else:
-                # The latched line became obstructed from our new cell. Drop it
-                # once and select a new forward re-entry point below.
-                self.wander_reconnect_target = None
-                self.wander_reconnect_route_index = None
-                reconnecting = False
+                # Never allow reconnect selection to jump backward. If the
+                # straight sight-line to the latched point changes while RO is
+                # moving, advance the latch to another clear path point ahead.
+                previous_index = int(reconnect_index or route_index)
+                min_index = max(route_index + 1, previous_index + 1)
+                end = min(len(self.wander_path), max(min_index + 1, route_index + 16))
+
+                replacement_index = None
+                replacement = None
+                for idx in range(end - 1, min_index - 1, -1):
+                    candidate = self.wander_path[idx]
+                    if clear_walk_line(grid, player, candidate):
+                        replacement_index = idx
+                        replacement = candidate
+                        break
+
+                if replacement is not None:
+                    self.wander_reconnect_target = replacement
+                    self.wander_reconnect_route_index = replacement_index
+                    destination = replacement
+                    reconnecting = True
+                    self._log(
+                        "wander_route_reconnect_advanced",
+                        player={"x": player[0], "y": player[1]},
+                        destination={"x": replacement[0], "y": replacement[1]},
+                        previous_index=previous_index,
+                        reconnect_index=replacement_index,
+                        corridor_distance=corridor_distance,
+                    )
+                else:
+                    # No safe farther point is visible yet. Use the immediate
+                    # forward path cell without throwing away reconnect state.
+                    immediate_index = min(
+                        max(route_index + 1, previous_index),
+                        len(self.wander_path) - 1,
+                    )
+                    immediate = self.wander_path[immediate_index]
+                    if clear_walk_line(grid, player, immediate):
+                        destination = immediate
+                    else:
+                        mouse_game_adapter.release_hold_move()
+                        self._stop.wait(0.06)
+                        return
 
         if not reconnecting and corridor_distance > 2:
             reconnect_index = None
