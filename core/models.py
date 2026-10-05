@@ -98,7 +98,10 @@ class TownSettings(BaseModel):
     supplies: SupplySettings = Field(default_factory=SupplySettings)
     default_item_action: str = "store"  # keep | store
     item_rules: list[TownItemRule] = Field(default_factory=list)
-    buy_rules: list[TownBuyRule] = Field(default_factory=list)
+    buy_rules: list[TownBuyRule] = Field(default_factory=lambda: [
+        TownBuyRule(item_name="Awakening Potion", name_id=656, target_quantity=4),
+        TownBuyRule(item_name="Butterfly Wing", name_id=602, target_quantity=1),
+    ])
 
 
 class BotProfile(BaseModel):
