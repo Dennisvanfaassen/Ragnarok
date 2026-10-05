@@ -244,6 +244,41 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full">
+      <h2>Movement + Attack v1</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Uses the live path and normal mouse input to Classic.exe. The network session remains read-only.
+      </div>
+      <div class="row">
+        <label>Tile width
+          <input id="tileWidth" type="number" value="40">
+        </label>
+        <label>Tile height
+          <input id="tileHeight" type="number" value="20">
+        </label>
+      </div>
+      <div class="row">
+        <label>Path lookahead (tiles)
+          <input id="moveLookahead" type="number" min="1" max="10" value="5">
+        </label>
+        <label>Attack range (tiles)
+          <input id="attackRange" type="number" min="1" max="8" value="1">
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action" onclick="startActiveHunt()">Start movement + attack</button>
+        <button class="action danger" onclick="stopActiveHunt()">Stop active hunt</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label>Status
+          <input id="activeHuntStatus" value="stopped" disabled>
+        </label>
+        <label>Last action
+          <input id="activeHuntMessage" value="Idle" disabled>
+        </label>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>Wireshark capture analyzer</h2>
       <div class="muted" style="margin-bottom:12px">
         Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
@@ -462,6 +497,41 @@ async function stopAuthenticatedClient(){
   document.getElementById('authClientStatus').value=data.status||'stopped';
   out(data);
 }
+async function startActiveHunt(){
+  const body={
+    tile_width:+document.getElementById('tileWidth').value,
+    tile_height:+document.getElementById('tileHeight').value,
+    lookahead:+document.getElementById('moveLookahead').value,
+    attack_range:+document.getElementById('attackRange').value
+  };
+  const r=await fetch('/api/active-hunt/start',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  const data=await r.json();
+  renderActiveHunt(data);
+  out(data);
+}
+async function stopActiveHunt(){
+  const r=await fetch('/api/active-hunt/stop',{method:'POST'});
+  const data=await r.json();
+  renderActiveHunt(data);
+  out(data);
+}
+function renderActiveHunt(data){
+  const status=document.getElementById('activeHuntStatus');
+  const msg=document.getElementById('activeHuntMessage');
+  if(status) status.value=(data&&data.status)||'unknown';
+  if(msg) msg.value=(data&&data.message)||'';
+}
+async function refreshActiveHuntQuiet(){
+  try{
+    const r=await fetch('/api/active-hunt');
+    const data=await r.json();
+    renderActiveHunt(data);
+  }catch(e){}
+}
 async function analyzePcap(){
   const input=document.getElementById('pcapFile');
   if(!input.files.length){out('Choose a .pcap or .pcapng file first.');return}
@@ -473,7 +543,7 @@ async function analyzePcap(){
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
-refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);
+refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);
 </script>
 </body>
 </html>
