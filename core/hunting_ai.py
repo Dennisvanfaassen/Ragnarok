@@ -90,6 +90,7 @@ class HuntingAI:
         self._combat_click_locked = False
         self._combat_seen = False
         self._attack_origin = None
+        self._attack_backend = "mouse"
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -252,6 +253,7 @@ class HuntingAI:
         self._attack_reposition_required = False
         self._attack_reposition_origin = None
         self._attack_route_anchor = None
+        self._attack_backend = "mouse"
 
     def _lock_actor(self, actor: dict[str, Any], reason: str) -> bool:
         x, y = actor.get("x"), actor.get("y")
@@ -811,6 +813,7 @@ class HuntingAI:
             target_render,
             retry_index=0,
             target_key=self.target_name,
+            actor_id=int(self.target_id) if self.target_id is not None else None,
         )
         self._log(
             "instant_attack",
@@ -823,6 +826,7 @@ class HuntingAI:
         if not result.get("ok"):
             return False
 
+        self._attack_backend = str(result.get("backend") or "mouse")
         self.attack_retry = 0
         self._attack_origin = player
         self._combat_click_locked = False
@@ -1122,6 +1126,7 @@ class HuntingAI:
             target_render,
             retry_index=self.attack_retry,
             target_key=self.target_name,
+            actor_id=int(self.target_id) if self.target_id is not None else None,
         )
         self._log(
             "attack_attempt",
@@ -1138,6 +1143,7 @@ class HuntingAI:
             )
             return
 
+        self._attack_backend = str(result.get("backend") or "mouse")
         self._attack_origin = player
         self._combat_click_locked = False
         self._combat_seen = False
@@ -1182,6 +1188,17 @@ class HuntingAI:
         elapsed = time.time() - self.attack_clicked_at
         if elapsed < self.attack_confirm_timeout:
             self._stop.wait(0.03)
+            return
+
+        # Native actor-ID sends already returned successfully from Classic.exe's
+        # own authenticated map socket. Do not apply mouse-style precision
+        # retries to them; duplicate packets can create repeated attack actions.
+        if self._attack_backend == "native":
+            self._combat_click_locked = True
+            self._set_state(
+                "WAITING_FOR_DEATH",
+                f"Native attack sent to {self.target_name}; waiting for combat/death",
+            )
             return
 
         # No outgoing actor-action means the mouse click did not actually land
