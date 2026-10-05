@@ -20,6 +20,7 @@ const counters = {
     actor_actions: 0
 };
 const hooked = [];
+const recentCalls = [];
 
 function exportPtr(name) {
     const attempts = [];
@@ -87,8 +88,32 @@ function readByte(ptr, offset) {
     return ptr.add(offset).readU8();
 }
 
+function rememberCall(socket, buf, length, api) {
+    if (buf.isNull() || length <= 0) return;
+    try {
+        const sampleLen = Math.min(length, 32);
+        const bytes = new Uint8Array(buf.readByteArray(sampleLen));
+        const hex = Array.from(bytes)
+            .map(b => ('0' + b.toString(16)).slice(-2))
+            .join(' ');
+        recentCalls.push({
+            api: api,
+            socket: socket.toString(),
+            length: length,
+            first_bytes_hex: hex,
+            timestamp_ms: Date.now()
+        });
+        while (recentCalls.length > 40) recentCalls.shift();
+    } catch (e) {
+        send({event: 'buffer_sample_error', api: api, error: String(e)});
+    }
+}
+
 function inspectBuffer(socket, buf, length, api) {
-    if (length !== 7 || buf.isNull()) return;
+    if (buf.isNull()) return;
+
+    rememberCall(socket, buf, length, api);
+    if (length !== 7) return;
 
     try {
         if (readByte(buf, 0) !== 0x37 || readByte(buf, 1) !== 0x04) return;
@@ -206,7 +231,8 @@ rpc.exports = {
             last_observed: lastObserved,
             counters: counters,
             hooked_apis: hooked,
-            pointer_size: Process.pointerSize
+            pointer_size: Process.pointerSize,
+            recent_calls: recentCalls
         };
     },
 
