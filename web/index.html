@@ -249,11 +249,11 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         Uses the live path and normal mouse input to Classic.exe. The network session remains read-only.
       </div>
       <div class="row">
-        <label>Tile width
-          <input id="tileWidth" type="number" value="40">
+        <label>Movement segment (tiles)
+          <input id="moveSegmentTiles" type="number" min="1" max="8" value="4">
         </label>
-        <label>Tile height
-          <input id="tileHeight" type="number" value="20">
+        <label>Attack range (tiles)
+          <input id="attackRange" type="number" min="1" max="8" value="1">
         </label>
       </div>
       <div class="row">
@@ -283,10 +283,10 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
       <div class="row">
         <label>Movement behavior
-          <input value="Furthest clear point toward target" disabled>
+          <input value="OpenKore-style discrete route segments" disabled>
         </label>
         <label>Combat behavior
-          <input value="Click once, then wait for target death" disabled>
+          <input value="Target lock → confirm combat → wait for death" disabled>
         </label>
       </div>
       <div class="actions">
@@ -544,7 +544,7 @@ async function clearCalibration(){
 function renderCalibration(data){
   const status=document.getElementById('calibrationStatus');
   const quality=document.getElementById('calibrationQuality');
-  if(status) status.value=(data&&data.status)||'unknown';
+  if(status) status.value=(data&&data.state)||(data&&data.status)||'unknown';
   if(quality){
     quality.value=(data&&data.ready)
       ? ((data.rmse_px??'—')+' px RMSE · '+(data.sample_count??0)+' samples')
@@ -553,8 +553,8 @@ function renderCalibration(data){
 }
 async function startActiveHunt(){
   const body={
-    tile_width:+document.getElementById('tileWidth').value,
-    tile_height:+document.getElementById('tileHeight').value,
+    move_segment_tiles:+document.getElementById('moveSegmentTiles').value,
+    attack_range:+document.getElementById('attackRange').value,
     sprite_y_offset:+document.getElementById('spriteYOffset').value
   };
   const r=await fetch('/api/active-hunt/start',{
