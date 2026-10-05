@@ -34,3 +34,13 @@ def item_names() -> dict[int, str]:
 def item_name(name_id: int) -> str:
     item_id = int(name_id)
     return item_names().get(item_id, f"Item #{item_id}")
+
+
+def item_id_for_name(name: str) -> int | None:
+    needle = str(name or "").strip().casefold()
+    if not needle:
+        return None
+    for item_id, item_name_value in item_names().items():
+        if item_name_value.strip().casefold() == needle:
+            return int(item_id)
+    return None
