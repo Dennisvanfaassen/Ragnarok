@@ -153,6 +153,33 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full">
+      <h2>Live Game State</h2>
+      <div class="row">
+        <section class="card" style="grid-column:span 6">
+          <h2>Position</h2>
+          <div id="liveMap" class="metric" style="font-size:20px">—</div>
+          <div id="livePos" class="muted">X: — · Y: —</div>
+        </section>
+        <section class="card" style="grid-column:span 6">
+          <h2>Vitals</h2>
+          <div id="liveHp" class="metric" style="font-size:20px">HP —</div>
+          <div id="liveSp" class="muted">SP —</div>
+        </section>
+      </div>
+      <div class="row">
+        <label>Nearby actors
+          <input id="liveActors" value="0" disabled>
+        </label>
+        <label>Monsters / Players / Other
+          <input id="liveActorBreakdown" value="0 / 0 / 0" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action secondary" onclick="refreshAuthenticatedClient()">Refresh live state</button>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>Wireshark capture analyzer</h2>
       <div class="muted" style="margin-bottom:12px">
         Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
@@ -250,12 +277,31 @@ async function startAuthenticatedClient(){
   });
   const data=await r.json();
   document.getElementById('authClientStatus').value=data.status||'unknown';
+  renderLiveState(data);
   out(data);
+}
+function renderLiveState(data){
+  const live=(data&&data.live_state)||{};
+  const world=live.world||{};
+  const counts=live.actor_counts||{};
+  const mapEl=document.getElementById('liveMap');
+  if(mapEl) mapEl.textContent=world.map||'—';
+  const posEl=document.getElementById('livePos');
+  if(posEl) posEl.textContent='X: '+(world.x??'—')+' · Y: '+(world.y??'—');
+  const hpEl=document.getElementById('liveHp');
+  if(hpEl) hpEl.textContent='HP '+(world.hp??'—')+' / '+(world.hp_max??'—')+(world.hp_percent!=null?' ('+world.hp_percent+'%)':'');
+  const spEl=document.getElementById('liveSp');
+  if(spEl) spEl.textContent='SP '+(world.sp??'—')+' / '+(world.sp_max??'—')+(world.sp_percent!=null?' ('+world.sp_percent+'%)':'');
+  const actorsEl=document.getElementById('liveActors');
+  if(actorsEl) actorsEl.value=counts.total??0;
+  const breakdown=document.getElementById('liveActorBreakdown');
+  if(breakdown) breakdown.value=(counts.monsters??0)+' / '+(counts.players??0)+' / '+(counts.other??0);
 }
 async function refreshAuthenticatedClient(){
   const r=await fetch('/api/diagnostics/authenticated-client');
   const data=await r.json();
   document.getElementById('authClientStatus').value=data.status||'unknown';
+  renderLiveState(data);
   out(data);
 }
 async function stopAuthenticatedClient(){
