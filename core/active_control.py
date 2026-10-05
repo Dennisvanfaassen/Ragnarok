@@ -59,6 +59,8 @@ class ActiveHuntController:
         # Keep clicks comfortably inside the world viewport.
         self.max_screen_x = 360
         self.max_screen_y = 210
+        self.direct_click_range = 4
+        self.combat_confirm_timeout = 1.8
 
     def configure(self, payload: dict[str, Any]):
         with self._lock:
@@ -243,7 +245,10 @@ class ActiveHuntController:
 
         # Walk backwards from the target end and pick the furthest path cell
         # that is both directly reachable and actually inside the game viewport.
-        for item in reversed(path_preview[1:]):
+        # Stop a few tiles before the target. A movement click should not
+        # accidentally land on the monster; the next cycle performs the attack.
+        usable = path_preview[1:-2] if len(path_preview) > 4 else path_preview[1:2]
+        for item in reversed(usable):
             point = (int(item["x"]), int(item["y"]))
             dx = point[0] - start[0]
             dy = point[1] - start[1]
@@ -254,6 +259,29 @@ class ActiveHuntController:
 
         first = path_preview[1]
         return int(first["x"]), int(first["y"])
+
+    def _combat_confirmed(self, target_id: int, since: float) -> bool:
+        snapshot = authenticated_client_monitor.snapshot()
+        world = (snapshot.get("live_state") or {}).get("world") or {}
+        combat = world.get("last_combat") or {}
+        try:
+            return (
+                int(combat.get("target_id")) == int(target_id)
+                and float(combat.get("timestamp") or 0) >= since
+            )
+        except Exception:
+            return False
+
+    def _wait_for_combat_confirmation(self, target_id: int, clicked_at: float) -> bool:
+        deadline = time.time() + self.combat_confirm_timeout
+        while not self._stop.is_set() and time.time() < deadline:
+            if self._combat_confirmed(target_id, clicked_at):
+                return True
+            snapshot = authenticated_client_monitor.snapshot()
+            if self._find_actor(snapshot, target_id) is None:
+                return True
+            self._stop.wait(0.08)
+        return False
 
     def _wait_for_locked_target_death(self):
         """After one monster click, issue no more clicks until that actor is gone."""
@@ -356,8 +384,10 @@ class ActiveHuntController:
             # performs its normal walk-to-target + auto attack behavior.
             dx = tx - start[0]
             dy = ty - start[1]
+            direct_distance = max(abs(dx), abs(dy))
             if (
-                self._screen_offset_is_safe(dx, dy)
+                direct_distance <= self.direct_click_range
+                and self._screen_offset_is_safe(dx, dy)
                 and clear_walk_line(grid, start, target_point)
             ):
                 self._status = "attacking"
@@ -367,6 +397,7 @@ class ActiveHuntController:
                     message=self._message,
                 )
 
+                clicked_at = time.time()
                 if self._click_map_position(
                     hwnd,
                     start[0],
@@ -375,10 +406,24 @@ class ActiveHuntController:
                     ty,
                     kind="attack_click",
                 ):
-                    self._engaged_target_id = target_id
-                    self._engaged_target_name = str(target.get("name") or "monster")
-                    self._wait_for_locked_target_death()
-                    continue
+                    if self._wait_for_combat_confirmation(target_id, clicked_at):
+                        self._engaged_target_id = target_id
+                        self._engaged_target_name = str(target.get("name") or "monster")
+                        self._log(
+                            "combat_confirmed",
+                            target_id=target_id,
+                            target_name=self._engaged_target_name,
+                        )
+                        self._wait_for_locked_target_death()
+                        continue
+                    else:
+                        self._log(
+                            "attack_missed",
+                            target_id=target_id,
+                            target_name=str(target.get("name") or "monster"),
+                        )
+                        self._status = "running"
+                        self._message = "Monster click was not confirmed; repositioning"
 
             # Direct path is blocked (or target is outside our safe click area).
             # Use A* only to get around the obstacle, then click as far along the
@@ -491,6 +536,8 @@ class ActiveHuntController:
                     "tile_height": self.tile_height,
                     "lookahead": self.max_path_lookahead,
                     "attack_range": self.attack_range_tiles,
+                    "direct_click_range": self.direct_click_range,
+                    "combat_confirm_timeout": self.combat_confirm_timeout,
                 },
                 "last_click": self._last_click,
                 "actions": self._actions[-20:],
