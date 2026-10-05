@@ -120,6 +120,10 @@ STAT_NAMES = {
     9: "status_points",
     11: "base_level",
     12: "skill_points",
+    # Ragnarok/OpenKore SP_WEIGHT and SP_MAXWEIGHT. The wire values are
+    # scaled by the client, but their ratio is still the real weight percent.
+    24: "weight",
+    25: "weight_max",
 }
 
 
@@ -1251,6 +1255,13 @@ class AuthenticatedClientMonitor:
             )
             world["sp_percent"] = (
                 round(sp * 100 / sp_max, 1) if sp is not None and sp_max else None
+            )
+            weight = world.get("weight")
+            weight_max = world.get("weight_max")
+            world["weight_percent"] = (
+                round(weight * 100 / weight_max, 1)
+                if weight is not None and weight_max
+                else None
             )
 
             return {
