@@ -13,6 +13,7 @@ from core.targeting import build_targeting_state
 from core.pathing import build_pathing_state, nav_repository
 from core.active_control import active_hunt_controller
 from core.hotkey import hunting_hotkey
+from core.world_route import world_route_planner
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -267,3 +268,21 @@ async def clear_active_hunt_calibration():
 @app.get("/api/active-hunt/hotkey")
 async def active_hunt_hotkey():
     return hunting_hotkey.snapshot()
+
+
+@app.get("/api/world-route/town")
+async def world_route_to_town():
+    snapshot = authenticated_client_monitor.snapshot()
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+    current_map = str(world.get("map") or "")
+    profile = app_state.get_profile()
+    preferred = str(profile.town.storage_map or "").strip() or None
+    return world_route_planner.route_to_town(
+        current_map,
+        preferred_town=preferred,
+    )
+
+
+@app.get("/api/world-route")
+async def world_route_state():
+    return world_route_planner.snapshot()
