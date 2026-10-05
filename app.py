@@ -24,6 +24,7 @@ from diagnostics.handshake_proxy import handshake_proxy
 from diagnostics.pcap_scan import analyze_capture
 from diagnostics.authenticated_client import authenticated_client_monitor
 from diagnostics.hunt_recorder import hunting_diagnostic_recorder
+from diagnostics.native_action_bridge import native_action_bridge
 
 
 ROOT = Path(__file__).resolve().parent
@@ -193,6 +194,36 @@ async def authenticated_client_action_trace():
 @app.post("/api/diagnostics/authenticated-client/action-trace/clear")
 async def clear_authenticated_client_action_trace():
     return authenticated_client_monitor.clear_client_action_trace()
+
+
+@app.post("/api/native-action/start")
+async def start_native_action_bridge():
+    try:
+        return native_action_bridge.start()
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/native-action/stop")
+async def stop_native_action_bridge():
+    return native_action_bridge.stop()
+
+
+@app.get("/api/native-action")
+async def native_action_state():
+    return native_action_bridge.snapshot()
+
+
+@app.post("/api/native-action/attack")
+async def native_action_attack(payload: dict):
+    try:
+        actor_id = int(payload.get("actor_id"))
+    except Exception:
+        raise HTTPException(400, "actor_id is required")
+    result = native_action_bridge.attack(actor_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result)
+    return result
 
 
 @app.get("/api/game-actions")
