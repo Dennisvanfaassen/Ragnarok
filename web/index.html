@@ -361,6 +361,34 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full">
+      <h2>Full Hunt Automation</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Runs the complete profile loop: selected hunt map/monsters → loot all → heal with the configured hotkey → Butterfly Wing at the configured weight → nearest Kafra → storage → nearest Tool Dealer → restock → route back to the hunt map.
+      </div>
+      <div class="row">
+        <label>Automation phase
+          <input id="fullAutomationPhase" value="idle" disabled>
+        </label>
+        <label>Automation message
+          <input id="fullAutomationMessage" value="Ready" disabled>
+        </label>
+      </div>
+      <div class="row">
+        <label>Detected saved town
+          <input id="fullAutomationTown" value="—" disabled>
+        </label>
+        <label>Live weight
+          <input id="fullAutomationWeight" value="—" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action" onclick="startFullAutomation()">Start full automation</button>
+        <button class="action danger" onclick="stopFullAutomation()">Stop full automation</button>
+        <button class="action secondary" onclick="previewHuntReturnRoute()">Preview route to hunt map</button>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>Smart Navigation</h2>
       <div class="muted" style="margin-bottom:12px">
         Hunting now preserves direction and explores low-coverage parts of the map. Town travel uses a portal graph and smooth held-mouse routing.
@@ -789,6 +817,41 @@ async function refreshActiveHuntQuiet(){
     if(data&&data.calibration) renderCalibration(data.calibration);
   }catch(e){}
 }
+async function startFullAutomation(){
+  const r=await fetch('/api/full-automation/start',{method:'POST'});
+  const data=await r.json();
+  renderFullAutomation(data);
+  out(data);
+}
+async function stopFullAutomation(){
+  const r=await fetch('/api/full-automation/stop',{method:'POST'});
+  const data=await r.json();
+  renderFullAutomation(data);
+  out(data);
+}
+function renderFullAutomation(data){
+  const phase=document.getElementById('fullAutomationPhase');
+  const msg=document.getElementById('fullAutomationMessage');
+  const town=document.getElementById('fullAutomationTown');
+  const weight=document.getElementById('fullAutomationWeight');
+  if(phase) phase.value=(data&&data.phase)||'idle';
+  if(msg) msg.value=(data&&data.message)||'';
+  if(town) town.value=(data&&data.saved_town_map)||'—';
+  if(weight) weight.value=(data&&data.weight_percent)!=null
+    ? data.weight_percent+'%'
+    : '—';
+}
+async function refreshFullAutomationQuiet(){
+  try{
+    const r=await fetch('/api/full-automation');
+    renderFullAutomation(await r.json());
+  }catch(e){}
+}
+async function previewHuntReturnRoute(){
+  const r=await fetch('/api/world-route/hunt');
+  out(await r.json());
+}
+
 async function previewTownRoute(){
   const r=await fetch('/api/world-route/town');
   const data=await r.json();
@@ -1216,7 +1279,7 @@ async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh(
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
 const mapCanvas=document.getElementById('liveMapCanvas');
 if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
-loadProfile();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
+loadProfile();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
 </script>
 </body>
 </html>
