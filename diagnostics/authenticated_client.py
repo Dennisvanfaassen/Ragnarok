@@ -228,6 +228,29 @@ class AuthenticatedClientMonitor:
         if opcode == 0x0091 and len(data) >= 22:
             map_name = _clean_text(data[2:18])
             x, y = struct.unpack_from("<HH", data, 18)
+
+            previous_map = self._world.get("map")
+            previous_x = self._world.get("x")
+            previous_y = self._world.get("y")
+            if (
+                previous_map
+                and previous_map != map_name
+                and previous_x is not None
+                and previous_y is not None
+            ):
+                try:
+                    from core.world_route import world_route_planner
+                    world_route_planner.learn_transition(
+                        str(previous_map),
+                        int(previous_x),
+                        int(previous_y),
+                        map_name,
+                        int(x),
+                        int(y),
+                    )
+                except Exception:
+                    pass
+
             self._world.update({"map": map_name, "x": x, "y": y})
             self._actors.clear()
             self._floor_items.clear()
