@@ -111,6 +111,95 @@ class WorldNavRepository:
         return grid, "github-cache"
 
 
+
+def _supercover_line(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
+    """Return every grid cell touched by the segment from a to b."""
+    x0, y0 = a
+    x1, y1 = b
+    dx = x1 - x0
+    dy = y1 - y0
+    nx = abs(dx)
+    ny = abs(dy)
+    sign_x = 1 if dx > 0 else -1 if dx < 0 else 0
+    sign_y = 1 if dy > 0 else -1 if dy < 0 else 0
+
+    x, y = x0, y0
+    points = [(x, y)]
+    ix = iy = 0
+
+    while ix < nx or iy < ny:
+        left = (1 + 2 * ix) * ny
+        right = (1 + 2 * iy) * nx
+
+        if left == right:
+            x += sign_x
+            y += sign_y
+            ix += 1
+            iy += 1
+        elif left < right:
+            x += sign_x
+            ix += 1
+        else:
+            y += sign_y
+            iy += 1
+
+        points.append((x, y))
+
+    return points
+
+
+def clear_walk_line(
+    grid: NavGrid,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+) -> bool:
+    """True when a straight walk from start to goal does not cross blocked cells."""
+    points = _supercover_line(start, goal)
+    if not points:
+        return False
+
+    previous = points[0]
+    if not grid.walkable(*previous):
+        return False
+
+    for point in points[1:]:
+        if not grid.walkable(*point):
+            return False
+
+        dx = point[0] - previous[0]
+        dy = point[1] - previous[1]
+        if dx and dy:
+            if not grid.walkable(previous[0] + dx, previous[1]):
+                return False
+            if not grid.walkable(previous[0], previous[1] + dy):
+                return False
+
+        previous = point
+
+    return True
+
+
+def furthest_clear_path_point(
+    grid: NavGrid,
+    start: tuple[int, int],
+    path: list[tuple[int, int]],
+    *,
+    max_index: int | None = None,
+) -> tuple[int, int] | None:
+    """Pick the furthest path cell directly reachable from the current tile."""
+    if not path:
+        return None
+
+    end = len(path) - 1
+    if max_index is not None:
+        end = min(end, max_index)
+
+    for i in range(end, 0, -1):
+        if clear_walk_line(grid, start, path[i]):
+            return path[i]
+
+    return path[1] if len(path) > 1 else path[0]
+
 def _heuristic(a: tuple[int, int], b: tuple[int, int]) -> float:
     dx = abs(a[0] - b[0])
     dy = abs(a[1] - b[1])
