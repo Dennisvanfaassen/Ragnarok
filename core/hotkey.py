@@ -18,6 +18,9 @@ WM_SYSKEYUP = 0x0105
 
 # Windows virtual-key code for [ { on a standard keyboard.
 VK_OEM_4 = 0xDB
+WM_HOTKEY = 0x0312
+MOD_NOREPEAT = 0x4000
+HOTKEY_ID = 0x524F
 
 
 user32 = ctypes.windll.user32
@@ -117,6 +120,38 @@ class HuntingHotkey:
                 self._message = f"[ toggle failed: {exc}"
 
     def _message_loop(self):
+        # Prefer RegisterHotKey: Windows delivers WM_HOTKEY globally even when
+        # Classic.exe has focus. MOD_NOREPEAT prevents key-repeat toggling.
+        if user32.RegisterHotKey(
+            None,
+            HOTKEY_ID,
+            MOD_NOREPEAT,
+            VK_OEM_4,
+        ):
+            with self._lock:
+                self._status = "ready"
+                self._message = "[ toggles hunting globally (native hotkey)."
+
+            msg = wintypes.MSG()
+            try:
+                while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+                    if msg.message == WM_HOTKEY and int(msg.wParam) == HOTKEY_ID:
+                        self._queue_toggle()
+                    else:
+                        user32.TranslateMessage(ctypes.byref(msg))
+                        user32.DispatchMessageW(ctypes.byref(msg))
+            finally:
+                user32.UnregisterHotKey(None, HOTKEY_ID)
+                try:
+                    mouse_game_adapter.release_hold_move()
+                except Exception:
+                    pass
+                with self._lock:
+                    self._status = "stopped"
+                    self._message = "Global [ hotkey stopped."
+            return
+
+        # Fallback for systems/layouts where VK_OEM_4 cannot be registered.
         @LowLevelKeyboardProc
         def callback(n_code, w_param, l_param):
             if n_code >= 0:
@@ -158,8 +193,7 @@ class HuntingHotkey:
             with self._lock:
                 self._status = "error"
                 self._message = (
-                    "Could not install the global [ hotkey. "
-                    "Run RO Control as administrator."
+                    "Could not register global [. Run RO Control as administrator."
                 )
                 self._last_error = self._message
             return
@@ -167,7 +201,7 @@ class HuntingHotkey:
         self._hook = hook
         with self._lock:
             self._status = "ready"
-            self._message = "[ toggles hunting on/off globally."
+            self._message = "[ toggles hunting globally (keyboard-hook fallback)."
 
         msg = wintypes.MSG()
         try:
