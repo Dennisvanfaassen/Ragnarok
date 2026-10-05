@@ -9,6 +9,7 @@ from typing import Any
 from core.game_actions import game_actions
 from core.exploration import exploration_planner
 from core.hunt_routes import hunt_route_store
+from core.openkore_data import item_name
 from core.pathing import astar, build_pathing_state, clear_walk_line, nav_repository
 from core.state import app_state
 from core.targeting import build_targeting_state
