@@ -728,6 +728,50 @@ class AuthenticatedClientMonitor:
                         break
                     continue
 
+                # Apply only layouts that passed the strict validation above.
+                # This keeps the live inventory/storage snapshot in sync after
+                # native town-cycle actions instead of leaving the original
+                # full-list snapshot stale.
+                if opcode == 0x00AF:
+                    index = int(decoded["index"])
+                    removed = int(decoded["amount"])
+                    current = self._inventory.get(index)
+                    if current is not None:
+                        remaining = max(0, int(current.get("amount") or 0) - removed)
+                        if remaining <= 0:
+                            self._inventory.pop(index, None)
+                        else:
+                            current = dict(current)
+                            current["amount"] = remaining
+                            self._inventory[index] = current
+                        self._item_list_updated_at["inventory"] = now
+
+                elif opcode == 0x0A0A:
+                    index = int(decoded["index"])
+                    amount = int(decoded["amount"])
+                    existing = self._storage.get(index)
+                    if existing is not None and int(existing.get("name_id") or -1) == int(decoded.get("name_id") or -2):
+                        row = dict(existing)
+                        row["amount"] = int(existing.get("amount") or 0) + amount
+                        self._storage[index] = row
+                    else:
+                        self._storage[index] = dict(decoded)
+                    self._item_list_updated_at["storage"] = now
+
+                elif opcode == 0x00F6:
+                    index = int(decoded["index"])
+                    removed = int(decoded["amount"])
+                    current = self._storage.get(index)
+                    if current is not None:
+                        remaining = max(0, int(current.get("amount") or 0) - removed)
+                        if remaining <= 0:
+                            self._storage.pop(index, None)
+                        else:
+                            current = dict(current)
+                            current["amount"] = remaining
+                            self._storage[index] = current
+                        self._item_list_updated_at["storage"] = now
+
                 self._item_packet_trace.append({
                     "timestamp": now,
                     "opcode": f"0x{opcode:04X}",
