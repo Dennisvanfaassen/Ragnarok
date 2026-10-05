@@ -24,12 +24,15 @@ class ExplorationPlanner:
         self.heading_weight = 2.8
         self.coverage_weight = 4.0
         self.distance_weight = 0.7
-        self.turn_penalty = 1.2
+        self.turn_penalty = 2.6
+        self.reverse_penalty = 8.0
+        self.path_coverage_weight = 1.8
 
         self._map: str | None = None
         self._visits: dict[tuple[int, int], float] = defaultdict(float)
         self._heading: tuple[float, float] | None = None
-        self._recent_goals: deque[tuple[int, int]] = deque(maxlen=10)
+        self._recent_goals: deque[tuple[int, int]] = deque(maxlen=14)
+        self._recent_positions: deque[tuple[int, int]] = deque(maxlen=120)
         self._last_pos: tuple[int, int] | None = None
         self._last_update = time.time()
 
@@ -40,6 +43,7 @@ class ExplorationPlanner:
         self._visits.clear()
         self._heading = None
         self._recent_goals.clear()
+        self._recent_positions.clear()
         self._last_pos = None
         self._last_update = time.time()
 
@@ -72,6 +76,8 @@ class ExplorationPlanner:
                     if hlen > 0:
                         self._heading = (hx / hlen, hy / hlen)
 
+        if not self._recent_positions or self._recent_positions[-1] != position:
+            self._recent_positions.append(position)
         self._last_pos = position
 
     def note_goal(self, goal: tuple[int, int]):
@@ -120,15 +126,40 @@ class ExplorationPlanner:
             turn_penalty = max(0.0, 1.0 - dot)
 
         coverage = self._coverage(goal)
+        sampled_path = path[::max(1, len(path) // 12)]
+        path_coverage = (
+            sum(self._coverage(point) for point in sampled_path)
+            / max(1, len(sampled_path))
+        )
         route_efficiency = distance / max(1.0, len(path) - 1)
+
+        reverse = 0.0
+        if self._heading is not None:
+            dot = max(-1.0, min(1.0, self._heading[0] * direction[0] + self._heading[1] * direction[1]))
+            if dot < -0.20:
+                reverse = (-dot - 0.20) / 0.80
+
+        recent_path_penalty = 0.0
+        if self._recent_positions:
+            for point in sampled_path:
+                nearest = min(
+                    math.hypot(point[0] - p[0], point[1] - p[1])
+                    for p in self._recent_positions
+                )
+                if nearest < 8.0:
+                    recent_path_penalty += (8.0 - nearest) / 8.0
+            recent_path_penalty /= max(1, len(sampled_path))
 
         return (
             heading_score * self.heading_weight
             - turn_penalty * self.turn_penalty
+            - reverse * self.reverse_penalty
             - coverage * self.coverage_weight
+            - path_coverage * self.path_coverage_weight
+            - recent_path_penalty * 5.0
             - self._goal_recent_penalty(goal)
             + route_efficiency * self.distance_weight
-            + random.uniform(-0.12, 0.12)
+            + random.uniform(-0.08, 0.08)
         )
 
     def choose_route(
@@ -238,6 +269,7 @@ class ExplorationPlanner:
                 if self._heading else None
             ),
             "visited_cells": len(self._visits),
+            "recent_position_count": len(self._recent_positions),
             "recent_goals": [
                 {"x": x, "y": y} for x, y in list(self._recent_goals)
             ],
