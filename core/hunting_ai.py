@@ -13,6 +13,7 @@ from core.pathing import astar, build_pathing_state, clear_walk_line, nav_reposi
 from core.state import app_state
 from core.targeting import build_targeting_state
 from diagnostics.authenticated_client import authenticated_client_monitor
+from diagnostics.hunt_recorder import hunting_diagnostic_recorder
 
 
 STATES = {
@@ -154,6 +155,23 @@ class HuntingAI:
         with self._lock:
             self.actions.append(entry)
             self.actions = self.actions[-80:]
+
+        screenshot_actions = {
+            "instant_attack",
+            "attack_attempt",
+            "attack_precision_retry",
+            "client_attack_registered",
+            "route_failed",
+            "target_finished",
+            "move_fallback",
+        }
+        hunting_diagnostic_recorder.event(
+            "hunting_ai",
+            action,
+            details,
+            screenshot=action in screenshot_actions,
+            screenshot_cooldown=0.20,
+        )
 
     @staticmethod
     def _world(snapshot: dict[str, Any]) -> dict[str, Any]:
