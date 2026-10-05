@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from core.engine import engine
 from core.models import BotProfile, ServerProfile
 from core.state import app_state
+from core.targeting import build_targeting_state
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -172,3 +173,28 @@ async def clear_authenticated_client():
 @app.get("/api/diagnostics/authenticated-client")
 async def authenticated_client_state():
     return authenticated_client_monitor.snapshot()
+
+
+@app.get("/api/targeting/live")
+async def live_targeting():
+    snapshot = authenticated_client_monitor.snapshot()
+    profile = app_state.get_profile()
+    targeting = build_targeting_state(snapshot, profile.hunt.monsters)
+
+    selected = targeting.get("selected")
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+
+    app_state.patch_runtime(
+        map=world.get("map"),
+        x=world.get("x"),
+        y=world.get("y"),
+        target=(
+            f"{selected.get('name')} @ {selected.get('x')},{selected.get('y')}"
+            if selected else None
+        ),
+        current_action=(
+            "Target acquired" if selected else "Searching for target"
+        ),
+    )
+
+    return targeting
