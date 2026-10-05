@@ -292,12 +292,15 @@ class FullAutomationController:
     def _open_kafra_storage(self, actor_id: int) -> bool:
         before = authenticated_client_monitor.item_state_snapshot().get("updated_at", {}).get("storage")
         steps = [
+            # SoulBound Kafra flow must finish the dialogue with one final
+            # "Next"/Enter after choosing Storage. Sending the explicit NPC
+            # close packet leaves the dialogue active on this client, and while
+            # that dialogue is still open the storage window will not accept
+            # inventory transfers.
             ("talk", lambda: native_action_bridge.talk_npc(actor_id, 1)),
-            ("continue", lambda: native_action_bridge.continue_npc(actor_id)),
+            ("continue_to_menu", lambda: native_action_bridge.continue_npc(actor_id)),
             ("storage_option", lambda: native_action_bridge.choose_npc_option(actor_id, 2)),
-            # The observed SoulBound Kafra flow closes the dialogue immediately
-            # after selecting Storage; the storage window remains active.
-            ("close_dialog", lambda: native_action_bridge.close_npc(actor_id)),
+            ("continue_to_close_dialog", lambda: native_action_bridge.continue_npc(actor_id)),
         ]
         for name, fn in steps:
             result = fn()
