@@ -304,6 +304,26 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full">
+      <h2>Smart Navigation</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Hunting now preserves direction and explores low-coverage parts of the map. Town travel uses a portal graph and smooth held-mouse routing.
+      </div>
+      <div class="row">
+        <label>Exploration mode
+          <input value="Persistent heading + map coverage sweep" disabled>
+        </label>
+        <label>Town travel
+          <input id="townTravelStatus" value="idle" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action secondary" onclick="previewTownRoute()">Preview town route</button>
+        <button class="action" onclick="startTownTravel()">Go to town</button>
+        <button class="action danger" onclick="stopTownTravel()">Stop town travel</button>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>Wireshark capture analyzer</h2>
       <div class="muted" style="margin-bottom:12px">
         Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
@@ -586,6 +606,34 @@ async function refreshActiveHuntQuiet(){
     if(data&&data.calibration) renderCalibration(data.calibration);
   }catch(e){}
 }
+async function previewTownRoute(){
+  const r=await fetch('/api/world-route/town');
+  const data=await r.json();
+  out(data);
+}
+async function startTownTravel(){
+  const r=await fetch('/api/town-travel/start',{method:'POST'});
+  const data=await r.json();
+  renderTownTravel(data);
+  out(data);
+}
+async function stopTownTravel(){
+  const r=await fetch('/api/town-travel/stop',{method:'POST'});
+  const data=await r.json();
+  renderTownTravel(data);
+  out(data);
+}
+function renderTownTravel(data){
+  const el=document.getElementById('townTravelStatus');
+  if(el) el.value=(data&&data.state)||'unknown';
+}
+async function refreshTownTravelQuiet(){
+  try{
+    const r=await fetch('/api/town-travel');
+    const data=await r.json();
+    renderTownTravel(data);
+  }catch(e){}
+}
 async function analyzePcap(){
   const input=document.getElementById('pcapFile');
   if(!input.files.length){out('Choose a .pcap or .pcapng file first.');return}
@@ -597,7 +645,7 @@ async function analyzePcap(){
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
-refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);
+refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);
 </script>
 </body>
 </html>
