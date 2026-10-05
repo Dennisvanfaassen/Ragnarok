@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any
 
-from core.mouse_adapter import mouse_game_adapter
+from core.game_actions import game_actions
 from core.pathing import astar, nav_repository
 from core.state import app_state
 from core.world_route import world_route_planner
@@ -111,7 +111,7 @@ class TownTravelController:
             world = self._world(snapshot)
             current_map = str(world.get("map") or "")
             if current_map != source_map:
-                mouse_game_adapter.release_hold_move()
+                game_actions.release_hold_move()
                 self._log(
                     "portal_crossed",
                     source_map=source_map,
@@ -141,7 +141,7 @@ class TownTravelController:
             dx = destination[0] - player[0]
             dy = destination[1] - player[1]
 
-            result = mouse_game_adapter.update_hold_direction(
+            result = game_actions.update_hold_direction(
                 dx,
                 dy,
                 radius_px=self.cursor_radius,
@@ -154,7 +154,7 @@ class TownTravelController:
                 for short in (7, 5, 3, 1):
                     idx = min(len(path) - 1, index + short)
                     point = path[idx]
-                    result = mouse_game_adapter.update_hold_direction(
+                    result = game_actions.update_hold_direction(
                         point[0] - player[0],
                         point[1] - player[1],
                         radius_px=self.cursor_radius,
@@ -164,7 +164,7 @@ class TownTravelController:
                         worked = True
                         break
                 if not worked:
-                    mouse_game_adapter.release_hold_move()
+                    game_actions.release_hold_move()
                     self._set("ERROR", "Could not steer toward portal.")
                     return False
 
@@ -178,7 +178,7 @@ class TownTravelController:
 
             self._stop.wait(0.05)
 
-        mouse_game_adapter.release_hold_move()
+        game_actions.release_hold_move()
         return False
 
     def _loop(self):
@@ -226,7 +226,7 @@ class TownTravelController:
 
                 self._stop.wait(0.08)
         finally:
-            mouse_game_adapter.release_hold_move()
+            game_actions.release_hold_move()
             self.running = False
             if self.state not in {"ARRIVED", "ERROR"}:
                 self._set("IDLE", "Town travel stopped.")
@@ -237,7 +237,7 @@ class TownTravelController:
                 return self.snapshot()
             if not authenticated_client_monitor.snapshot().get("classic_pid"):
                 raise RuntimeError("Classic.exe is not detected.")
-            if not mouse_game_adapter.calibration_valid():
+            if not game_actions.calibration_valid():
                 raise RuntimeError("Valid screen calibration is required.")
 
             self._stop.clear()
@@ -252,7 +252,7 @@ class TownTravelController:
 
     def stop(self) -> dict[str, Any]:
         self._stop.set()
-        mouse_game_adapter.release_hold_move()
+        game_actions.release_hold_move()
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=1.5)
