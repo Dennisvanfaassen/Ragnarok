@@ -6,7 +6,7 @@ import time
 from ctypes import wintypes
 from typing import Any
 
-from core.active_control import active_hunt_controller
+from core.full_automation import full_automation_controller
 from core.mouse_adapter import mouse_game_adapter
 
 
@@ -16,8 +16,8 @@ WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 
-# Windows virtual-key code for [ { on a standard keyboard.
-VK_OEM_4 = 0xDB
+# Windows virtual-key code for ] } on a standard keyboard.
+VK_OEM_6 = 0xDD
 WM_HOTKEY = 0x0312
 MOD_NOREPEAT = 0x4000
 HOTKEY_ID = 0x524F
@@ -46,10 +46,10 @@ LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
 
 
 class HuntingHotkey:
-    """Global [ toggle for Hunting AI.
+    """Global ] toggle for Full Hunt Automation.
 
     The key is swallowed while RO Control is running. On stop, any held mouse
-    button is released synchronously before the slower worker shutdown begins.
+    button is released synchronously before the full automation shutdown begins.
     """
 
     def __init__(self):
@@ -59,7 +59,7 @@ class HuntingHotkey:
         self._pressed = False
         self._lock = threading.RLock()
         self._status = "stopped"
-        self._message = "Global [ hotkey is not running."
+        self._message = "Global ] hotkey is not running."
         self._last_toggle_at: float | None = None
         self._last_action: str | None = None
         self._last_error: str | None = None
@@ -71,7 +71,7 @@ class HuntingHotkey:
             self._thread = threading.Thread(
                 target=self._message_loop,
                 daemon=True,
-                name="hunting-bracket-hotkey",
+                name="full-automation-bracket-hotkey",
             )
             self._thread.start()
 
@@ -79,7 +79,7 @@ class HuntingHotkey:
         # Emergency responsiveness: release held movement immediately on the
         # keyboard-hook thread if hunting is currently active.
         try:
-            if active_hunt_controller.snapshot().get("running"):
+            if full_automation_controller.snapshot().get("running"):
                 mouse_game_adapter.release_hold_move()
         except Exception:
             pass
@@ -87,20 +87,27 @@ class HuntingHotkey:
         threading.Thread(
             target=self._toggle,
             daemon=True,
-            name="hunting-bracket-toggle",
+            name="full-automation-bracket-toggle",
         ).start()
 
     def _toggle(self):
+        # Serialize toggles so a second ] press cannot race a still-starting or
+        # still-stopping automation worker.
+        with self._lock:
+            if getattr(self, "_toggle_busy", False):
+                return
+            self._toggle_busy = True
+
         try:
-            state = active_hunt_controller.snapshot()
+            state = full_automation_controller.snapshot()
             if state.get("running"):
-                active_hunt_controller.stop()
+                full_automation_controller.stop()
                 action = "stopped"
-                message = "Hunting stopped with [."
+                message = "Full automation stopped with ]."
             else:
-                active_hunt_controller.start({})
+                full_automation_controller.start()
                 action = "started"
-                message = "Hunting started with [."
+                message = "Full automation started with ]."
 
             with self._lock:
                 self._last_toggle_at = time.time()
@@ -117,7 +124,10 @@ class HuntingHotkey:
                 self._last_toggle_at = time.time()
                 self._last_action = "error"
                 self._last_error = str(exc)
-                self._message = f"[ toggle failed: {exc}"
+                self._message = f"] toggle failed: {exc}"
+        finally:
+            with self._lock:
+                self._toggle_busy = False
 
     def _message_loop(self):
         # Prefer RegisterHotKey: Windows delivers WM_HOTKEY globally even when
@@ -126,11 +136,11 @@ class HuntingHotkey:
             None,
             HOTKEY_ID,
             MOD_NOREPEAT,
-            VK_OEM_4,
+            VK_OEM_6,
         ):
             with self._lock:
                 self._status = "ready"
-                self._message = "[ toggles hunting globally (native hotkey)."
+                self._message = "] toggles Full Hunt Automation globally."
 
             msg = wintypes.MSG()
             try:
@@ -148,7 +158,7 @@ class HuntingHotkey:
                     pass
                 with self._lock:
                     self._status = "stopped"
-                    self._message = "Global [ hotkey stopped."
+                    self._message = "Global ] hotkey stopped."
             return
 
         # Fallback for systems/layouts where VK_OEM_4 cannot be registered.
@@ -160,7 +170,7 @@ class HuntingHotkey:
                     ctypes.POINTER(KBDLLHOOKSTRUCT),
                 ).contents
 
-                if int(info.vkCode) == VK_OEM_4:
+                if int(info.vkCode) == VK_OEM_6:
                     if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
                         with self._lock:
                             if not self._pressed:
@@ -193,7 +203,7 @@ class HuntingHotkey:
             with self._lock:
                 self._status = "error"
                 self._message = (
-                    "Could not register global [. Run RO Control as administrator."
+                    "Could not register global ]. Run RO Control as administrator."
                 )
                 self._last_error = self._message
             return
@@ -201,7 +211,7 @@ class HuntingHotkey:
         self._hook = hook
         with self._lock:
             self._status = "ready"
-            self._message = "[ toggles hunting globally (keyboard-hook fallback)."
+            self._message = "] toggles Full Hunt Automation globally (keyboard-hook fallback)."
 
         msg = wintypes.MSG()
         try:
@@ -218,20 +228,20 @@ class HuntingHotkey:
                 pass
             with self._lock:
                 self._status = "stopped"
-                self._message = "Global [ hotkey stopped."
+                self._message = "Global ] hotkey stopped."
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "status": self._status,
                 "message": self._message,
-                "key": "[",
-                "virtual_key": "VK_OEM_4",
+                "key": "]",
+                "virtual_key": "VK_OEM_6",
                 "last_toggle_at": self._last_toggle_at,
                 "last_action": self._last_action,
                 "last_error": self._last_error,
-                "hunting_running": bool(
-                    active_hunt_controller.snapshot().get("running")
+                "full_automation_running": bool(
+                    full_automation_controller.snapshot().get("running")
                 ),
             }
 
