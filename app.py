@@ -14,6 +14,7 @@ from core.pathing import build_pathing_state, nav_repository
 from core.active_control import active_hunt_controller
 from core.hotkey import hunting_hotkey
 from core.world_route import world_route_planner
+from core.town_travel import town_travel_controller
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -286,3 +287,23 @@ async def world_route_to_town():
 @app.get("/api/world-route")
 async def world_route_state():
     return world_route_planner.snapshot()
+
+
+@app.post("/api/town-travel/start")
+async def start_town_travel():
+    try:
+        if active_hunt_controller.snapshot().get("running"):
+            active_hunt_controller.stop()
+        return town_travel_controller.start()
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/town-travel/stop")
+async def stop_town_travel():
+    return town_travel_controller.stop()
+
+
+@app.get("/api/town-travel")
+async def town_travel_state():
+    return town_travel_controller.snapshot()
