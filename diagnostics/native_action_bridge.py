@@ -12,42 +12,139 @@ _AGENT_SOURCE = r"""
 
 let mapSocket = null;
 let lastObserved = null;
+const counters = {
+    send: 0,
+    sendto: 0,
+    WSASend: 0,
+    WSASendTo: 0,
+    actor_actions: 0
+};
+const hooked = [];
 
-const sendPtr = Module.getExportByName('ws2_32.dll', 'send');
-const sendFn = new NativeFunction(sendPtr, 'int', ['pointer', 'pointer', 'int', 'int']);
+function exportPtr(name) {
+    try {
+        const p = Module.getExportByName('ws2_32.dll', name);
+        hooked.push(name);
+        return p;
+    } catch (e) {
+        send({event: 'hook_missing', api: name, error: String(e)});
+        return null;
+    }
+}
 
 function readByte(ptr, offset) {
     return ptr.add(offset).readU8();
 }
 
-Interceptor.attach(sendPtr, {
-    onEnter(args) {
-        const length = args[2].toInt32();
-        if (length !== 7) return;
+function inspectBuffer(socket, buf, length, api) {
+    if (length !== 7 || buf.isNull()) return;
 
-        const buf = args[1];
+    try {
+        if (readByte(buf, 0) !== 0x37 || readByte(buf, 1) !== 0x04) return;
+
+        const type = readByte(buf, 6);
+        const target =
+            readByte(buf, 2) |
+            (readByte(buf, 3) << 8) |
+            (readByte(buf, 4) << 16) |
+            (readByte(buf, 5) << 24);
+
+        mapSocket = socket;
+        counters.actor_actions += 1;
+        lastObserved = {
+            target_id: target >>> 0,
+            type: type,
+            socket: mapSocket.toString(),
+            api: api,
+            timestamp_ms: Date.now()
+        };
+        send({event: 'actor_action_observed', data: lastObserved});
+    } catch (e) {
+        send({event: 'agent_error', api: api, error: String(e)});
+    }
+}
+
+const sendPtr = exportPtr('send');
+const sendtoPtr = exportPtr('sendto');
+const wsaSendPtr = exportPtr('WSASend');
+const wsaSendToPtr = exportPtr('WSASendTo');
+
+let sendFn = null;
+if (sendPtr !== null) {
+    sendFn = new NativeFunction(
+        sendPtr,
+        'int',
+        ['pointer', 'pointer', 'int', 'int']
+    );
+
+    Interceptor.attach(sendPtr, {
+        onEnter(args) {
+            counters.send += 1;
+            inspectBuffer(args[0], args[1], args[2].toInt32(), 'send');
+        }
+    });
+}
+
+if (sendtoPtr !== null) {
+    Interceptor.attach(sendtoPtr, {
+        onEnter(args) {
+            counters.sendto += 1;
+            inspectBuffer(args[0], args[1], args[2].toInt32(), 'sendto');
+        }
+    });
+}
+
+function inspectWsabufs(socket, wsabufs, count, api) {
+    if (wsabufs.isNull() || count <= 0 || count > 64) return;
+
+    const pointerSize = Process.pointerSize;
+    const stride = pointerSize === 8 ? 16 : 8;
+    const bufOffset = pointerSize === 8 ? 8 : 4;
+
+    for (let i = 0; i < count; i++) {
+        const entry = wsabufs.add(i * stride);
         try {
-            if (readByte(buf, 0) !== 0x37 || readByte(buf, 1) !== 0x04) return;
-
-            const type = readByte(buf, 6);
-            const target =
-                readByte(buf, 2) |
-                (readByte(buf, 3) << 8) |
-                (readByte(buf, 4) << 16) |
-                (readByte(buf, 5) << 24);
-
-            mapSocket = args[0];
-            lastObserved = {
-                target_id: target >>> 0,
-                type: type,
-                socket: mapSocket.toString(),
-                timestamp_ms: Date.now()
-            };
-            send({event: 'actor_action_observed', data: lastObserved});
+            const len = entry.readU32();
+            const buf = entry.add(bufOffset).readPointer();
+            inspectBuffer(socket, buf, len, api);
         } catch (e) {
-            send({event: 'agent_error', error: String(e)});
+            send({event: 'wsabuf_error', api: api, error: String(e)});
         }
     }
+}
+
+if (wsaSendPtr !== null) {
+    Interceptor.attach(wsaSendPtr, {
+        onEnter(args) {
+            counters.WSASend += 1;
+            inspectWsabufs(
+                args[0],
+                args[1],
+                args[2].toInt32(),
+                'WSASend'
+            );
+        }
+    });
+}
+
+if (wsaSendToPtr !== null) {
+    Interceptor.attach(wsaSendToPtr, {
+        onEnter(args) {
+            counters.WSASendTo += 1;
+            inspectWsabufs(
+                args[0],
+                args[1],
+                args[2].toInt32(),
+                'WSASendTo'
+            );
+        }
+    });
+}
+
+send({
+    event: 'hooks_ready',
+    hooked: hooked,
+    pointer_size: Process.pointerSize
 });
 
 rpc.exports = {
@@ -55,7 +152,10 @@ rpc.exports = {
         return {
             socket_learned: mapSocket !== null,
             socket: mapSocket ? mapSocket.toString() : null,
-            last_observed: lastObserved
+            last_observed: lastObserved,
+            counters: counters,
+            hooked_apis: hooked,
+            pointer_size: Process.pointerSize
         };
     },
 
@@ -64,6 +164,12 @@ rpc.exports = {
             return {
                 ok: false,
                 reason: 'map_socket_not_learned'
+            };
+        }
+        if (sendFn === null) {
+            return {
+                ok: false,
+                reason: 'send_export_unavailable'
             };
         }
 
