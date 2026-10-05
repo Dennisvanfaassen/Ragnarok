@@ -22,14 +22,65 @@ const counters = {
 const hooked = [];
 
 function exportPtr(name) {
+    const attempts = [];
+
+    // Frida 17+ prefers the global resolver; older builds exposed the static
+    // Module.getExportByName(module, name) helper.
     try {
-        const p = Module.getExportByName('ws2_32.dll', name);
-        hooked.push(name);
-        return p;
+        if (typeof Module.getGlobalExportByName === 'function') {
+            const p = Module.getGlobalExportByName(name);
+            if (p) {
+                hooked.push(name);
+                return p;
+            }
+        }
     } catch (e) {
-        send({event: 'hook_missing', api: name, error: String(e)});
-        return null;
+        attempts.push('global:' + String(e));
     }
+
+    try {
+        if (typeof Module.getExportByName === 'function') {
+            const p = Module.getExportByName('ws2_32.dll', name);
+            if (p) {
+                hooked.push(name);
+                return p;
+            }
+        }
+    } catch (e) {
+        attempts.push('static-ws2_32:' + String(e));
+    }
+
+    // Module-instance API works on current Frida and also lets us support
+    // older clients that still import winsock through wsock32.dll.
+    const modules = Process.enumerateModules();
+    for (const module of modules) {
+        const lower = module.name.toLowerCase();
+        if (lower !== 'ws2_32.dll' && lower !== 'wsock32.dll') continue;
+        try {
+            if (typeof module.getExportByName === 'function') {
+                const p = module.getExportByName(name);
+                if (p) {
+                    hooked.push(name);
+                    return p;
+                }
+            }
+        } catch (e) {
+            attempts.push(module.name + ':' + String(e));
+        }
+    }
+
+    send({
+        event: 'hook_missing',
+        api: name,
+        attempts: attempts,
+        loaded_socket_modules: modules
+            .map(m => m.name)
+            .filter(n => {
+                const x = n.toLowerCase();
+                return x.indexOf('ws2') >= 0 || x.indexOf('wsock') >= 0;
+            })
+    });
+    return null;
 }
 
 function readByte(ptr, offset) {
@@ -258,6 +309,11 @@ class NativeActionBridge:
             ) from exc
 
         try:
+            # Clear stale events before loading so hook diagnostics emitted
+            # during script initialization remain visible to the user.
+            with self._lock:
+                self._events.clear()
+
             session = frida.attach(int(pid))
             script = session.create_script(_AGENT_SOURCE)
             script.on("message", self._on_message)
@@ -277,7 +333,6 @@ class NativeActionBridge:
                 "Attached to Classic.exe. Manually attack one monster once so "
                 "the bridge can learn the authenticated map socket."
             )
-            self._events.clear()
 
         return self.snapshot()
 
