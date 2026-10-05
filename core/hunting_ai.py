@@ -72,6 +72,7 @@ class HuntingAI:
         self.wander_goal: tuple[int, int] | None = None
         self.wander_progress_index = 0
         self._attack_reposition_required = False
+        self._attack_reposition_origin: tuple[int, int] | None = None
 
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
@@ -615,8 +616,15 @@ class HuntingAI:
 
         segment = self._choose_move_segment(path_preview)
         if segment is None:
-            self._set_state("ATTACK_READY", "At target approach position")
-            return
+            if self._attack_reposition_required and len(path_preview) > 1:
+                idx = min(2, len(path_preview) - 1)
+                segment = (
+                    int(path_preview[idx]["x"]),
+                    int(path_preview[idx]["y"]),
+                )
+            else:
+                self._set_state("ATTACK_READY", "At target approach position")
+                return
 
         self.route_target_pos = self.target_pos
         self._set_state(
@@ -667,7 +675,15 @@ class HuntingAI:
             return
 
         if end_pos != player:
-            self._attack_reposition_required = False
+            if self._attack_reposition_required and self._attack_reposition_origin:
+                if self._tile_distance(
+                    self._attack_reposition_origin,
+                    end_pos,
+                ) >= 2:
+                    self._attack_reposition_required = False
+                    self._attack_reposition_origin = None
+            elif not self._attack_reposition_required:
+                self._attack_reposition_origin = None
 
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
@@ -775,6 +791,7 @@ class HuntingAI:
             self.attack_clicked_at,
         ):
             self._combat_click_locked = True
+            mouse_game_adapter.note_attack_registered(self.attack_retry)
             self._log(
                 "client_attack_registered",
                 target_id=self.target_id,
@@ -827,6 +844,7 @@ class HuntingAI:
         self.attack_retry = 0
         self._combat_click_locked = False
         self._attack_reposition_required = True
+        self._attack_reposition_origin = self._position(snapshot)
         self._set_state(
             "ROUTING",
             f"Click missed {self.target_name}; repositioning before another try",
@@ -1266,6 +1284,7 @@ class HuntingAI:
                     "wander_cursor_radius": self.wander_cursor_radius,
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
                     "combat_click_mode": "0437-confirmed_single_click_until_actor_removed",
+                    "attack_precision": mouse_game_adapter.precision_snapshot(),
                     "wander_corridor_mode": "astar_clear_line_only",
                     "wander_progress_mode": "forward_only",
                     "exploration": exploration_planner.snapshot(),
