@@ -509,6 +509,37 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             </select>
           </label>
         </div>
+        <div class="row">
+          <label>Hunting actions
+            <select id="nativeOnlyActions">
+              <option value="true" selected>Native only — no physical mouse clicks</option>
+              <option value="false">Allow screen/mouse fallback</option>
+            </select>
+          </label>
+          <label>Threat-first combat
+            <select id="threatFirstCombat">
+              <option value="true" selected>Aggressors before loot/passive mobs</option>
+              <option value="false">Normal target order</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Priority pre-emption
+            <select id="priorityPreempt">
+              <option value="true" selected>Switch to higher-priority aggressor</option>
+              <option value="false">Finish current target first</option>
+            </select>
+          </label>
+          <label>Exploration strategy
+            <select id="frontierBias">
+              <option value="true" selected>Prefer forward unexplored areas</option>
+              <option value="false">Basic coverage exploration</option>
+            </select>
+          </label>
+        </div>
+        <div class="section-note" style="margin-bottom:12px">
+          Priority uses lower numbers first: 1 outranks 10, and 10 outranks 100. With pre-emption enabled, a priority-1 aggressor can interrupt a lower-priority target.
+        </div>
         <div class="actions">
           <button class="action secondary" onclick="switchView('map')">Edit hunting route on Map</button>
         </div>
@@ -547,7 +578,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <label>Hotkey<input id="healHotkey" value="1"></label>
           <label>HP below %<input id="healPercent" type="number" min="1" max="99" value="50"></label>
         </div>
-        <label>Healing item / note<input id="healItem" placeholder="Item assigned to hotkey 1"></label>
+        <label>Healing item<input id="healItem" placeholder="Meat (native mode uses item directly)"></label>
       </section>
 
       <section class="card full">
@@ -920,12 +951,18 @@ async function saveProfile(){
       map:document.getElementById('huntMap').value.trim(),
       monsters:selected,
       loot_all:true,
+      loot_radius:+document.getElementById('huntLootRadius').value||12,
       monster_rules:rules,
       teleport_item:document.getElementById('teleportItem').value.trim()||'Fly Wing',
       emergency_hp_percent:+document.getElementById('emergencyHp').value,
       emergency_action:document.getElementById('emergencyAction').value,
       navigation_mode:document.getElementById('navigationMode').value,
-      avoid_zones:huntAvoidZones
+      avoid_zones:huntAvoidZones,
+      native_only_actions:document.getElementById('nativeOnlyActions').value==='true',
+      threat_first_combat:document.getElementById('threatFirstCombat').value==='true',
+      preempt_for_higher_priority_aggressor:document.getElementById('priorityPreempt').value==='true',
+      loot_after_aggressors:true,
+      exploration_frontier_bias:document.getElementById('frontierBias').value==='true'
     },
     healing:{
       enabled:document.getElementById('healEnabled').value==='true',
@@ -1018,6 +1055,11 @@ async function loadProfile(){
     document.getElementById('emergencyHp').value=(p.hunt&&p.hunt.emergency_hp_percent)||20;
     document.getElementById('emergencyAction').value=(p.hunt&&p.hunt.emergency_action)||'teleport';
     document.getElementById('navigationMode').value=(p.hunt&&p.hunt.navigation_mode)||'saved_or_explore';
+    document.getElementById('huntLootRadius').value=(p.hunt&&p.hunt.loot_radius)||12;
+    document.getElementById('nativeOnlyActions').value=(p.hunt&&p.hunt.native_only_actions===false)?'false':'true';
+    document.getElementById('threatFirstCombat').value=(p.hunt&&p.hunt.threat_first_combat===false)?'false':'true';
+    document.getElementById('priorityPreempt').value=(p.hunt&&p.hunt.preempt_for_higher_priority_aggressor===false)?'false':'true';
+    document.getElementById('frontierBias').value=(p.hunt&&p.hunt.exploration_frontier_bias===false)?'false':'true';
     if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
 }
