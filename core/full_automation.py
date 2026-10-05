@@ -312,31 +312,78 @@ class FullAutomationController:
     def _deposit_all_unequipped(self) -> bool:
         state = authenticated_client_monitor.item_state_snapshot()
         items = list(state.get("inventory") or [])
-        keep_ids = {AWAKENING_POTION_ID, BUTTERFLY_WING_ID}
+
+        # Keep everyday supplies in inventory. Worn equipment is also left
+        # untouched. Unequipped equipment and all other loot are stored.
+        keep_ids = {
+            AWAKENING_POTION_ID,  # 656
+            517,                  # Meat
+            601,                  # Fly Wing
+            BUTTERFLY_WING_ID,    # 602
+        }
+
+        healing_name = str(app_state.get_profile().healing.item or "").strip().lower()
+        deposited = 0
+        skipped_equipped = 0
+        skipped_supplies = 0
+
         for item in items:
-            if bool(item.get("equipped")):
+            equipped = int(item.get("equipped") or 0)
+            if equipped != 0:
+                skipped_equipped += 1
+                self._log(
+                    "storage_keep_equipped",
+                    index=item.get("index"),
+                    name=item.get("name"),
+                    equipped=equipped,
+                )
                 continue
-            if int(item.get("name_id") or -1) in keep_ids:
+
+            name_id = int(item.get("name_id") or -1)
+            item_name = str(item.get("name") or "")
+            if name_id in keep_ids or (
+                healing_name and item_name.strip().lower() == healing_name
+            ):
+                skipped_supplies += 1
+                self._log(
+                    "storage_keep_supply",
+                    index=item.get("index"),
+                    name=item_name,
+                    name_id=name_id,
+                    amount=item.get("amount"),
+                )
                 continue
+
             amount = int(item.get("amount") or 0)
             index = int(item.get("index") or -1)
             if index < 0 or amount <= 0:
                 continue
+
             result = native_action_bridge.storage_add(index, amount)
             self._log(
                 "storage_deposit",
                 index=index,
-                name=item.get("name"),
+                name=item_name,
+                name_id=name_id,
                 amount=amount,
+                stackable=item.get("stackable"),
                 result=result,
             )
             if not result.get("ok"):
                 self.last_error = (
-                    f"Storage deposit failed for {item.get('name') or index}: "
+                    f"Storage deposit failed for {item_name or index}: "
                     f"{result.get('reason')}"
                 )
                 return False
-            self._stop.wait(0.08)
+            deposited += 1
+            self._stop.wait(0.10)
+
+        self._log(
+            "storage_deposit_complete",
+            deposited=deposited,
+            kept_equipped=skipped_equipped,
+            kept_supplies=skipped_supplies,
+        )
         return True
 
     def _restock(self, actor_id: int) -> bool:
@@ -425,11 +472,15 @@ class FullAutomationController:
         if not self._deposit_all_unequipped():
             return False
 
-        try:
-            native_action_bridge.close_npc(int(kafra["id"]))
-        except Exception:
-            pass
-        self._stop.wait(0.20)
+        self._set("CLOSING_STORAGE", "Closing Kafra storage.")
+        close_result = native_action_bridge.storage_close()
+        self._log("storage_close", result=close_result)
+        if not close_result.get("ok"):
+            self.last_error = (
+                f"Could not close Kafra storage: {close_result.get('reason')}"
+            )
+            return False
+        self._stop.wait(0.35)
 
         self._set("FINDING_TOOL_DEALER", "Finding nearest Tool Dealer.")
         found = self._go_to_service("tool_dealer")
