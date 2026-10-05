@@ -65,15 +65,19 @@ class HuntingAI:
         self.loot_retry: dict[int, int] = {}
         self.wander_min_distance = 16
         self.wander_max_distance = 32
-        self.wander_lookahead = 10
-        self.wander_cursor_radius = 175
-        self.wander_turn_pixel_threshold = 22
+        self.wander_lookahead = 7
+        self.wander_cursor_radius = 165
+        self.wander_turn_pixel_threshold = 20
         self.wander_path: list[tuple[int, int]] = []
         self.wander_goal: tuple[int, int] | None = None
 
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
+        self._combat_click_locked = False
+        self._combat_seen = False
         self._attack_origin = None
+        self._combat_click_locked = False
+        self._combat_seen = False
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -190,6 +194,8 @@ class HuntingAI:
         self.route_target_pos = None
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
+        self._combat_click_locked = False
+        self._combat_seen = False
 
     def _lock_actor(self, actor: dict[str, Any], reason: str) -> bool:
         x, y = actor.get("x"), actor.get("y")
@@ -462,9 +468,11 @@ class HuntingAI:
         self.attack_retry = 0
         self.attack_clicked_at = time.time()
         self._attack_origin = player
+        self._combat_click_locked = True
+        self._combat_seen = False
         self._set_state(
-            "ATTACKING",
-            f"Instant attack on {self.target_name}; waiting for combat confirmation",
+            "WAITING_FOR_DEATH",
+            f"Attack sent once to {self.target_name}; target locked until death",
         )
         return True
 
@@ -710,75 +718,55 @@ class HuntingAI:
 
         self.attack_clicked_at = time.time()
         self._attack_origin = player
+        self._combat_click_locked = True
+        self._combat_seen = False
         self._set_state(
-            "ATTACKING",
-            f"Waiting for combat confirmation on {self.target_name}",
+            "WAITING_FOR_DEATH",
+            f"Attack sent once to {self.target_name}; target locked until death",
         )
 
     def _step_attacking(self, snapshot: dict[str, Any]):
+        """Legacy state compatibility: never issue another click for a live target."""
         actor = self._refresh_locked_target(snapshot)
         if actor is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
             return
 
-        if self._combat_confirmed(
-            snapshot,
-            int(self.target_id),
-            self.attack_clicked_at,
-        ):
-            self._log(
-                "combat_confirmed",
-                target_id=self.target_id,
-                target_name=self.target_name,
-            )
-            self._set_state(
-                "WAITING_FOR_DEATH",
-                f"Combat confirmed; waiting for {self.target_name} to die",
-            )
-            return
-
-        elapsed = time.time() - self.attack_clicked_at
-        current_pos = self._position(snapshot)
-        moved_after_click = (
-            self._attack_origin is not None
-            and current_pos is not None
-            and current_pos != self._attack_origin
-        )
-
-        if moved_after_click and elapsed < self.attack_walk_timeout:
-            self._stop.wait(0.06)
-            return
-
-        if elapsed < self.attack_confirm_timeout:
-            self._stop.wait(0.05)
-            return
-
-        self.attack_retry += 1
-        if self.attack_retry < self.max_attack_retries:
-            self._log(
-                "attack_retry",
-                target_id=self.target_id,
-                retry=self.attack_retry,
-            )
-            self._set_state(
-                "ATTACK_READY",
-                f"No combat confirmation; quick retry {self.attack_retry + 1}/{self.max_attack_retries}",
-            )
-            return
-
-        self.attack_retry = 0
+        self._combat_click_locked = True
         self._set_state(
-            "ROUTING",
-            "Attack click missed; recalculating from live position",
+            "WAITING_FOR_DEATH",
+            f"Target {self.target_name} remains locked; waiting for death",
         )
+
 
     def _step_waiting_for_death(self, snapshot: dict[str, Any]):
         if self._refresh_locked_target(snapshot) is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} defeated")
             return
 
-        # Intentionally no movement, target switching or attack clicks here.
-        self._stop.wait(0.12)
+        # A successful actor-action packet is useful telemetry, but it must not
+        # trigger another attack click. One click owns this target until removal.
+        if (
+            not self._combat_seen
+            and self.target_id is not None
+            and self._combat_confirmed(
+                snapshot,
+                int(self.target_id),
+                self.attack_clicked_at,
+            )
+        ):
+            self._combat_seen = True
+            self._log(
+                "combat_confirmed",
+                target_id=self.target_id,
+                target_name=self.target_name,
+            )
+            self.message = (
+                f"Combat confirmed on {self.target_name}; waiting for death"
+            )
+
+        # Strict combat lock: no movement, no retargeting, no attack retries.
+        self._stop.wait(0.06)
 
     def _step_target_dead(self):
         old_id = self.target_id
@@ -867,6 +855,36 @@ class HuntingAI:
 
         self.loot_retry[item_id] = self.loot_retry.get(item_id, 0) + 1
 
+    def _safe_wander_steering_point(
+        self,
+        grid,
+        player: tuple[int, int],
+        path_index: int,
+    ) -> tuple[int, int] | None:
+        """Choose a route point whose straight corridor is fully walkable.
+
+        A* may bend around cliffs. Directional held-mouse steering must never
+        point across that bend, otherwise RO continues into blocked terrain.
+        """
+        if not self.wander_path or path_index >= len(self.wander_path) - 1:
+            return None
+
+        end = min(
+            len(self.wander_path) - 1,
+            path_index + self.wander_lookahead,
+        )
+
+        # Furthest clear point first. Every candidate is an actual A* path cell
+        # and the supercover line must contain only walkable cells.
+        for idx in range(end, path_index, -1):
+            point = self.wander_path[idx]
+            if clear_walk_line(grid, player, point):
+                return point
+
+        # At a tight corner, one next path cell is safer than aiming across it.
+        point = self.wander_path[min(path_index + 1, len(self.wander_path) - 1)]
+        return point if grid.walkable(*point) else None
+
     def _step_wandering(self, snapshot: dict[str, Any]):
         if self._acquire_aggressor(snapshot):
             if self._attack_locked_immediately(
@@ -905,29 +923,44 @@ class HuntingAI:
             or self.wander_goal is None
             or self._tile_distance(player, self.wander_goal) <= 2
         ):
-            mouse_game_adapter.release_hold_move()
+            # Keep the button held while chaining exploration routes. The next
+            # directional update turns the existing hold instead of creating a
+            # visible stop/click/start cycle.
             self.wander_path = []
             self.wander_goal = None
             if not self._choose_wander_path(snapshot):
+                mouse_game_adapter.release_hold_move()
                 self._stop.wait(0.10)
                 return
 
         index = self._nearest_wander_index(player)
         if index >= len(self.wander_path) - 1:
-            mouse_game_adapter.release_hold_move()
             self.wander_path = []
             self.wander_goal = None
             return
 
-        # Look well ahead on the route and steer by DIRECTION, not by
-        # individual cell coordinates. This mirrors normal RO mouse walking:
-        # hold the button at a stable distance from the character and only
-        # rotate the cursor when the route bends.
-        lookahead = min(
-            len(self.wander_path) - 1,
-            index + self.wander_lookahead,
+        try:
+            grid, _ = nav_repository.load(str(map_name))
+        except Exception:
+            mouse_game_adapter.release_hold_move()
+            self.wander_path = []
+            self.wander_goal = None
+            self._stop.wait(0.08)
+            return
+
+        destination = self._safe_wander_steering_point(
+            grid,
+            player,
+            index,
         )
-        destination = self.wander_path[lookahead]
+        if destination is None:
+            # Current route no longer has a safe straight corridor. Replan from
+            # the exact live coordinate rather than steering into a cliff.
+            self.wander_path = []
+            self.wander_goal = None
+            self._stop.wait(0.04)
+            return
+
         dx = destination[0] - player[0]
         dy = destination[1] - player[1]
 
@@ -939,23 +972,7 @@ class HuntingAI:
         )
 
         if not result.get("ok"):
-            # Try a shorter directional lookahead, but never fall back to
-            # rapid per-cell clicking while wandering.
-            for short in (7, 5, 3):
-                idx = min(len(self.wander_path) - 1, index + short)
-                destination = self.wander_path[idx]
-                dx = destination[0] - player[0]
-                dy = destination[1] - player[1]
-                result = mouse_game_adapter.update_hold_direction(
-                    dx,
-                    dy,
-                    radius_px=self.wander_cursor_radius,
-                    min_pixel_change=14,
-                )
-                if result.get("ok"):
-                    break
-
-        if not result.get("ok"):
+            # Never substitute an arbitrary screen/cell click during wandering.
             mouse_game_adapter.release_hold_move()
             self.wander_path = []
             self.wander_goal = None
@@ -1112,6 +1129,8 @@ class HuntingAI:
                     "wander_lookahead": self.wander_lookahead,
                     "wander_cursor_radius": self.wander_cursor_radius,
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
+                    "combat_click_mode": "single_click_until_actor_removed",
+                    "wander_corridor_mode": "astar_clear_line_only",
                     "exploration": exploration_planner.snapshot(),
                 },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
