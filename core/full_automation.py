@@ -547,21 +547,43 @@ class FullAutomationController:
             return False
         return True
 
-    def _town_cycle(self) -> bool:
+    def _town_cycle(
+        self,
+        *,
+        forced: bool = False,
+        resume_hunt: bool = True,
+    ) -> bool:
         profile = app_state.get_profile()
         self._deposited_indices_this_cycle.clear()
         self._sold_indices_this_cycle.clear()
-        self._set(
-            "RETURNING",
-            f"{profile.town.return_weight_percent}% weight reached; returning with Butterfly Wing.",
-        )
         active_hunt_controller.stop()
         game_actions.release_hold_move()
 
         if not self._ensure_native_ready():
             return False
-        if not self._use_butterfly_wing():
-            return False
+
+        current_map = str(self._world(self._snapshot()).get("map") or "").strip().lower()
+        hunt_map = str(profile.hunt.map or "").strip().lower()
+
+        # Manual/test town cycles should work when the character is already in
+        # town. If we are not on the configured hunt map, treat the current map
+        # as the town starting point and skip wasting a Butterfly Wing.
+        already_in_town = bool(forced and current_map and current_map != hunt_map)
+        if already_in_town:
+            self.saved_town_map = current_map
+            self._butterfly_used_this_cycle = False
+            self._set(
+                "RETURNING",
+                f"Town-cycle test starting from current map {current_map}; Butterfly Wing skipped.",
+            )
+            self._log("town_cycle_start_in_place", map=current_map)
+        else:
+            self._set(
+                "RETURNING",
+                f"{profile.town.return_weight_percent}% weight reached; returning with Butterfly Wing.",
+            )
+            if not self._use_butterfly_wing():
+                return False
 
         self._set("FINDING_KAFRA", f"Finding nearest Kafra from {self.saved_town_map}.")
         found = self._go_to_service("kafra")
@@ -601,6 +623,10 @@ class FullAutomationController:
         self._butterfly_used_this_cycle = False
 
         hunt_map = str(profile.hunt.map or "").strip().lower()
+        if not resume_hunt:
+            self._set("TOWN_TEST_COMPLETE", "Town-cycle test completed.")
+            return True
+
         if not hunt_map:
             self.last_error = "No hunt map configured."
             return False
@@ -638,15 +664,16 @@ class FullAutomationController:
                 weight_percent = world.get("weight_percent")
                 threshold = max(1, min(99, int(profile.town.return_weight_percent)))
 
+                forced_cycle = self._force_cycle.is_set()
                 if (
-                    self._force_cycle.is_set()
+                    forced_cycle
                     or (
                         weight_percent is not None
                         and float(weight_percent) >= float(threshold)
                     )
                 ):
                     self._force_cycle.clear()
-                    if not self._town_cycle():
+                    if not self._town_cycle(forced=forced_cycle, resume_hunt=True):
                         self._set(
                             "PAUSED",
                             self.last_error or "Town cycle failed.",
@@ -683,11 +710,35 @@ class FullAutomationController:
             self._thread.start()
             return self.snapshot()
 
+    def _run_standalone_town_cycle_test(self):
+        try:
+            if not self._town_cycle(forced=True, resume_hunt=False):
+                self._set("PAUSED", self.last_error or "Town-cycle test failed.")
+        except Exception as exc:
+            self.last_error = str(exc)
+            self._set("ERROR", str(exc))
+        finally:
+            self.running = False
+
     def force_town_cycle(self) -> dict[str, Any]:
-        if not self.running:
-            raise RuntimeError("Start full automation before forcing a town cycle.")
-        self._force_cycle.set()
-        self._log("force_town_cycle_requested")
+        if self.running:
+            self._force_cycle.set()
+            self._log("force_town_cycle_requested")
+            return self.snapshot()
+
+        if not authenticated_client_monitor.snapshot().get("classic_pid"):
+            raise RuntimeError("Classic.exe is not detected.")
+
+        self._stop.clear()
+        self.last_error = None
+        self.running = True
+        self._thread = threading.Thread(
+            target=self._run_standalone_town_cycle_test,
+            daemon=True,
+            name="standalone-town-cycle-test",
+        )
+        self._thread.start()
+        self._log("standalone_town_cycle_requested")
         return self.snapshot()
 
     def stop(self) -> dict[str, Any]:
