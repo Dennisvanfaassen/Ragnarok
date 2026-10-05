@@ -54,8 +54,8 @@ class HuntingAI:
         self.attack_range = 1
         self.move_segment_tiles = 6
         self.target_move_reset_tiles = 2
-        self.attack_confirm_timeout = 0.65
-        self.max_attack_retries = 3
+        self.attack_confirm_timeout = 0.35
+        self.max_attack_retries = 1
         self.move_settle_timeout = 1.2
         self.direct_attack_click_range = 7
         self.attack_walk_timeout = 3.0
@@ -265,6 +265,22 @@ class HuntingAI:
         except Exception:
             return False
 
+    def _client_attack_registered(
+        self,
+        snapshot: dict[str, Any],
+        target_id: int,
+        since: float,
+    ) -> bool:
+        action = self._world(snapshot).get("last_client_action") or {}
+        try:
+            return (
+                int(action.get("target_id")) == int(target_id)
+                and float(action.get("timestamp") or 0) >= since
+                and int(action.get("type") or -1) in {7, 0}
+            )
+        except Exception:
+            return False
+
     def _wait_for_move_progress(
         self,
         origin: tuple[int, int],
@@ -466,11 +482,11 @@ class HuntingAI:
         self.attack_retry = 0
         self.attack_clicked_at = time.time()
         self._attack_origin = player
-        self._combat_click_locked = True
+        self._combat_click_locked = False
         self._combat_seen = False
         self._set_state(
-            "WAITING_FOR_DEATH",
-            f"Attack sent once to {self.target_name}; target locked until death",
+            "ATTACKING",
+            f"Attack click sent to {self.target_name}; verifying actor click",
         )
         return True
 
@@ -716,24 +732,85 @@ class HuntingAI:
 
         self.attack_clicked_at = time.time()
         self._attack_origin = player
-        self._combat_click_locked = True
+        self._combat_click_locked = False
         self._combat_seen = False
         self._set_state(
-            "WAITING_FOR_DEATH",
-            f"Attack sent once to {self.target_name}; target locked until death",
+            "ATTACKING",
+            f"Attack click sent to {self.target_name}; verifying actor click",
         )
 
     def _step_attacking(self, snapshot: dict[str, Any]):
-        """Legacy state compatibility: never issue another click for a live target."""
         actor = self._refresh_locked_target(snapshot)
         if actor is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
             return
 
-        self._combat_click_locked = True
+        if self.target_id is None:
+            self._set_state("SEARCHING", "Lost target lock")
+            return
+
+        # Confirm the mouse click by observing Classic.exe itself send 0437 for
+        # this exact actor. Once that happens, absolutely no more attack clicks.
+        if self._client_attack_registered(
+            snapshot,
+            int(self.target_id),
+            self.attack_clicked_at,
+        ):
+            self._combat_click_locked = True
+            self._log(
+                "client_attack_registered",
+                target_id=self.target_id,
+                target_name=self.target_name,
+            )
+            self._set_state(
+                "WAITING_FOR_DEATH",
+                f"{self.target_name} click registered; locked until death",
+            )
+            return
+
+        elapsed = time.time() - self.attack_clicked_at
+        if elapsed < self.attack_confirm_timeout:
+            self._stop.wait(0.03)
+            return
+
+        # No outgoing actor-action means the mouse click did not actually land
+        # on the monster. Allow exactly one immediate precision retry.
+        if self.attack_retry < self.max_attack_retries:
+            self.attack_retry += 1
+            fresh = authenticated_client_monitor.snapshot()
+            actor = self._refresh_locked_target(fresh)
+            player = self._position(fresh)
+            if actor is None:
+                self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
+                return
+            if player is None or self.target_pos is None:
+                self._stop.wait(0.03)
+                return
+
+            result = mouse_game_adapter.attack(
+                player,
+                self.target_pos,
+                retry_index=self.attack_retry,
+            )
+            self._log(
+                "attack_precision_retry",
+                target_id=self.target_id,
+                target_name=self.target_name,
+                retry=self.attack_retry,
+                result=result,
+            )
+            if result.get("ok"):
+                self.attack_clicked_at = time.time()
+                self._attack_origin = player
+                return
+
+        # The click still did not register. Do not freeze on this actor and do
+        # not spam-click it: refresh/reposition once, then try again naturally.
+        self.attack_retry = 0
+        self._combat_click_locked = False
         self._set_state(
-            "WAITING_FOR_DEATH",
-            f"Target {self.target_name} remains locked; waiting for death",
+            "ROUTING",
+            f"Click missed {self.target_name}; refreshing approach",
         )
 
 
@@ -741,6 +818,8 @@ class HuntingAI:
         if self._refresh_locked_target(snapshot) is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} defeated")
             return
+
+        self._combat_click_locked = True
 
         # A successful actor-action packet is useful telemetry, but it must not
         # trigger another attack click. One click owns this target until removal.
@@ -1166,7 +1245,7 @@ class HuntingAI:
                     "wander_lookahead": self.wander_lookahead,
                     "wander_cursor_radius": self.wander_cursor_radius,
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
-                    "combat_click_mode": "single_click_until_actor_removed",
+                    "combat_click_mode": "0437-confirmed_single_click_until_actor_removed",
                     "wander_corridor_mode": "astar_clear_line_only",
                     "exploration": exploration_planner.snapshot(),
                 },
