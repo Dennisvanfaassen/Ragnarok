@@ -52,7 +52,7 @@ class DynamicProjectionTracker:
             return None
         if not (info.flags & CURSOR_SHOWING):
             return None
-        return int(ctypes.cast(info.hCursor, ctypes.c_void_p).value or 0)
+        return int(info.hCursor or 0)
 
     @staticmethod
     def _longest_run(mask_row: np.ndarray) -> tuple[int, int] | None:
