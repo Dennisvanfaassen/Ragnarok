@@ -216,6 +216,34 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full">
+      <h2>Pathing v1</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Calculates a walkable A* route from your live position to the selected target using the GAT navigation grid.
+        Read-only: no movement packets are sent yet.
+      </div>
+      <div class="row">
+        <section class="card" style="grid-column:span 6">
+          <h2>Route</h2>
+          <div id="pathStatus" class="metric" style="font-size:20px">Waiting</div>
+          <div id="pathMeta" class="muted">No route calculated yet</div>
+        </section>
+        <section class="card" style="grid-column:span 6">
+          <h2>Next waypoint</h2>
+          <div id="nextWaypoint" class="metric" style="font-size:20px">—</div>
+          <div id="pathMapMeta" class="muted">Map: —</div>
+        </section>
+      </div>
+      <div class="row">
+        <label>Start → Goal
+          <input id="pathEndpoints" value="—" disabled>
+        </label>
+        <label>Path / waypoints
+          <input id="pathCounts" value="—" disabled>
+        </label>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>Wireshark capture analyzer</h2>
       <div class="muted" style="margin-bottom:12px">
         Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
@@ -375,6 +403,36 @@ function renderTargeting(data){
     }
   }
 }
+function renderPathing(data){
+  const status=document.getElementById('pathStatus');
+  const meta=document.getElementById('pathMeta');
+  const waypoint=document.getElementById('nextWaypoint');
+  const mapMeta=document.getElementById('pathMapMeta');
+  const endpoints=document.getElementById('pathEndpoints');
+  const counts=document.getElementById('pathCounts');
+
+  if(status) status.textContent=(data&&data.status)||'waiting';
+  if(meta) meta.textContent=(data&&data.message)||'No route calculated yet';
+
+  const wp=data&&data.next_waypoint;
+  if(waypoint) waypoint.textContent=wp ? (wp.x+', '+wp.y) : '—';
+
+  const mapName=(data&&data.map)||'—';
+  const size=(data&&data.map_size);
+  if(mapMeta) mapMeta.textContent='Map: '+mapName+(size?' · '+size.width+'×'+size.height:'');
+
+  const start=data&&data.start;
+  const goal=data&&data.goal;
+  if(endpoints){
+    endpoints.value=(start?(start.x+','+start.y):'—')+' → '+(goal?(goal.x+','+goal.y):'—');
+  }
+
+  if(counts){
+    const steps=data&&data.path_steps;
+    const wps=(data&&data.waypoints)||[];
+    counts.value=(steps==null?'—':steps+' steps')+' · '+wps.length+' waypoints';
+  }
+}
 function escapeHtml(value){
   return String(value)
     .replaceAll('&','&amp;')
@@ -392,6 +450,10 @@ async function refreshLiveStateQuiet(){
     const tr=await fetch('/api/targeting/live');
     const targeting=await tr.json();
     renderTargeting(targeting);
+
+    const pr=await fetch('/api/pathing/live');
+    const pathing=await pr.json();
+    renderPathing(pathing);
   }catch(e){}
 }
 async function stopAuthenticatedClient(){
