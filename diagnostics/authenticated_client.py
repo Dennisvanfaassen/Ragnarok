@@ -81,22 +81,19 @@ ITEM_PACKET_CANDIDATES = {
 # multiple historical layouts for some opcodes, so these are traced with
 # strict structural checks before they are allowed to mutate live state.
 INCREMENTAL_ITEM_CANDIDATES = {
-    0x00AF: {
-        "name": "inventory_item_removed",
-        "lengths": {6},
-    },
-    0x00F6: {
-        "name": "storage_item_removed",
-        "lengths": {8},
-    },
-    0x0A37: {
-        "name": "inventory_item_added",
-        "lengths": {57, 69},
-    },
-    0x0A0A: {
-        "name": "storage_item_added",
-        "lengths": {52, 57},
-    },
+    # Inventory additions across OpenKore packet generations.
+    0x00A0: {"name": "inventory_item_added", "lengths": {23}},
+    0x029A: {"name": "inventory_item_added", "lengths": {27}},
+    0x0A0C: {"name": "inventory_item_added", "lengths": {61}},
+    0x0A37: {"name": "inventory_item_added", "lengths": {57, 59, 69}},
+    # Inventory removal.
+    0x00AF: {"name": "inventory_item_removed", "lengths": {6}},
+    # Storage additions across OpenKore packet generations.
+    0x00F4: {"name": "storage_item_added", "lengths": {21}},
+    0x01C4: {"name": "storage_item_added", "lengths": {22}},
+    0x0A0A: {"name": "storage_item_added", "lengths": {52, 57}},
+    # Storage removal.
+    0x00F6: {"name": "storage_item_removed", "lengths": {8}},
 }
 
 
@@ -665,6 +662,26 @@ class AuthenticatedClientMonitor:
                         }
 
                 if decoded is None:
+                    # Discovery fallback: keep a bounded raw sample for known
+                    # OpenKore incremental item opcodes whose exact layout has
+                    # not yet been confirmed for this client. This is marked
+                    # unvalidated and never mutates live item state.
+                    if opcode in {
+                        0x00A0, 0x029A, 0x0A0C, 0x0A37,
+                        0x00F4, 0x01C4, 0x0A0A,
+                    }:
+                        self._item_packet_trace.append({
+                            "timestamp": now,
+                            "opcode": f"0x{opcode:04X}",
+                            "name": str(spec["name"]),
+                            "kind": "incremental_discovery",
+                            "candidate_packet_length": packet_len,
+                            "payload_offset": i,
+                            "tcp_payload_length": size,
+                            "packet_hex": packet.hex(" "),
+                            "note": "Known OpenKore item opcode; layout not yet validated for this Classic.exe.",
+                        })
+                        break
                     continue
 
                 self._item_packet_trace.append({
