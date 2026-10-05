@@ -269,6 +269,14 @@ async def native_action_storage_add(payload: dict):
     return result
 
 
+@app.post("/api/native-action/storage/close")
+async def native_action_storage_close():
+    result = native_action_bridge.storage_close()
+    if not result.get("ok"):
+        raise HTTPException(400, result)
+    return result
+
+
 @app.post("/api/native-action/item/use")
 async def native_action_item_use(payload: dict):
     try:
