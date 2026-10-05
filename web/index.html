@@ -17,6 +17,15 @@ h1{margin:0;font-size:27px}h2{margin:0 0 15px;font-size:15px}.muted{font-size:13
 label{display:grid;gap:7px;font-size:12px;color:var(--muted);margin-bottom:13px}input,select{width:100%;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:#0b1018;color:#fff}
 .actions{display:flex;gap:10px;flex-wrap:wrap}.action{border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer;background:var(--accent);color:white}.secondary{background:#202838}.danger{background:#a64055}
 pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;color:#aab5c9;min-height:75px}
+.nav div{cursor:pointer}.view-hidden{display:none!important}
+.map-shell{background:#090d13;border:1px solid var(--line);border-radius:16px;padding:14px;overflow:hidden}
+.map-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.map-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend-item{display:flex;align-items:center;gap:6px}.legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.legend-you{background:#4da3ff}.legend-monster{background:#ff4f64}.legend-player{background:#32df8f}.legend-other{background:#a1a8b5}
+#liveMapCanvas{width:100%;height:min(72vh,760px);display:block;background:#05070b;border-radius:10px;image-rendering:pixelated}
+.map-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.map-stat{background:#0c1119;border:1px solid var(--line);border-radius:10px;padding:10px}
+@media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.shell{grid-template-columns:1fr}.side{display:none}.card,.wide{grid-column:1/-1}.main{padding:18px}}
 </style>
 </head>
@@ -25,7 +34,8 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 <aside class="side">
   <div class="brand">RO <span>Control</span></div>
   <div class="nav">
-    <div class="active">Dashboard</div>
+    <div id="navDashboard" class="active" onclick="switchView('dashboard')">Dashboard</div>
+    <div id="navMap" onclick="switchView('map')">Map</div>
     <div>Hunting</div>
     <div>Town & Storage</div>
     <div>Healing & Supplies</div>
@@ -38,7 +48,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     <div><h1>Ragnarok Bot</h1><div class="muted">OpenKore-style core with a modern control layer</div></div>
     <div class="status"><span id="dot" class="dot"></span><span id="status">stopped</span></div>
   </div>
-  <div class="grid">
+  <div id="dashboardView" class="grid">
     <section class="card"><h2>Current action</h2><div id="action" class="metric">Idle</div><div id="message" class="muted">Ready</div></section>
     <section class="card"><h2>Location</h2><div id="location" class="metric">—</div><div class="muted">Exact map/X/Y will come from network state</div></section>
     <section class="card"><h2>Target</h2><div id="target" class="metric">—</div><div class="muted">Combat queue</div></section>
@@ -301,6 +311,14 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <input id="activeHuntMessage" value="Idle" disabled>
         </label>
       </div>
+      <div class="row">
+        <label>Global hunt toggle
+          <input id="hotkeyStatus" value="[ — checking..." disabled>
+        </label>
+        <label>Emergency stop behavior
+          <input value="[ releases held mouse immediately, then stops hunting" disabled>
+        </label>
+      </div>
     </section>
 
     <section class="card full">
@@ -343,6 +361,35 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
+  </div>
+
+  <div id="mapView" class="view-hidden">
+    <section class="card full">
+      <div class="map-toolbar">
+        <div>
+          <h2 style="font-size:18px;margin-bottom:5px">Live Map</h2>
+          <div id="mapTitle" class="muted">Waiting for current map…</div>
+        </div>
+        <div class="map-legend">
+          <span class="legend-item"><span class="legend-dot legend-you"></span>You</span>
+          <span class="legend-item"><span class="legend-dot legend-monster"></span>Monsters</span>
+          <span class="legend-item"><span class="legend-dot legend-player"></span>Players</span>
+          <span class="legend-item"><span class="legend-dot legend-other"></span>Other</span>
+        </div>
+      </div>
+      <div class="map-shell">
+        <canvas id="liveMapCanvas" width="1100" height="760"></canvas>
+      </div>
+      <div class="map-stats">
+        <div class="map-stat"><div class="muted">Position</div><div id="mapPlayerPos" class="metric" style="font-size:18px">—</div></div>
+        <div class="map-stat"><div class="muted">Monsters known</div><div id="mapMonsterCount" class="metric" style="font-size:18px">0</div></div>
+        <div class="map-stat"><div class="muted">Players known</div><div id="mapPlayerCount" class="metric" style="font-size:18px">0</div></div>
+        <div class="map-stat"><div class="muted">Map size</div><div id="mapSize" class="metric" style="font-size:18px">—</div></div>
+      </div>
+      <div class="muted" style="margin-top:12px">
+        Monster/player markers are limited to actors currently known by your Ragnarok client, normally the loaded area around your character.
+      </div>
+    </section>
   </div>
 </main>
 </div>
@@ -595,7 +642,7 @@ async function stopActiveHunt(){
 function renderActiveHunt(data){
   const status=document.getElementById('activeHuntStatus');
   const msg=document.getElementById('activeHuntMessage');
-  if(status) status.value=(data&&data.status)||'unknown';
+  if(status) status.value=(data&&data.state)||(data&&data.status)||'unknown';
   if(msg) msg.value=(data&&data.message)||'';
 }
 async function refreshActiveHuntQuiet(){
@@ -634,6 +681,169 @@ async function refreshTownTravelQuiet(){
     renderTownTravel(data);
   }catch(e){}
 }
+
+let currentView='dashboard';
+let mapGrid={map:null,width:0,height:0,cells:null,baseCanvas:null};
+let mapOverlay=null;
+
+function switchView(view){
+  currentView=view;
+  const dash=document.getElementById('dashboardView');
+  const map=document.getElementById('mapView');
+  const navDash=document.getElementById('navDashboard');
+  const navMap=document.getElementById('navMap');
+
+  if(view==='map'){
+    dash.classList.add('view-hidden');
+    map.classList.remove('view-hidden');
+    navDash.classList.remove('active');
+    navMap.classList.add('active');
+    refreshMapLive(true);
+  }else{
+    map.classList.add('view-hidden');
+    dash.classList.remove('view-hidden');
+    navMap.classList.remove('active');
+    navDash.classList.add('active');
+  }
+}
+
+function decodeWalkability(b64){
+  const raw=atob(b64);
+  const out=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+  return out;
+}
+
+function buildBaseMap(grid){
+  const off=document.createElement('canvas');
+  off.width=grid.width;
+  off.height=grid.height;
+  const ctx=off.getContext('2d');
+  const img=ctx.createImageData(grid.width,grid.height);
+
+  for(let y=0;y<grid.height;y++){
+    const drawY=grid.height-1-y;
+    for(let x=0;x<grid.width;x++){
+      const walk=grid.cells[y*grid.width+x]===1;
+      const p=(drawY*grid.width+x)*4;
+      if(walk){
+        img.data[p]=39;img.data[p+1]=50;img.data[p+2]=64;img.data[p+3]=255;
+      }else{
+        img.data[p]=6;img.data[p+1]=9;img.data[p+2]=14;img.data[p+3]=255;
+      }
+    }
+  }
+  ctx.putImageData(img,0,0);
+  return off;
+}
+
+async function loadCurrentMapGrid(force=false){
+  const r=await fetch('/api/map/grid');
+  const data=await r.json();
+  if(data.status!=='ready') return data;
+
+  if(force || mapGrid.map!==data.map || !mapGrid.cells){
+    const cells=decodeWalkability(data.walkability_b64);
+    mapGrid={
+      map:data.map,
+      width:data.width,
+      height:data.height,
+      cells,
+      baseCanvas:null
+    };
+    mapGrid.baseCanvas=buildBaseMap(mapGrid);
+  }
+  return data;
+}
+
+function drawLiveMap(){
+  const canvas=document.getElementById('liveMapCanvas');
+  if(!canvas || !mapGrid.baseCanvas || !mapOverlay) return;
+
+  const rect=canvas.getBoundingClientRect();
+  const dpr=Math.max(1,window.devicePixelRatio||1);
+  const wantW=Math.max(400,Math.floor(rect.width*dpr));
+  const wantH=Math.max(300,Math.floor(rect.height*dpr));
+  if(canvas.width!==wantW || canvas.height!==wantH){
+    canvas.width=wantW;canvas.height=wantH;
+  }
+
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.imageSmoothingEnabled=false;
+
+  const pad=24*dpr;
+  const scale=Math.min(
+    (canvas.width-pad*2)/mapGrid.width,
+    (canvas.height-pad*2)/mapGrid.height
+  );
+  const drawW=mapGrid.width*scale;
+  const drawH=mapGrid.height*scale;
+  const ox=(canvas.width-drawW)/2;
+  const oy=(canvas.height-drawH)/2;
+
+  ctx.drawImage(mapGrid.baseCanvas,ox,oy,drawW,drawH);
+
+  const point=(x,y)=>({
+    x:ox+x*scale,
+    y:oy+(mapGrid.height-1-y)*scale
+  });
+
+  function dot(entry,radius,fill,stroke=null){
+    if(!entry) return;
+    const p=point(entry.x,entry.y);
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,radius*dpr,0,Math.PI*2);
+    ctx.fillStyle=fill;
+    ctx.fill();
+    if(stroke){
+      ctx.lineWidth=2*dpr;
+      ctx.strokeStyle=stroke;
+      ctx.stroke();
+    }
+  }
+
+  for(const actor of (mapOverlay.other||[])) dot(actor,3,'#a1a8b5');
+  for(const actor of (mapOverlay.players||[])) dot(actor,4,'#32df8f');
+  for(const actor of (mapOverlay.monsters||[])){
+    dot(actor,actor.aggressive_to_me?5:4,'#ff4f64',actor.aggressive_to_me?'#ffd166':null);
+  }
+  dot(mapOverlay.player,6,'#4da3ff','#ffffff');
+
+  document.getElementById('mapTitle').textContent=
+    (mapOverlay.map||'—')+' · live client-known actors';
+  document.getElementById('mapPlayerPos').textContent=mapOverlay.player
+    ? mapOverlay.player.x+', '+mapOverlay.player.y : '—';
+  document.getElementById('mapMonsterCount').textContent=(mapOverlay.counts&&mapOverlay.counts.monsters)||0;
+  document.getElementById('mapPlayerCount').textContent=(mapOverlay.counts&&mapOverlay.counts.players)||0;
+  document.getElementById('mapSize').textContent=mapGrid.width+' × '+mapGrid.height;
+}
+
+async function refreshMapLive(forceGrid=false){
+  try{
+    const overlayRes=await fetch('/api/map/live');
+    const overlay=await overlayRes.json();
+    mapOverlay=overlay;
+
+    if(overlay.map && (forceGrid || mapGrid.map!==overlay.map || !mapGrid.cells)){
+      await loadCurrentMapGrid(true);
+    }
+    if(currentView==='map') drawLiveMap();
+  }catch(e){}
+}
+
+async function refreshHotkeyQuiet(){
+  try{
+    const r=await fetch('/api/active-hunt/hotkey');
+    const data=await r.json();
+    const el=document.getElementById('hotkeyStatus');
+    if(el){
+      el.value='[ — '+(data.status||'unknown')+
+        (data.hunting_running?' · HUNTING ON':' · hunting off');
+    }
+  }catch(e){}
+}
+
 async function analyzePcap(){
   const input=document.getElementById('pcapFile');
   if(!input.files.length){out('Choose a .pcap or .pcapng file first.');return}
@@ -645,7 +855,7 @@ async function analyzePcap(){
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
-refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);
+refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);refreshHotkeyQuiet();
 </script>
 </body>
 </html>
