@@ -65,9 +65,9 @@ class HuntingAI:
         self.loot_retry: dict[int, int] = {}
         self.wander_min_distance = 16
         self.wander_max_distance = 32
-        self.wander_lookahead = 7
-        self.wander_cursor_radius = 165
-        self.wander_turn_pixel_threshold = 20
+        self.wander_lookahead = 10
+        self.wander_cursor_radius = 180
+        self.wander_turn_pixel_threshold = 18
         self.wander_path: list[tuple[int, int]] = []
         self.wander_goal: tuple[int, int] | None = None
         self.wander_progress_index = 0
@@ -1136,7 +1136,7 @@ class HuntingAI:
             f"Wandering smoothly toward {self.wander_goal[0]},{self.wander_goal[1]}"
             + (" · narrow corridor" if narrow_corridor else "")
         )
-        self._stop.wait(0.04 if narrow_corridor else 0.07)
+        self._stop.wait(0.04 if narrow_corridor else 0.05)
 
     def _step_failed(self):
         snapshot = authenticated_client_monitor.snapshot()
