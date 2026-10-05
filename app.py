@@ -20,6 +20,7 @@ from core.hunt_routes import hunt_route_store
 from core.game_actions import game_actions
 from core.full_automation import full_automation_controller
 from core.town_services import town_service_registry
+from core.hunt_catalog import hunt_catalog
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -513,6 +514,11 @@ async def world_route_to_hunt():
     current_map = str(world.get("map") or "")
     target_map = str(app_state.get_profile().hunt.map or "")
     return world_route_planner.route_to_map(current_map, target_map)
+
+
+@app.get("/api/hunting/catalog/{map_name}")
+async def hunting_catalog(map_name: str):
+    return hunt_catalog.map_catalog(map_name)
 
 
 @app.get("/api/map/grid")
