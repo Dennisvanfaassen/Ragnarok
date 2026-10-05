@@ -76,8 +76,6 @@ class HuntingAI:
         self._combat_click_locked = False
         self._combat_seen = False
         self._attack_origin = None
-        self._combat_click_locked = False
-        self._combat_seen = False
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -855,6 +853,36 @@ class HuntingAI:
 
         self.loot_retry[item_id] = self.loot_retry.get(item_id, 0) + 1
 
+    def _wander_corridor_is_narrow(
+        self,
+        grid,
+        player: tuple[int, int],
+        destination: tuple[int, int],
+    ) -> bool:
+        """Detect cliff edges, bridges and other low-clearance path segments."""
+        x0, y0 = player
+        x1, y1 = destination
+        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+
+        for i in range(steps + 1):
+            t = i / steps
+            x = int(round(x0 + (x1 - x0) * t))
+            y = int(round(y0 + (y1 - y0) * t))
+
+            # In open ground most of the 8 surrounding cells are walkable.
+            # Near a cliff/bridge/wall that count drops sharply.
+            neighbors = 0
+            for ox in (-1, 0, 1):
+                for oy in (-1, 0, 1):
+                    if ox == 0 and oy == 0:
+                        continue
+                    if grid.walkable(x + ox, y + oy):
+                        neighbors += 1
+            if neighbors <= 4:
+                return True
+
+        return False
+
     def _safe_wander_steering_point(
         self,
         grid,
@@ -964,11 +992,19 @@ class HuntingAI:
         dx = destination[0] - player[0]
         dy = destination[1] - player[1]
 
+        narrow_corridor = self._wander_corridor_is_narrow(
+            grid,
+            player,
+            destination,
+        )
+        steering_radius = 105 if narrow_corridor else self.wander_cursor_radius
+        turn_threshold = 10 if narrow_corridor else self.wander_turn_pixel_threshold
+
         result = mouse_game_adapter.update_hold_direction(
             dx,
             dy,
-            radius_px=self.wander_cursor_radius,
-            min_pixel_change=self.wander_turn_pixel_threshold,
+            radius_px=steering_radius,
+            min_pixel_change=turn_threshold,
         )
 
         if not result.get("ok"):
@@ -981,8 +1017,9 @@ class HuntingAI:
 
         self.message = (
             f"Wandering smoothly toward {self.wander_goal[0]},{self.wander_goal[1]}"
+            + (" · narrow corridor" if narrow_corridor else "")
         )
-        self._stop.wait(0.08)
+        self._stop.wait(0.04 if narrow_corridor else 0.07)
 
     def _step_failed(self):
         snapshot = authenticated_client_monitor.snapshot()
