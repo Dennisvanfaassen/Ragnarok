@@ -105,6 +105,9 @@ class HuntingAI:
         self._wander_last_position: tuple[int, int] | None = None
         self._wander_last_progress_at = time.time()
         self._target_failure_count: dict[int, int] = {}
+        self._target_cooldown_until: dict[int, float] = {}
+        self._loot_not_before = 0.0
+        self._next_loot_at = 0.0
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -278,7 +281,7 @@ class HuntingAI:
         self.target_pos = (int(x), int(y))
         self.route_target_pos = None
         self.attack_retry = 0
-        self._target_failure_count[int(self.target_id)] = 0
+        self._target_failure_count.setdefault(int(self.target_id), 0)
         self._log(
             "target_locked",
             target_id=self.target_id,
@@ -442,6 +445,30 @@ class HuntingAI:
             f"{name} spotted at {distance} tiles",
         )
 
+    def _target_on_cooldown(self, actor_id: int | None) -> bool:
+        if actor_id is None:
+            return False
+        until = float(self._target_cooldown_until.get(int(actor_id), 0.0))
+        if until <= time.time():
+            self._target_cooldown_until.pop(int(actor_id), None)
+            return False
+        return True
+
+    def _cooldown_target(self, actor_id: int | None, reason: str) -> None:
+        if actor_id is None:
+            return
+        seconds = max(
+            1.0,
+            float(app_state.get_profile().hunt.unreachable_target_cooldown_seconds),
+        )
+        self._target_cooldown_until[int(actor_id)] = time.time() + seconds
+        self._log(
+            "target_cooldown",
+            target_id=int(actor_id),
+            seconds=seconds,
+            reason=reason,
+        )
+
     def _monster_priority(self, name: str | None) -> int:
         rule = self._monster_rule(name)
         return max(1, min(999, int(rule.priority))) if rule is not None else 50
@@ -463,6 +490,7 @@ class HuntingAI:
             for actor in (live.get("actors") or [])
             if actor.get("kind") == "monster"
             and int(actor.get("id") or -1) in ids
+            and not self._target_on_cooldown(int(actor.get("id") or -1))
             and (exclude_id is None or int(actor.get("id") or -1) != int(exclude_id))
             and self._monster_behavior(actor.get("name")) in {"attack", "aggressor_only"}
         ]
@@ -566,6 +594,8 @@ class HuntingAI:
         candidates = []
 
         for actor in targeting.get("candidates") or []:
+            if self._target_on_cooldown(int(actor.get("id") or -1)):
+                continue
             rule = self._monster_rule(actor.get("name"))
             behavior = self._monster_behavior(actor.get("name"))
             if behavior != "attack":
@@ -1440,8 +1470,10 @@ class HuntingAI:
                 failures=failures,
                 message=pathing.get("message"),
             )
-            if failures >= 3:
+            if failures >= 2:
+                failed_id = self.target_id
                 failed_name = self.target_name
+                self._cooldown_target(failed_id, "route_failed_repeatedly")
                 self._clear_target()
                 self._set_state(
                     "SEARCHING",
@@ -1774,7 +1806,39 @@ class HuntingAI:
                 f"Combat confirmed on {self.target_name}; waiting for death"
             )
 
-        # Strict combat lock: no movement, no retargeting, no attack retries.
+        # If the native attack was accepted but no combat ever starts, the
+        # monster is usually behind geometry or otherwise unreachable. Do not
+        # wait forever on that actor.
+        if (
+            not self._combat_seen
+            and time.time() - self.attack_clicked_at
+            >= max(0.8, float(app_state.get_profile().hunt.combat_no_progress_timeout))
+        ):
+            target_id = int(self.target_id) if self.target_id is not None else -1
+            failures = self._target_failure_count.get(target_id, 0) + 1
+            self._target_failure_count[target_id] = failures
+            self._log(
+                "combat_no_progress",
+                target_id=self.target_id,
+                target_name=self.target_name,
+                failures=failures,
+            )
+            if failures >= 2:
+                failed_id = self.target_id
+                failed_name = self.target_name
+                self._cooldown_target(failed_id, "attack_never_entered_combat")
+                self._clear_target()
+                self._set_state(
+                    "SEARCHING",
+                    f"Skipping unreachable {failed_name}",
+                )
+                return
+            self._set_state(
+                "ROUTING",
+                f"No combat progress on {self.target_name}; trying a better approach",
+            )
+            return
+
         self._stop.wait(0.06)
 
     def _step_target_dead(self):
@@ -1804,12 +1868,21 @@ class HuntingAI:
             return
 
         if self._loot_candidates(snapshot):
-            self._set_state("LOOTING", "Combat clear; looting drops")
+            hunt = app_state.get_profile().hunt
+            low = max(0.0, float(hunt.loot_drop_delay_min))
+            high = max(low, float(hunt.loot_drop_delay_max))
+            self._loot_not_before = time.time() + random.uniform(low, high)
+            self._set_state("LOOTING", "Combat clear; waiting for drops before looting")
             return
 
         self._set_state("SEARCHING", "Selecting next monster")
 
     def _step_looting(self, snapshot: dict[str, Any]):
+        now = time.time()
+        if now < self._loot_not_before or now < self._next_loot_at:
+            self._stop.wait(0.04)
+            return
+
         if self._acquire_aggressor(snapshot):
             self._set_state(
                 "TARGET_SELECTED",
@@ -1889,6 +1962,10 @@ class HuntingAI:
             }
             if item_id not in ids:
                 self.loot_retry.pop(item_id, None)
+                hunt = app_state.get_profile().hunt
+                low = max(0.0, float(hunt.loot_between_items_min))
+                high = max(low, float(hunt.loot_between_items_max))
+                self._next_loot_at = time.time() + random.uniform(low, high)
                 return
 
         retries = self.loot_retry.get(item_id, 0) + 1
@@ -2457,8 +2534,10 @@ class HuntingAI:
                 failures=failures,
                 reason=self.message,
             )
-            if failures >= 3:
+            if failures >= 2:
+                failed_id = self.target_id
                 failed_name = self.target_name
+                self._cooldown_target(failed_id, "failed_state_repeatedly")
                 self._clear_target()
                 self._set_state(
                     "SEARCHING",
@@ -2567,6 +2646,9 @@ class HuntingAI:
             self._wander_last_position = None
             self._wander_last_progress_at = time.time()
             self._target_failure_count.clear()
+            self._target_cooldown_until.clear()
+            self._loot_not_before = 0.0
+            self._next_loot_at = 0.0
             self.loot_retry.clear()
             self.loot_ignored.clear()
             self.running = True
