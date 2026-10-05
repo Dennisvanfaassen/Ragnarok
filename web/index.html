@@ -501,9 +501,16 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <label>Emergency HP below %
             <input id="emergencyHp" type="number" min="1" max="99" value="20">
           </label>
-          <label>Target priority
-            <input value="Per monster · priority 1 is highest" disabled>
+          <label>Navigation mode
+            <select id="navigationMode">
+              <option value="saved_or_explore" selected>Use saved route, otherwise explore</option>
+              <option value="saved_only">Saved route only</option>
+              <option value="explore_only">Automatic exploration only</option>
+            </select>
           </label>
+        </div>
+        <div class="actions">
+          <button class="action secondary" onclick="switchView('map')">Edit hunting route on Map</button>
         </div>
       </section>
 
@@ -633,7 +640,8 @@ async function saveProfile(){
       monster_rules:rules,
       teleport_item:document.getElementById('teleportItem').value.trim()||'Fly Wing',
       emergency_hp_percent:+document.getElementById('emergencyHp').value,
-      emergency_action:document.getElementById('emergencyAction').value
+      emergency_action:document.getElementById('emergencyAction').value,
+      navigation_mode:document.getElementById('navigationMode').value
     },
     healing:{
       enabled:document.getElementById('healEnabled').value==='true',
@@ -710,6 +718,7 @@ async function loadProfile(){
     document.getElementById('teleportItem').value=(p.hunt&&p.hunt.teleport_item)||'Fly Wing';
     document.getElementById('emergencyHp').value=(p.hunt&&p.hunt.emergency_hp_percent)||20;
     document.getElementById('emergencyAction').value=(p.hunt&&p.hunt.emergency_action)||'teleport';
+    document.getElementById('navigationMode').value=(p.hunt&&p.hunt.navigation_mode)||'saved_or_explore';
     if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
 }
