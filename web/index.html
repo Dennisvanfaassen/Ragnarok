@@ -28,6 +28,13 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .route-editor{margin-top:14px;padding:14px;background:#0c1119;border:1px solid var(--line);border-radius:12px}
 .route-editor .row{align-items:end}.route-help{margin-top:9px;font-size:12px;color:var(--muted)}
 #liveMapCanvas.route-editing{cursor:crosshair;outline:2px solid var(--accent);outline-offset:2px}
+.hunt-hero{display:grid;grid-template-columns:2fr 1fr;gap:16px}.monster-list{display:grid;gap:12px}
+.monster-card{border:1px solid var(--line);background:#0c1119;border-radius:14px;padding:14px}
+.monster-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}
+.monster-title{font-weight:800;font-size:15px}.monster-meta{font-size:12px;color:var(--muted)}
+.drop-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.drop-chip{border:1px solid var(--line);background:#111825;border-radius:999px;padding:7px 9px;font-size:12px;display:flex;align-items:center;gap:6px}
+.drop-chip input{width:auto;margin:0}.section-note{padding:12px;border:1px solid var(--line);background:#0c1119;border-radius:11px;color:var(--muted);font-size:12px}
+@media(max-width:900px){.hunt-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.shell{grid-template-columns:1fr}.side{display:none}.card,.wide{grid-column:1/-1}.main{padding:18px}}
 </style>
@@ -38,8 +45,8 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
   <div class="brand">RO <span>Control</span></div>
   <div class="nav">
     <div id="navDashboard" class="active" onclick="switchView('dashboard')">Dashboard</div>
+    <div id="navHunting" onclick="switchView('hunting')">Hunting</div>
     <div id="navMap" onclick="switchView('map')">Map</div>
-    <div>Hunting</div>
     <div>Town & Storage</div>
     <div>Healing & Supplies</div>
     <div>Server</div>
@@ -62,48 +69,11 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <label>Profile name<input id="profileName" value="Default"></label>
         <label>Server<select id="server"><option value="soulbound">Soulbound Journey</option></select></label>
       </div>
-      <div class="row">
-        <label>Hunt map<input id="huntMap" list="huntMapOptions" placeholder="iz_dun02"><datalist id="huntMapOptions"></datalist></label>
-        <label>Monsters to kill<input id="monsters" placeholder="Obeaune, Cornutus"></label>
-      </div>
-      <div class="row">
-        <label>Loot behavior
-          <select id="lootAll"><option value="true" selected>Loot all drops</option><option value="false">Do not loot automatically</option></select>
-        </label>
-        <label>Return at weight %<input id="weight" type="number" min="1" max="99" value="70"></label>
-      </div>
-      <div class="row">
-        <label>Return method
-          <input value="Butterfly Wing → saved respawn point" disabled>
-        </label>
-        <label>Town service selection
-          <input value="Automatic nearest Kafra + Tool Dealer" disabled>
-        </label>
-      </div>
-      <div class="row">
-        <label>Saved town override (optional)
-          <input id="storageMap" placeholder="Leave blank = detect after Butterfly Wing">
-        </label>
-        <label>Universal routing
-          <input value="Selected hunt map ↔ detected saved town" disabled>
-        </label>
-      </div>
-      <div class="row">
-        <label>Healing hotkey<input id="healHotkey" value="1" placeholder="1"></label>
-        <label>Use healing below HP %<input id="healPercent" type="number" min="1" max="99" value="50"></label>
-      </div>
-      <div class="row">
-        <label>Healing item / note<input id="healItem" placeholder="Potion assigned to hotkey 1"></label>
-        <label>Healing enabled
-          <select id="healEnabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select>
-        </label>
-      </div>
-      <div class="row">
-        <label>Restock Awakening Potions<input id="awakeningTarget" type="number" min="0" value="4"></label>
-        <label>Restock Butterfly Wings<input id="butterflyTarget" type="number" min="0" value="1"></label>
+      <div class="muted" style="margin-bottom:12px">
+        Hunting, monster targeting, loot rules, healing and return settings are now managed in the Hunting tab.
       </div>
       <div class="actions">
-        <button class="action" onclick="saveProfile()">Save profile</button>
+        <button class="action" onclick="switchView('hunting')">Open Hunting setup</button>
         <button class="action secondary" onclick="probe()">Test server</button>
         <button class="action" onclick="startBot()">Start</button>
         <button class="action danger" onclick="stopBot()">Stop</button>
@@ -453,6 +423,96 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
+  </div>
+
+  <div id="huntingView" class="view-hidden">
+    <div class="grid">
+      <section class="card full">
+        <div class="hunt-hero">
+          <div>
+            <h2 style="font-size:20px;margin-bottom:7px">Hunting setup</h2>
+            <div class="muted">Choose a map, then RO Control loads the monsters known for that map. Reference data is merged with monsters actually observed by your SoulBound client.</div>
+          </div>
+          <div class="section-note">Private servers can customize spawns and drops. Reference entries are treated as suggestions; live SoulBound observations are marked separately.</div>
+        </div>
+      </section>
+
+      <section class="card full">
+        <h2>1. Hunting map</h2>
+        <div class="row">
+          <label>Map
+            <input id="huntMap" list="huntMapOptions" placeholder="iz_dun02" onchange="loadHuntingCatalog()">
+            <datalist id="huntMapOptions"></datalist>
+          </label>
+          <label>Catalog status
+            <input id="huntCatalogStatus" value="Choose a map" disabled>
+          </label>
+        </div>
+        <div class="actions">
+          <button class="action" onclick="loadHuntingCatalog()">Load monsters</button>
+          <button class="action secondary" onclick="selectAllMonsters(true)">Kill all shown</button>
+          <button class="action secondary" onclick="selectAllMonsters(false)">Exclude all</button>
+        </div>
+      </section>
+
+      <section class="card full">
+        <h2>2. Monsters & loot</h2>
+        <div class="muted" style="margin-bottom:12px">
+          Enable the monsters you want to attack. Each monster can loot everything, loot only selected drops, loot everything except selected drops, or ignore all drops.
+        </div>
+        <input id="monsters" type="hidden">
+        <select id="lootAll" style="display:none"><option value="true" selected>Loot all</option><option value="false">No loot</option></select>
+        <div id="monsterRuleList" class="monster-list">
+          <div class="section-note">Choose a hunting map first.</div>
+        </div>
+      </section>
+
+      <section class="card wide">
+        <h2>3. Hunting behavior</h2>
+        <div class="row">
+          <label>Return to town at weight %
+            <input id="weight" type="number" min="1" max="99" value="70">
+          </label>
+          <label>Loot radius (tiles)
+            <input id="huntLootRadius" type="number" min="2" max="20" value="12">
+          </label>
+        </div>
+        <div class="row">
+          <label>Saved town override (optional)
+            <input id="storageMap" placeholder="Blank = detect after Butterfly Wing">
+          </label>
+          <label>Return method
+            <input value="Butterfly Wing → saved point → nearest services" disabled>
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Healing</h2>
+        <label>Enabled
+          <select id="healEnabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select>
+        </label>
+        <div class="row">
+          <label>Hotkey<input id="healHotkey" value="1"></label>
+          <label>HP below %<input id="healPercent" type="number" min="1" max="99" value="50"></label>
+        </div>
+        <label>Healing item / note<input id="healItem" placeholder="Item assigned to hotkey 1"></label>
+      </section>
+
+      <section class="card full">
+        <h2>Supplies & automation</h2>
+        <div class="row">
+          <label>Target Awakening Potions<input id="awakeningTarget" type="number" min="0" value="4"></label>
+          <label>Target Butterfly Wings<input id="butterflyTarget" type="number" min="0" value="1"></label>
+        </div>
+        <div class="actions">
+          <button class="action" onclick="saveProfile()">Save hunting setup</button>
+          <button class="action" onclick="startFullAutomation()">Start full automation</button>
+          <button class="action secondary" onclick="forceTownCycle()">Test town cycle</button>
+          <button class="action danger" onclick="stopFullAutomation()">Stop automation</button>
+        </div>
+      </section>
+    </div>
   </div>
 
   <div id="mapView" class="view-hidden">
@@ -910,23 +970,22 @@ let routeEditing=false;
 
 function switchView(view){
   currentView=view;
-  const dash=document.getElementById('dashboardView');
-  const map=document.getElementById('mapView');
-  const navDash=document.getElementById('navDashboard');
-  const navMap=document.getElementById('navMap');
-
-  if(view==='map'){
-    dash.classList.add('view-hidden');
-    map.classList.remove('view-hidden');
-    navDash.classList.remove('active');
-    navMap.classList.add('active');
-    refreshMapLive(true);
-  }else{
-    map.classList.add('view-hidden');
-    dash.classList.remove('view-hidden');
-    navMap.classList.remove('active');
-    navDash.classList.add('active');
-  }
+  const views={
+    dashboard:document.getElementById('dashboardView'),
+    hunting:document.getElementById('huntingView'),
+    map:document.getElementById('mapView')
+  };
+  const navs={
+    dashboard:document.getElementById('navDashboard'),
+    hunting:document.getElementById('navHunting'),
+    map:document.getElementById('navMap')
+  };
+  Object.keys(views).forEach(function(key){
+    if(views[key]) views[key].classList.toggle('view-hidden',key!==view);
+    if(navs[key]) navs[key].classList.toggle('active',key===view);
+  });
+  if(view==='map') refreshMapLive(true);
+  if(view==='hunting') loadHuntingCatalog();
 }
 
 function decodeWalkability(b64){
