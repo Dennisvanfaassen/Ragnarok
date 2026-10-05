@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from diagnostics.authenticated_client import authenticated_client_monitor
+from core.visual_target import dynamic_projection_tracker
 
 
 user32 = ctypes.windll.user32
@@ -182,12 +183,14 @@ class MouseGameAdapter:
             "rmse_px": calibration.get("rmse_px"),
             "sample_count": len(calibration.get("samples") or []),
             "coefficients": calibration.get("coefficients"),
+            "dynamic_projection": dynamic_projection_tracker.snapshot(),
         }
 
     def clear_calibration(self) -> dict[str, Any]:
         self._calibration = None
         self._calibration_status = "not_calibrated"
         self._calibration_message = "Calibration cleared."
+        dynamic_projection_tracker.reset_anchor()
         try:
             self._calibration_path.unlink(missing_ok=True)
         except Exception:
@@ -336,6 +339,7 @@ class MouseGameAdapter:
             }
             self._save_calibration()
             self._calibration_status = "ready"
+            dynamic_projection_tracker.reset_anchor()
             self._calibration_message = (
                 f"Ready: {len(samples)} samples, RMSE {rmse:.1f}px."
             )
@@ -377,8 +381,14 @@ class MouseGameAdapter:
         cx = coeffs["screen_x"]
         cy = coeffs["screen_y"]
 
-        local_x = cx[0] + cx[1] * dx + cx[2] * dy
-        local_y = cy[0] + cy[1] * dx + cy[2] * dy
+        origin_x, origin_y, _visual = dynamic_projection_tracker.corrected_origin(
+            geometry,
+            float(cx[0]),
+            float(cy[0]),
+        )
+
+        local_x = origin_x - geometry["left"] + cx[1] * dx + cx[2] * dy
+        local_y = origin_y - geometry["top"] + cy[1] * dx + cy[2] * dy
 
         margin_x = 70
         margin_y = 55
@@ -459,17 +469,24 @@ class MouseGameAdapter:
         cx = coeffs["screen_x"]
         cy = coeffs["screen_y"]
 
-        # Only use the affine direction terms. The intercept is the calibrated
-        # on-screen player/ground origin. This prevents the cursor from chasing
-        # individual map cells while walking.
+        origin_x, origin_y, _visual = dynamic_projection_tracker.corrected_origin(
+            geometry,
+            float(cx[0]),
+            float(cy[0]),
+        )
+        local_origin_x = origin_x - geometry["left"]
+        local_origin_y = origin_y - geometry["top"]
+
+        # Only use the affine direction terms. The visual tracker supplies a
+        # live player/camera origin so held movement stays centred correctly.
         vx = cx[1] * dx + cx[2] * dy
         vy = cy[1] * dx + cy[2] * dy
         length = math.hypot(vx, vy)
         if length < 1e-6:
             return None
 
-        local_x = cx[0] + (vx / length) * radius_px
-        local_y = cy[0] + (vy / length) * radius_px
+        local_x = local_origin_x + (vx / length) * radius_px
+        local_y = local_origin_y + (vy / length) * radius_px
 
         margin_x = 80
         margin_y = 65
@@ -651,7 +668,10 @@ class MouseGameAdapter:
         if not hwnd:
             return {"ok": False, "reason": "window_not_found"}
 
-        # Small vertical sweep on retries, but always within the same actor tile.
+        # Stop held movement before resolving the live target position. This
+        # prevents a wandering cursor from fighting the attack click.
+        self.release_hold_move()
+
         offsets = [
             self.sprite_y_offset,
             self.sprite_y_offset - 10,
@@ -669,14 +689,29 @@ class MouseGameAdapter:
         if point is None:
             return {"ok": False, "reason": "target_not_clickable"}
 
-        self.release_hold_move()
-        self._click_screen(hwnd, point[0], point[1])
+        # Network coordinates narrow the search to a tiny ROI. Prefer an
+        # actual clickable actor hitbox when the client exposes a cursor-state
+        # change. This usually survives small camera/character movement better
+        # than a single projected pixel.
+        hit = dynamic_projection_tracker.probe_clickable_hitbox(
+            int(point[0]),
+            int(point[1]),
+        )
+
+        click_x = int(hit["x"]) if hit else int(point[0])
+        click_y = int(hit["y"]) if hit else int(point[1])
+        method = hit["method"] if hit else "dynamic_projection"
+
+        self._click_screen(hwnd, click_x, click_y)
         return {
             "ok": True,
-            "screen": {"x": point[0], "y": point[1]},
+            "screen": {"x": click_x, "y": click_y},
+            "projected_screen": {"x": int(point[0]), "y": int(point[1])},
             "map_from": {"x": player[0], "y": player[1]},
             "map_to": {"x": target[0], "y": target[1]},
             "sprite_y_offset": offset,
+            "precision_method": method,
+            "dynamic_projection": dynamic_projection_tracker.snapshot(),
         }
 
 
