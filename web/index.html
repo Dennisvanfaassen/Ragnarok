@@ -321,11 +321,11 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </label>
       </div>
       <div class="row">
-        <label>Global hunt toggle
-          <input id="hotkeyStatus" value="[ — checking..." disabled>
+        <label>Global Full Automation toggle
+          <input id="hotkeyStatus" value="] — checking..." disabled>
         </label>
-        <label>Emergency stop behavior
-          <input value="[ releases held mouse immediately, then stops hunting" disabled>
+        <label>Hotkey behavior
+          <input value="] starts/stops Full Hunt Automation globally" disabled>
         </label>
       </div>
     </section>
@@ -1580,8 +1580,8 @@ async function refreshHotkeyQuiet(){
     const data=await r.json();
     const el=document.getElementById('hotkeyStatus');
     if(el){
-      el.value='[ — '+(data.status||'unknown')+
-        (data.hunting_running?' · HUNTING ON':' · hunting off');
+      el.value='] — '+(data.status||'unknown')+
+        (data.full_automation_running?' · FULL AUTOMATION ON':' · automation off');
     }
   }catch(e){}
 }
