@@ -387,14 +387,26 @@ class HuntingAI:
         return best_i
 
     def _step_searching(self, snapshot: dict[str, Any]):
+        if self._acquire_aggressor(snapshot):
+            self._set_state(
+                "TARGET_SELECTED",
+                f"Prioritizing aggressor {self.target_name}",
+            )
+            return
+
+        loot = self._loot_candidates(snapshot)
+        if loot:
+            self._set_state("LOOTING", f"Looting {len(loot)} floor item(s)")
+            return
+
         if self._acquire_target(snapshot):
             self._set_state(
                 "TARGET_SELECTED",
                 f"Locked {self.target_name}",
             )
-        else:
-            self._set_state("SEARCHING", "No valid target in live actor list")
-            self._stop.wait(0.05)
+            return
+
+        self._set_state("WANDERING", "No target visible; wandering")
 
     def _step_target_selected(self, snapshot: dict[str, Any]):
         if self._refresh_locked_target(snapshot) is None:
@@ -423,15 +435,13 @@ class HuntingAI:
             grid = None
 
         if (
-            distance <= self.direct_attack_click_range
-            and mouse_game_adapter.can_project(
+            mouse_game_adapter.can_project(
                 player,
                 self.target_pos,
                 sprite=True,
             )
             and grid is not None
         ):
-            from core.pathing import clear_walk_line
             if clear_walk_line(grid, player, self.target_pos):
                 self._set_state(
                     "ATTACK_READY",
@@ -561,13 +571,10 @@ class HuntingAI:
             return
 
         distance = self._tile_distance(player, self.target_pos)
-        if (
-            distance > self.direct_attack_click_range
-            or not mouse_game_adapter.can_project(
-                player,
-                self.target_pos,
-                sprite=True,
-            )
+        if not mouse_game_adapter.can_project(
+            player,
+            self.target_pos,
+            sprite=True,
         ):
             self._set_state(
                 "ROUTING",
@@ -679,27 +686,46 @@ class HuntingAI:
     def _step_target_dead(self):
         old_id = self.target_id
         old_name = self.target_name
+        old_pos = self.target_pos
         self._log(
             "target_finished",
             target_id=old_id,
             target_name=old_name,
         )
+        if old_pos is not None:
+            self.recent_kills.append({"time": time.time(), "pos": old_pos})
+            self.recent_kills = self.recent_kills[-10:]
         self._clear_target()
-        self._stop.wait(0.20)
+
+        snapshot = authenticated_client_monitor.snapshot()
+        if self._acquire_aggressor(snapshot):
+            self._set_state(
+                "TARGET_SELECTED",
+                f"Aggressor priority: {self.target_name}",
+            )
+            return
+
+        if self._loot_candidates(snapshot):
+            self._set_state("LOOTING", "Combat clear; looting drops")
+            return
+
         self._set_state("SEARCHING", "Selecting next monster")
 
     def _step_failed(self):
-        # Drop only the current target instead of oscillating on the same bad
-        # approach forever.
-        self._log(
-            "target_dropped",
-            target_id=self.target_id,
-            target_name=self.target_name,
-            reason=self.message,
-        )
+        snapshot = authenticated_client_monitor.snapshot()
+        if self._refresh_locked_target(snapshot) is not None:
+            self._log(
+                "target_retry",
+                target_id=self.target_id,
+                target_name=self.target_name,
+                reason=self.message,
+            )
+            self._stop.wait(0.10)
+            self._set_state("ROUTING", "Retrying same locked target")
+            return
+
         self._clear_target()
-        self._stop.wait(0.15)
-        self._set_state("SEARCHING", "Recovering and selecting another target")
+        self._set_state("SEARCHING", "Target gone; selecting another target")
 
     def _loop(self):
         self._set_state("SEARCHING", "Searching for monster")
