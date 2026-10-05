@@ -41,6 +41,7 @@ class DynamicProjectionTracker:
         self._last_bar: tuple[float, float] | None = None
         self._last_anchor_at = 0.0
         self._last_anchor_confidence = 0.0
+        self._last_detection_check = 0.0
         self._last_hitbox: dict[str, Any] | None = None
 
     @staticmethod
@@ -84,6 +85,18 @@ class DynamicProjectionTracker:
         geometry: dict[str, int],
     ) -> tuple[float, float, float] | None:
         """Locate the player's stacked HP/SP bars near the viewport centre."""
+        now = time.time()
+        with self._lock:
+            if (
+                self._last_bar is not None
+                and now - self._last_detection_check <= 0.04
+            ):
+                return (
+                    self._last_bar[0],
+                    self._last_bar[1],
+                    self._last_anchor_confidence,
+                )
+            self._last_detection_check = now
         left = geometry["left"]
         top = geometry["top"]
         width = geometry["width"]
@@ -306,6 +319,7 @@ class DynamicProjectionTracker:
             self._last_bar = None
             self._last_anchor_at = 0.0
             self._last_anchor_confidence = 0.0
+            self._last_detection_check = 0.0
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
