@@ -60,6 +60,14 @@ class HuntSettings(BaseModel):
     navigation_mode: str = "saved_or_explore"  # saved_or_explore | saved_only | explore_only
     avoid_zones: list[AvoidZone] = Field(default_factory=list)
 
+    # Smart combat defaults: native game actions, threat-first decisions and
+    # priority pre-emption. These keep hunting independent from screen clicks.
+    native_only_actions: bool = True
+    threat_first_combat: bool = True
+    preempt_for_higher_priority_aggressor: bool = True
+    loot_after_aggressors: bool = True
+    exploration_frontier_bias: bool = True
+
 
 class HealingSettings(BaseModel):
     enabled: bool = True
