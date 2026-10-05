@@ -410,6 +410,36 @@ rpc.exports = {
         packet.writeByteArray(bytes);
         const result = sendFn(mapSocket, packet, 6, 0);
         return {ok:result===6, bytes_sent:result, actor_id:id, packet_hex:bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '), socket:mapSocket.toString()};
+    },
+
+    storageAdd(index, amount) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+
+        const itemIndex = Math.max(0, Math.min(65535, Number(index) | 0));
+        const qty = Math.max(0, Number(amount) >>> 0);
+        const bytes = [
+            0x64, 0x03,
+            itemIndex & 0xff,
+            (itemIndex >>> 8) & 0xff,
+            qty & 0xff,
+            (qty >>> 8) & 0xff,
+            (qty >>> 16) & 0xff,
+            (qty >>> 24) & 0xff
+        ];
+
+        const packet = Memory.alloc(8);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 8, 0);
+
+        return {
+            ok: result === 8,
+            bytes_sent: result,
+            inventory_index: itemIndex,
+            amount: qty,
+            packet_hex: bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '),
+            socket: mapSocket.toString()
+        };
     }
 };
 """
@@ -645,6 +675,49 @@ class NativeActionBridge:
 
     def close_npc(self, actor_id: int) -> dict[str, Any]:
         return self._npc_call("close_npc", actor_id)
+
+    def storage_add(self, inventory_index: int, amount: int) -> dict[str, Any]:
+        inventory_index = int(inventory_index)
+        amount = int(amount)
+        if not (0 <= inventory_index <= 65535):
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "inventory_index_out_of_range",
+            }
+        if amount <= 0:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "amount_must_be_positive",
+            }
+
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "executed": False, "reason": "bridge_not_running"}
+
+        status = self._agent_status()
+        if not status.get("socket_learned"):
+            return {"ok": False, "executed": False, "reason": "map_socket_not_learned"}
+
+        try:
+            result = dict(script.exports_sync.storage_add(
+                inventory_index,
+                amount,
+            ))
+        except Exception as exc:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+            }
+
+        result["executed"] = bool(result.get("ok"))
+        result["command"] = "storage_add"
+        self._record({"event": "direct_storage_add", "result": result})
+        return result
 
     def attack(self, actor_id: int) -> dict[str, Any]:
         actor_id = int(actor_id)
