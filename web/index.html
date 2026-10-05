@@ -363,6 +363,30 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
     </section>
 
+    <section class="card full">
+      <h2>Hunting Diagnostic Recorder</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Record one hunting session so movement, targets, mouse steering, packet confirmations and key screenshots can be analyzed together.
+        No passwords or raw packet payloads are stored.
+      </div>
+      <div class="row">
+        <label>Recorder
+          <input id="diagStatus" value="idle" disabled>
+        </label>
+        <label>Captured
+          <input id="diagCounts" value="0 samples · 0 events · 0 screenshots" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action" onclick="startHuntDiagnostic()">Start diagnostic</button>
+        <button class="action danger" onclick="stopHuntDiagnostic()">Stop & build ZIP</button>
+        <button id="diagDownloadButton" class="action secondary" onclick="downloadHuntDiagnostic()" disabled>Download ZIP</button>
+      </div>
+      <div class="muted" style="margin-top:8px">
+        Recommended: start recording, run Hunting for 60–90 seconds on the problem map, include several monsters and route movement, then stop and download the ZIP.
+      </div>
+    </section>
+
     <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
   </div>
 
@@ -1050,6 +1074,50 @@ async function refreshHotkeyQuiet(){
   }catch(e){}
 }
 
+
+function renderHuntDiagnostic(data){
+  const status=document.getElementById('diagStatus');
+  const counts=document.getElementById('diagCounts');
+  const download=document.getElementById('diagDownloadButton');
+  if(status){
+    status.value=data&&data.running
+      ? 'RECORDING · '+(data.session_name||'session')
+      : (data&&data.zip_ready?'ZIP ready':'idle');
+  }
+  if(counts){
+    counts.value=(data&&data.sample_count||0)+' samples · '+
+      (data&&data.event_count||0)+' events · '+
+      (data&&data.screenshot_count||0)+' screenshots';
+  }
+  if(download) download.disabled=!(data&&data.zip_ready);
+}
+
+async function startHuntDiagnostic(){
+  const r=await fetch('/api/diagnostics/hunting/start',{method:'POST'});
+  const data=await r.json();
+  renderHuntDiagnostic(data);
+  out(data);
+}
+
+async function stopHuntDiagnostic(){
+  const r=await fetch('/api/diagnostics/hunting/stop',{method:'POST'});
+  const data=await r.json();
+  renderHuntDiagnostic(data);
+  out(data);
+}
+
+function downloadHuntDiagnostic(){
+  window.location.href='/api/diagnostics/hunting/download';
+}
+
+async function refreshHuntDiagnosticQuiet(){
+  try{
+    const r=await fetch('/api/diagnostics/hunting');
+    const data=await r.json();
+    renderHuntDiagnostic(data);
+  }catch(e){}
+}
+
 async function analyzePcap(){
   const input=document.getElementById('pcapFile');
   if(!input.files.length){out('Choose a .pcap or .pcapng file first.');return}
@@ -1063,7 +1131,7 @@ async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh(
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
 const mapCanvas=document.getElementById('liveMapCanvas');
 if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
-refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);refreshHotkeyQuiet();
+refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
 </script>
 </body>
 </html>
