@@ -41,6 +41,7 @@ class HuntingAI:
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._run_id = 0
         self.running = False
 
         self.state = "IDLE"
@@ -407,9 +408,27 @@ class HuntingAI:
         self._set_state("WANDERING", "No target visible; wandering")
 
     def _step_target_selected(self, snapshot: dict[str, Any]):
-        if self._refresh_locked_target(snapshot) is None:
+        actor = self._refresh_locked_target(snapshot)
+        if actor is None:
             self._set_state("TARGET_DEAD", "Target disappeared before approach")
             return
+
+        player = self._position(snapshot)
+        if (
+            player is not None
+            and self.target_pos is not None
+            and mouse_game_adapter.can_project(
+                player,
+                self.target_pos,
+                sprite=True,
+            )
+        ):
+            self._set_state(
+                "ATTACK_READY",
+                f"{self.target_name} is visible; attacking immediately",
+            )
+            return
+
         self._set_state("ROUTING", f"Calculating route to {self.target_name}")
 
     def _step_routing(self, snapshot: dict[str, Any]):
@@ -466,6 +485,25 @@ class HuntingAI:
         path_preview = pathing.get("path_preview") or []
 
         if not pathing.get("path_found") or len(path_preview) < 2:
+            if (
+                self.target_pos is not None
+                and mouse_game_adapter.can_project(
+                    player,
+                    self.target_pos,
+                    sprite=True,
+                )
+            ):
+                self._log(
+                    "route_unavailable_attack_visible",
+                    target_id=self.target_id,
+                    message=pathing.get("message"),
+                )
+                self._set_state(
+                    "ATTACK_READY",
+                    f"Navigation unavailable; attacking visible {self.target_name}",
+                )
+                return
+
             self._log(
                 "route_failed",
                 target_id=self.target_id,
@@ -860,24 +898,38 @@ class HuntingAI:
 
     def _step_failed(self):
         snapshot = authenticated_client_monitor.snapshot()
-        if self._refresh_locked_target(snapshot) is not None:
+        actor = self._refresh_locked_target(snapshot)
+        player = self._position(snapshot)
+
+        if actor is not None and player is not None and self.target_pos is not None:
+            if mouse_game_adapter.can_project(
+                player,
+                self.target_pos,
+                sprite=True,
+            ):
+                self._set_state(
+                    "ATTACK_READY",
+                    f"Recovering by attacking visible {self.target_name}",
+                )
+                return
+
             self._log(
                 "target_retry",
                 target_id=self.target_id,
                 target_name=self.target_name,
                 reason=self.message,
             )
-            self._stop.wait(0.10)
+            self._stop.wait(0.25)
             self._set_state("ROUTING", "Retrying same locked target")
             return
 
         self._clear_target()
         self._set_state("SEARCHING", "Target gone; selecting another target")
 
-    def _loop(self):
+    def _loop(self, run_id: int):
         self._set_state("SEARCHING", "Searching for monster")
 
-        while not self._stop.is_set():
+        while not self._stop.is_set() and run_id == self._run_id:
             snapshot = authenticated_client_monitor.snapshot()
 
             if not snapshot.get("classic_pid"):
@@ -911,9 +963,11 @@ class HuntingAI:
             else:
                 self._set_state("FAILED", f"Unexpected AI state {self.state}")
 
-        self.running = False
-        self._clear_target()
-        self._set_state("IDLE", "Hunting AI stopped")
+        # A previous worker must never overwrite a newer run's state.
+        if run_id == self._run_id:
+            self.running = False
+            self._clear_target()
+            self._set_state("IDLE", "Hunting AI stopped")
 
     def start(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         if payload:
@@ -931,14 +985,21 @@ class HuntingAI:
                     "A valid screen calibration is required for the current Classic.exe window size."
                 )
 
+            self._run_id += 1
+            run_id = self._run_id
             self._stop.clear()
             self._clear_target()
             self.running = True
-            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread = threading.Thread(
+                target=self._loop,
+                args=(run_id,),
+                daemon=True,
+            )
             self._thread.start()
             return self.snapshot()
 
     def stop(self) -> dict[str, Any]:
+        self._run_id += 1
         self._stop.set()
         mouse_game_adapter.release_hold_move()
         thread = self._thread
