@@ -122,6 +122,7 @@ class AuthenticatedClientMonitor:
             "self_account_id": None,
             "self_char_id": None,
             "last_combat": None,
+            "last_client_action": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
         self._floor_items: dict[int, dict[str, Any]] = {}
@@ -137,6 +138,7 @@ class AuthenticatedClientMonitor:
             "stat_info": 0,
             "sync": 0,
             "combat": 0,
+            "client_action": 0,
             "item_seen": 0,
             "item_removed": 0,
         }
@@ -426,10 +428,28 @@ class AuthenticatedClientMonitor:
         size = len(payload)
         while i + 2 <= size:
             opcode = int.from_bytes(payload[i:i + 2], "little")
+
             if opcode == 0x0436 and i + 23 <= size:
                 self._parse_client_map_packet(payload[i:i + 23])
                 i += 23
                 continue
+
+            # 0437 actor_action: targetID a4, type C.
+            # This is the strongest passive confirmation that a mouse click
+            # actually registered on a specific actor in Classic.exe.
+            if opcode == 0x0437 and i + 7 <= size:
+                target_id = int.from_bytes(payload[i + 2:i + 6], "little")
+                action_type = int(payload[i + 6])
+                self._world["last_client_action"] = {
+                    "timestamp": time.time(),
+                    "target_id": target_id,
+                    "type": action_type,
+                    "opcode": "0x0437",
+                }
+                self._parsed_counts["client_action"] += 1
+                i += 7
+                continue
+
             i += 1
 
     def _packet(self, pkt):
