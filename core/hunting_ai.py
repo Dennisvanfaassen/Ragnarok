@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any
 
-from core.mouse_adapter import mouse_game_adapter
+from core.game_actions import game_actions
 from core.exploration import exploration_planner
 from core.hunt_routes import hunt_route_store
 from core.pathing import astar, build_pathing_state, clear_walk_line, nav_repository
@@ -125,7 +125,7 @@ class HuntingAI:
                 ),
             ),
         )
-        mouse_game_adapter.configure(
+        game_actions.configure(
             sprite_y_offset=payload.get("sprite_y_offset")
         )
 
@@ -134,7 +134,7 @@ class HuntingAI:
             raise ValueError(f"Unknown AI state: {state}")
         previous = self.state
         if previous == "WANDERING" and state != "WANDERING":
-            mouse_game_adapter.release_hold_move()
+            game_actions.release_hold_move()
         with self._lock:
             changed = state != self.state
             self.state = state
@@ -780,7 +780,7 @@ class HuntingAI:
         reason: str,
     ) -> bool:
         """Interrupt movement and attack the locked visible actor in this cycle."""
-        mouse_game_adapter.release_hold_move()
+        game_actions.release_hold_move()
 
         # Give Classic.exe one render slice to stop held-mouse steering, then
         # project the monster from fresh network coordinates. This is short
@@ -798,7 +798,7 @@ class HuntingAI:
         if player_render is None or target_render is None:
             return False
 
-        if not mouse_game_adapter.can_project(
+        if not game_actions.can_project(
             player_render,
             target_render,
             sprite=True,
@@ -806,7 +806,7 @@ class HuntingAI:
             return False
 
         self.attack_clicked_at = time.time()
-        result = mouse_game_adapter.attack(
+        result = game_actions.attack(
             player_render,
             target_render,
             retry_index=0,
@@ -845,7 +845,7 @@ class HuntingAI:
             and self.target_pos is not None
             and self._render_position(snapshot) is not None
             and self._target_render_position(snapshot) is not None
-            and mouse_game_adapter.can_project(
+            and game_actions.can_project(
                 self._render_position(snapshot),
                 self._target_render_position(snapshot),
                 sprite=True,
@@ -915,7 +915,7 @@ class HuntingAI:
             not self._attack_reposition_required
             and self._render_position(snapshot) is not None
             and self._target_render_position(snapshot) is not None
-            and mouse_game_adapter.can_project(
+            and game_actions.can_project(
                 self._render_position(snapshot),
                 self._target_render_position(snapshot),
                 sprite=True,
@@ -955,7 +955,7 @@ class HuntingAI:
         if not pathing.get("path_found") or len(path_preview) < 2:
             if (
                 self.target_pos is not None
-                and mouse_game_adapter.can_project(
+                and game_actions.can_project(
                     player,
                     self.target_pos,
                     sprite=True,
@@ -1001,7 +1001,7 @@ class HuntingAI:
             f"Approaching {self.target_name} via {segment[0]},{segment[1]}",
         )
 
-        result = mouse_game_adapter.move(player, segment)
+        result = game_actions.move(player, segment)
         self._log(
             "move",
             target_id=self.target_id,
@@ -1017,7 +1017,7 @@ class HuntingAI:
                     int(path_preview[1]["x"]),
                     int(path_preview[1]["y"]),
                 )
-                result = mouse_game_adapter.move(player, fallback)
+                result = game_actions.move(player, fallback)
                 self._log(
                     "move_fallback",
                     target_id=self.target_id,
@@ -1090,7 +1090,7 @@ class HuntingAI:
         if (
             player_render is None
             or target_render is None
-            or not mouse_game_adapter.can_project(
+            or not game_actions.can_project(
                 player_render,
                 target_render,
                 sprite=True,
@@ -1117,7 +1117,7 @@ class HuntingAI:
             return
 
         self.attack_clicked_at = time.time()
-        result = mouse_game_adapter.attack(
+        result = game_actions.attack(
             player_render,
             target_render,
             retry_index=self.attack_retry,
@@ -1164,7 +1164,7 @@ class HuntingAI:
             self.attack_clicked_at,
         ):
             self._combat_click_locked = True
-            mouse_game_adapter.note_attack_registered(
+            game_actions.note_attack_registered(
                 self.attack_retry,
                 target_key=self.target_name,
             )
@@ -1205,7 +1205,7 @@ class HuntingAI:
                 return
 
             self.attack_clicked_at = time.time()
-            result = mouse_game_adapter.attack(
+            result = game_actions.attack(
                 player_render,
                 target_render,
                 retry_index=self.attack_retry,
@@ -1320,7 +1320,7 @@ class HuntingAI:
             float(player[0]),
             float(player[1]),
         )
-        result = mouse_game_adapter.loot(player_render, item_pos)
+        result = game_actions.loot(player_render, item_pos)
         self._log(
             "loot_attempt",
             item_id=item_id,
@@ -1464,7 +1464,7 @@ class HuntingAI:
             self.wander_line_points = []
             self.wander_line_index = 0
             if not self._choose_wander_path(snapshot):
-                mouse_game_adapter.release_hold_move()
+                game_actions.release_hold_move()
                 self._stop.wait(0.10)
                 return
 
@@ -1479,7 +1479,7 @@ class HuntingAI:
         try:
             grid, _ = nav_repository.load(str(map_name))
         except Exception:
-            mouse_game_adapter.release_hold_move()
+            game_actions.release_hold_move()
             self.wander_path = []
             self.wander_goal = None
             self._stop.wait(0.08)
@@ -1617,7 +1617,7 @@ class HuntingAI:
                     if clear_walk_line(grid, player, immediate):
                         destination = immediate
                     else:
-                        mouse_game_adapter.release_hold_move()
+                        game_actions.release_hold_move()
                         self._stop.wait(0.06)
                         return
 
@@ -1657,7 +1657,7 @@ class HuntingAI:
                     latched=True,
                 )
             else:
-                mouse_game_adapter.release_hold_move()
+                game_actions.release_hold_move()
                 self.wander_path = []
                 self.wander_goal = None
                 self.wander_line_points = []
@@ -1685,7 +1685,7 @@ class HuntingAI:
         steering_radius = 115 if narrow_corridor else 185
         turn_threshold = 10 if narrow_corridor else 22
 
-        result = mouse_game_adapter.update_hold_direction(
+        result = game_actions.update_hold_direction(
             dx,
             dy,
             radius_px=steering_radius,
@@ -1694,7 +1694,7 @@ class HuntingAI:
 
         if not result.get("ok"):
             # Never substitute an arbitrary screen/cell click during wandering.
-            mouse_game_adapter.release_hold_move()
+            game_actions.release_hold_move()
             self.wander_path = []
             self.wander_goal = None
             self._stop.wait(0.08)
@@ -1722,7 +1722,7 @@ class HuntingAI:
         player = self._position(snapshot)
 
         if actor is not None and player is not None and self.target_pos is not None:
-            if mouse_game_adapter.can_project(
+            if game_actions.can_project(
                 player,
                 self.target_pos,
                 sprite=True,
@@ -1800,7 +1800,7 @@ class HuntingAI:
                 raise RuntimeError(
                     "Classic.exe is not detected. Launch SoulBound and enter the game first."
                 )
-            if not mouse_game_adapter.calibration_valid():
+            if not game_actions.calibration_valid():
                 raise RuntimeError(
                     "A valid screen calibration is required for the current Classic.exe window size."
                 )
@@ -1824,7 +1824,7 @@ class HuntingAI:
     def stop(self) -> dict[str, Any]:
         self._run_id += 1
         self._stop.set()
-        mouse_game_adapter.release_hold_move()
+        game_actions.release_hold_move()
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=1.5)
@@ -1876,7 +1876,7 @@ class HuntingAI:
                     "target_move_reset_tiles": self.target_move_reset_tiles,
                     "combat_confirm_timeout": self.attack_confirm_timeout,
                     "max_attack_retries": self.max_attack_retries,
-                    "sprite_y_offset": mouse_game_adapter.sprite_y_offset,
+                    "sprite_y_offset": game_actions.sprite_y_offset,
                     "direct_attack_click_range": self.direct_attack_click_range,
                     "attack_walk_timeout": self.attack_walk_timeout,
                     "loot_radius": self.loot_radius,
@@ -1884,7 +1884,7 @@ class HuntingAI:
                     "wander_cursor_radius": self.wander_cursor_radius,
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
                     "combat_click_mode": "fresh-frame_0437-confirmed_lock_until_death",
-                    "attack_precision": mouse_game_adapter.precision_snapshot(),
+                    "attack_precision": game_actions.precision_snapshot(),
                     "wander_corridor_mode": "astar_clear_line_only",
                     "wander_progress_mode": "forward_only_smoothed_segments",
                     "steering_mode": "heading_dead_zone_velocity_curve_corner_preview",
@@ -1902,7 +1902,7 @@ class HuntingAI:
                     },
                     "exploration": exploration_planner.snapshot(),
                 },
-                "calibration": mouse_game_adapter.calibration_snapshot(),
+                "calibration": game_actions.calibration_snapshot(),
                 "actions": self.actions[-30:],
                 "architecture": (
                     "OpenKore-style state machine in map coordinates; "
