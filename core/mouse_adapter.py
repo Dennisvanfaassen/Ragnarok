@@ -387,8 +387,8 @@ class MouseGameAdapter:
             float(cy[0]),
         )
 
-        local_x = origin_x - geometry["left"] + cx[1] * dx + cx[2] * dy
-        local_y = origin_y - geometry["top"] + cy[1] * dx + cy[2] * dy
+        local_x = origin_x + cx[1] * dx + cx[2] * dy
+        local_y = origin_y + cy[1] * dx + cy[2] * dy
 
         margin_x = 70
         margin_y = 55
@@ -474,8 +474,8 @@ class MouseGameAdapter:
             float(cx[0]),
             float(cy[0]),
         )
-        local_origin_x = origin_x - geometry["left"]
-        local_origin_y = origin_y - geometry["top"]
+        local_origin_x = origin_x
+        local_origin_y = origin_y
 
         # Only use the affine direction terms. The visual tracker supplies a
         # live player/camera origin so held movement stays centred correctly.
