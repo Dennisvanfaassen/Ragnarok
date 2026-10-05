@@ -502,6 +502,7 @@ class HuntingAI:
                 player,
                 goal,
                 max_expansions=150000,
+                clearance_weight=0.85,
             )
             if path and len(path) >= 2:
                 self._set_wander_route(grid, path, goal)
@@ -527,6 +528,7 @@ class HuntingAI:
                     player,
                     goal,
                     max_expansions=150000,
+                    clearance_weight=0.85,
                 )
                 if path and len(path) >= 2:
                     self._set_wander_route(grid, path, goal)
