@@ -72,6 +72,8 @@ class HuntingAI:
         self.wander_path: list[tuple[int, int]] = []
         self.wander_goal: tuple[int, int] | None = None
         self.wander_progress_index = 0
+        self.wander_line_points: list[tuple[int, int]] = []
+        self.wander_line_index = 0
         self.saved_route_map: str | None = None
         self.saved_route_waypoint_index = 0
         self.saved_route_direction = 1
@@ -460,9 +462,7 @@ class HuntingAI:
                 max_expansions=150000,
             )
             if path and len(path) >= 2:
-                self.wander_path = path
-                self.wander_goal = goal
-                self.wander_progress_index = 0
+                self._set_wander_route(grid, path, goal)
                 self._log(
                     "saved_hunt_route",
                     waypoint_index=self.saved_route_waypoint_index,
@@ -487,9 +487,7 @@ class HuntingAI:
                     max_expansions=150000,
                 )
                 if path and len(path) >= 2:
-                    self.wander_path = path
-                    self.wander_goal = goal
-                    self.wander_progress_index = 0
+                    self._set_wander_route(grid, path, goal)
                     return True
 
             return False
@@ -502,9 +500,7 @@ class HuntingAI:
         if not path:
             return False
 
-        self.wander_path = path
-        self.wander_goal = path[-1]
-        self.wander_progress_index = 0
+        self._set_wander_route(grid, path, path[-1])
         self._log(
             "wander_route",
             goal={"x": self.wander_goal[0], "y": self.wander_goal[1]},
@@ -513,6 +509,50 @@ class HuntingAI:
             exploration=exploration_planner.snapshot(),
         )
         return True
+
+    def _build_straight_wander_segments(
+        self,
+        grid,
+        path: list[tuple[int, int]],
+    ) -> list[tuple[int, int]]:
+        """Compress A* into the longest safe straight walking segments."""
+        if not path:
+            return []
+        if len(path) <= 2:
+            return path[:]
+
+        result = [path[0]]
+        anchor_index = 0
+
+        while anchor_index < len(path) - 1:
+            chosen = anchor_index + 1
+
+            # Pick the furthest later A* cell that can be reached by one
+            # completely walkable straight line from this anchor.
+            for idx in range(len(path) - 1, anchor_index, -1):
+                if clear_walk_line(grid, path[anchor_index], path[idx]):
+                    chosen = idx
+                    break
+
+            result.append(path[chosen])
+            anchor_index = chosen
+
+        return result
+
+    def _set_wander_route(
+        self,
+        grid,
+        path: list[tuple[int, int]],
+        goal: tuple[int, int],
+    ):
+        self.wander_path = path
+        self.wander_goal = goal
+        self.wander_progress_index = 0
+        self.wander_line_points = self._build_straight_wander_segments(
+            grid,
+            path,
+        )
+        self.wander_line_index = 1 if len(self.wander_line_points) > 1 else 0
 
     def _nearest_wander_index(self, player: tuple[int, int]) -> int:
         if not self.wander_path:
@@ -1190,6 +1230,8 @@ class HuntingAI:
             self.wander_path = []
             self.wander_goal = None
             self.wander_progress_index = 0
+            self.wander_line_points = []
+            self.wander_line_index = 0
             if not self._choose_wander_path(snapshot):
                 mouse_game_adapter.release_hold_move()
                 self._stop.wait(0.10)
@@ -1199,6 +1241,8 @@ class HuntingAI:
         if index >= len(self.wander_path) - 1:
             self.wander_path = []
             self.wander_goal = None
+            self.wander_line_points = []
+            self.wander_line_index = 0
             return
 
         try:
@@ -1210,17 +1254,44 @@ class HuntingAI:
             self._stop.wait(0.08)
             return
 
-        destination = self._safe_wander_steering_point(
-            grid,
-            player,
-            index,
-        )
-        if destination is None:
-            # Current route no longer has a safe straight corridor. Replan from
-            # the exact live coordinate rather than steering into a cliff.
+        if not self.wander_line_points:
+            self.wander_line_points = self._build_straight_wander_segments(
+                grid,
+                self.wander_path,
+            )
+            self.wander_line_index = (
+                1 if len(self.wander_line_points) > 1 else 0
+            )
+
+        if self.wander_line_index >= len(self.wander_line_points):
             self.wander_path = []
             self.wander_goal = None
-            self._stop.wait(0.04)
+            self.wander_line_points = []
+            self.wander_line_index = 0
+            return
+
+        destination = self.wander_line_points[self.wander_line_index]
+
+        # Stay committed to one straight segment until its endpoint is reached.
+        # Only then turn the held mouse toward the next segment.
+        if self._tile_distance(player, destination) <= 2:
+            self.wander_line_index += 1
+            if self.wander_line_index >= len(self.wander_line_points):
+                self.wander_path = []
+                self.wander_goal = None
+                self.wander_line_points = []
+                self.wander_line_index = 0
+                return
+            destination = self.wander_line_points[self.wander_line_index]
+
+        # If the live position drifted enough that the planned straight line is
+        # no longer safe, replan. Never steer across blocked cells.
+        if not clear_walk_line(grid, player, destination):
+            self.wander_path = []
+            self.wander_goal = None
+            self.wander_line_points = []
+            self.wander_line_index = 0
+            self._stop.wait(0.03)
             return
 
         dx = destination[0] - player[0]
@@ -1231,8 +1302,8 @@ class HuntingAI:
             player,
             destination,
         )
-        steering_radius = 105 if narrow_corridor else self.wander_cursor_radius
-        turn_threshold = 10 if narrow_corridor else self.wander_turn_pixel_threshold
+        steering_radius = 115 if narrow_corridor else 185
+        turn_threshold = 12 if narrow_corridor else 28
 
         result = mouse_game_adapter.update_hold_direction(
             dx,
@@ -1254,6 +1325,8 @@ class HuntingAI:
             self.message = (
                 f"Hunting route → point {self.saved_route_waypoint_index + 1} "
                 f"({self.wander_goal[0]},{self.wander_goal[1]})"
+                f" · straight segment {self.wander_line_index}/"
+                f"{max(1, len(self.wander_line_points) - 1)}"
                 + (" · narrow corridor" if narrow_corridor else "")
             )
         else:
@@ -1414,7 +1487,7 @@ class HuntingAI:
                     "combat_click_mode": "0437-confirmed_single_click_until_actor_removed",
                     "attack_precision": mouse_game_adapter.precision_snapshot(),
                     "wander_corridor_mode": "astar_clear_line_only",
-                    "wander_progress_mode": "forward_only",
+                    "wander_progress_mode": "forward_only_straight_segments",
                     "saved_hunt_route": {
                         "map": self.saved_route_map,
                         "waypoint_index": self.saved_route_waypoint_index,
