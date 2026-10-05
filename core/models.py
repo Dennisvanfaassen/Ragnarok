@@ -40,6 +40,15 @@ class MonsterLootRule(BaseModel):
     exclude_items: list[str] = Field(default_factory=list)
 
 
+class AvoidZone(BaseModel):
+    map: str = ""
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    label: str = ""
+
+
 class HuntSettings(BaseModel):
     map: str = ""
     monsters: list[str] = Field(default_factory=list)
@@ -49,6 +58,7 @@ class HuntSettings(BaseModel):
     emergency_hp_percent: int = 20
     emergency_action: str = "teleport"  # teleport | stop | none
     navigation_mode: str = "saved_or_explore"  # saved_or_explore | saved_only | explore_only
+    avoid_zones: list[AvoidZone] = Field(default_factory=list)
 
 
 class HealingSettings(BaseModel):
