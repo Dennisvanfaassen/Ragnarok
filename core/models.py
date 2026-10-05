@@ -48,6 +48,7 @@ class HuntSettings(BaseModel):
     teleport_item: str = "Fly Wing"
     emergency_hp_percent: int = 20
     emergency_action: str = "teleport"  # teleport | stop | none
+    navigation_mode: str = "saved_or_explore"  # saved_or_explore | saved_only | explore_only
 
 
 class HealingSettings(BaseModel):
