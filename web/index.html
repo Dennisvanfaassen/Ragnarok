@@ -104,6 +104,25 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
     </section>
 
+    <section class="card full">
+      <h2>Wireshark capture analyzer</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
+        The analyzer only returns packet metadata plus non-secret protocol fields such as version/master_version.
+      </div>
+      <div class="row">
+        <label>Capture file
+          <input id="pcapFile" type="file" accept=".pcap,.pcapng">
+        </label>
+        <label>Recommended capture window
+          <input value="Start before patcher launch; stop after character select" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action secondary" onclick="analyzePcap()">Analyze capture</button>
+      </div>
+    </section>
+
     <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
   </div>
 </main>
@@ -156,6 +175,15 @@ async function refreshHandshake(){
 async function stopHandshake(){
   const r=await fetch('/api/diagnostics/handshake/stop',{method:'POST'});
   out(await r.json());
+}
+async function analyzePcap(){
+  const input=document.getElementById('pcapFile');
+  if(!input.files.length){out('Choose a .pcap or .pcapng file first.');return}
+  const form=new FormData();
+  form.append('file',input.files[0]);
+  const r=await fetch('/api/diagnostics/pcap',{method:'POST',body:form});
+  const data=await r.json();
+  out(data);
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
