@@ -202,6 +202,8 @@ class HuntingAI:
         self.attack_clicked_at = 0.0
         self._combat_click_locked = False
         self._combat_seen = False
+        self._attack_reposition_required = False
+        self._attack_reposition_origin = None
 
     def _lock_actor(self, actor: dict[str, Any], reason: str) -> bool:
         x, y = actor.get("x"), actor.get("y")
@@ -1354,6 +1356,9 @@ class HuntingAI:
             run_id = self._run_id
             self._stop.clear()
             self._clear_target()
+            self.saved_route_map = None
+            self.saved_route_waypoint_index = 0
+            self.saved_route_direction = 1
             self.running = True
             self._thread = threading.Thread(
                 target=self._loop,
