@@ -269,6 +269,40 @@ async def native_action_storage_add(payload: dict):
     return result
 
 
+@app.post("/api/native-action/item/use")
+async def native_action_item_use(payload: dict):
+    try:
+        inventory_index = int(payload.get("inventory_index"))
+        target_id = int(payload.get("target_id"))
+    except Exception:
+        raise HTTPException(400, "inventory_index and target_id are required")
+    result = native_action_bridge.item_use(inventory_index, target_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result)
+    return result
+
+
+@app.post("/api/native-action/shop/request-buy")
+async def native_action_shop_request_buy(payload: dict):
+    try:
+        actor_id = int(payload.get("actor_id"))
+    except Exception:
+        raise HTTPException(400, "actor_id is required")
+    result = native_action_bridge.request_npc_buy(actor_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result)
+    return result
+
+
+@app.post("/api/native-action/shop/buy")
+async def native_action_shop_buy(payload: dict):
+    rows = list(payload.get("items") or [])
+    result = native_action_bridge.buy_bulk(rows)
+    if not result.get("ok"):
+        raise HTTPException(400, result)
+    return result
+
+
 @app.post("/api/native-action/interaction-trace/start")
 async def native_action_interaction_trace_start(payload: dict | None = None):
     payload = payload or {}
