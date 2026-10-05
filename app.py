@@ -196,6 +196,16 @@ async def clear_authenticated_client_action_trace():
     return authenticated_client_monitor.clear_client_action_trace()
 
 
+@app.get("/api/diagnostics/authenticated-client/item-packet-trace")
+async def authenticated_client_item_packet_trace():
+    return authenticated_client_monitor.item_packet_trace_snapshot()
+
+
+@app.post("/api/diagnostics/authenticated-client/item-packet-trace/clear")
+async def clear_authenticated_client_item_packet_trace():
+    return authenticated_client_monitor.clear_item_packet_trace()
+
+
 @app.post("/api/native-action/start")
 async def start_native_action_bridge():
     try:
