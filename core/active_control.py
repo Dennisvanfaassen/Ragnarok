@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import ctypes
-import math
 import threading
 import time
 from ctypes import wintypes
 from typing import Any
 
-from core.pathing import build_pathing_state, nav_repository
+from core.pathing import (
+    build_pathing_state,
+    clear_walk_line,
+    nav_repository,
+)
 from core.state import app_state
 from core.targeting import build_targeting_state
 from diagnostics.authenticated_client import authenticated_client_monitor
@@ -34,11 +37,7 @@ class RECT(ctypes.Structure):
 
 
 class ActiveHuntController:
-    """Drive the authenticated Classic.exe with ordinary mouse input.
-
-    Network traffic remains read-only. Exact map/actor state comes from the
-    authenticated observer; this controller only sends normal Windows clicks.
-    """
+    """Drive Classic.exe with ordinary mouse input using live network state."""
 
     def __init__(self):
         self._lock = threading.RLock()
@@ -49,22 +48,36 @@ class ActiveHuntController:
         self._message = "Idle"
         self._last_click: dict[str, Any] | None = None
         self._actions: list[dict[str, Any]] = []
+        self._engaged_target_id: int | None = None
+        self._engaged_target_name: str | None = None
 
-        # Default Ragnarok isometric projection at normal zoom. These values
-        # are intentionally configurable from the dashboard.
         self.tile_width = 40.0
         self.tile_height = 20.0
         self.max_path_lookahead = 5
         self.attack_range_tiles = 1
-        self.move_interval = 0.30
-        self.attack_interval = 0.55
+
+        # Keep clicks comfortably inside the world viewport.
+        self.max_screen_x = 360
+        self.max_screen_y = 210
 
     def configure(self, payload: dict[str, Any]):
         with self._lock:
-            self.tile_width = max(10.0, min(100.0, float(payload.get("tile_width", self.tile_width))))
-            self.tile_height = max(5.0, min(60.0, float(payload.get("tile_height", self.tile_height))))
-            self.max_path_lookahead = max(1, min(10, int(payload.get("lookahead", self.max_path_lookahead))))
-            self.attack_range_tiles = max(1, min(8, int(payload.get("attack_range", self.attack_range_tiles))))
+            self.tile_width = max(
+                10.0,
+                min(100.0, float(payload.get("tile_width", self.tile_width))),
+            )
+            self.tile_height = max(
+                5.0,
+                min(60.0, float(payload.get("tile_height", self.tile_height))),
+            )
+            self.max_path_lookahead = max(
+                1,
+                min(10, int(payload.get("lookahead", self.max_path_lookahead))),
+            )
+            self.attack_range_tiles = max(
+                1,
+                min(8, int(payload.get("attack_range", self.attack_range_tiles))),
+            )
 
     def _log(self, action: str, **details):
         entry = {"time": time.time(), "action": action, **details}
@@ -79,7 +92,9 @@ class ActiveHuntController:
             return None
 
         result = {"hwnd": None}
-        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        EnumWindowsProc = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, wintypes.HWND, wintypes.LPARAM
+        )
 
         def callback(hwnd, _lparam):
             if not user32.IsWindowVisible(hwnd):
@@ -104,8 +119,6 @@ class ActiveHuntController:
         if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
             return None
 
-        # RO's world viewport occupies almost the whole client. Slightly above
-        # geometric center avoids bottom UI bars on classic skins.
         point = POINT(
             int((rect.right - rect.left) * 0.50),
             int((rect.bottom - rect.top) * 0.46),
@@ -115,10 +128,13 @@ class ActiveHuntController:
         return int(point.x), int(point.y)
 
     def _map_delta_to_screen(self, dx: int, dy: int) -> tuple[int, int]:
-        # Ragnarok map Y increases north/up while screen Y increases downward.
         sx = (dx - dy) * (self.tile_width / 2.0)
         sy = -(dx + dy) * (self.tile_height / 2.0)
         return int(round(sx)), int(round(sy))
+
+    def _screen_offset_is_safe(self, dx: int, dy: int) -> bool:
+        off_x, off_y = self._map_delta_to_screen(dx, dy)
+        return abs(off_x) <= self.max_screen_x and abs(off_y) <= self.max_screen_y
 
     def _click_screen(self, hwnd: int, x: int, y: int):
         user32.ShowWindow(hwnd, SW_RESTORE)
@@ -147,10 +163,10 @@ class ActiveHuntController:
         dy = target_y - player_y
         off_x, off_y = self._map_delta_to_screen(dx, dy)
 
-        # Avoid clicks far outside the visible field if the path planner ever
-        # feeds us an unexpectedly distant waypoint.
-        off_x = max(-420, min(420, off_x))
-        off_y = max(-260, min(260, off_y))
+        # Never clamp a distant point to the screen edge; that changes the
+        # intended map tile. Refuse it and let the caller pick a nearer path cell.
+        if abs(off_x) > self.max_screen_x or abs(off_y) > self.max_screen_y:
+            return False
 
         click_x = center[0] + off_x
         click_y = center[1] + off_y
@@ -166,15 +182,125 @@ class ActiveHuntController:
         return True
 
     @staticmethod
-    def _target_still_present(snapshot: dict[str, Any], target_id: int) -> bool:
+    def _find_actor(snapshot: dict[str, Any], target_id: int) -> dict[str, Any] | None:
         actors = ((snapshot.get("live_state") or {}).get("actors") or [])
-        return any(int(a.get("id") or -1) == int(target_id) for a in actors)
+        for actor in actors:
+            if int(actor.get("id") or -1) == int(target_id):
+                return actor
+        return None
+
+    def _wait_for_movement_to_finish(
+        self,
+        clicked_x: int,
+        clicked_y: int,
+        target_id: int,
+    ):
+        """Wait for the current RO walk to settle before another movement click."""
+        deadline = time.time() + 7.0
+        moved = False
+        previous: tuple[int, int] | None = None
+        last_change = time.time()
+
+        while not self._stop.is_set() and time.time() < deadline:
+            self._stop.wait(0.10)
+            snapshot = authenticated_client_monitor.snapshot()
+
+            # If the target vanished while walking, stop this route immediately.
+            if self._find_actor(snapshot, target_id) is None:
+                return
+
+            world = (snapshot.get("live_state") or {}).get("world") or {}
+            x, y = world.get("x"), world.get("y")
+            if x is None or y is None:
+                continue
+
+            current = (int(x), int(y))
+            if previous is None:
+                previous = current
+                continue
+
+            if current != previous:
+                moved = True
+                last_change = time.time()
+                previous = current
+
+            if max(abs(current[0] - clicked_x), abs(current[1] - clicked_y)) <= 1:
+                return
+
+            # Once movement began, wait until coordinates have been stable for
+            # a moment. This prevents queueing another click mid-walk.
+            if moved and time.time() - last_change >= 0.55:
+                return
+
+    def _furthest_visible_clear_path_point(
+        self,
+        grid,
+        start: tuple[int, int],
+        path_preview: list[dict[str, Any]],
+    ) -> tuple[int, int] | None:
+        if len(path_preview) < 2:
+            return None
+
+        # Walk backwards from the target end and pick the furthest path cell
+        # that is both directly reachable and actually inside the game viewport.
+        for item in reversed(path_preview[1:]):
+            point = (int(item["x"]), int(item["y"]))
+            dx = point[0] - start[0]
+            dy = point[1] - start[1]
+            if not self._screen_offset_is_safe(dx, dy):
+                continue
+            if clear_walk_line(grid, start, point):
+                return point
+
+        first = path_preview[1]
+        return int(first["x"]), int(first["y"])
+
+    def _wait_for_locked_target_death(self):
+        """After one monster click, issue no more clicks until that actor is gone."""
+        target_id = self._engaged_target_id
+        target_name = self._engaged_target_name or "monster"
+        if target_id is None:
+            return
+
+        self._status = "engaged"
+        self._message = f"Engaged {target_name}; waiting for it to die"
+        app_state.patch_runtime(
+            current_action="Fighting target",
+            message=self._message,
+        )
+
+        while not self._stop.is_set():
+            snapshot = authenticated_client_monitor.snapshot()
+            if self._find_actor(snapshot, target_id) is None:
+                self._log(
+                    "target_gone",
+                    target_id=target_id,
+                    target_name=target_name,
+                )
+                self._engaged_target_id = None
+                self._engaged_target_name = None
+                self._status = "running"
+                self._message = f"{target_name} defeated; selecting next target"
+                app_state.patch_runtime(
+                    current_action="Target defeated",
+                    message=self._message,
+                    target=None,
+                )
+                self._stop.wait(0.25)
+                return
+
+            # No mouse input while the target remains present.
+            self._stop.wait(0.15)
 
     def _loop(self):
         self._status = "running"
         self._message = "Searching for target"
 
         while not self._stop.is_set():
+            if self._engaged_target_id is not None:
+                self._wait_for_locked_target_death()
+                continue
+
             snapshot = authenticated_client_monitor.snapshot()
             profile = app_state.get_profile()
             world = (snapshot.get("live_state") or {}).get("world") or {}
@@ -185,8 +311,9 @@ class ActiveHuntController:
                 continue
 
             px, py = world.get("x"), world.get("y")
-            if px is None or py is None:
-                self._message = "Waiting for live coordinates"
+            map_name = world.get("map")
+            if px is None or py is None or not map_name:
+                self._message = "Waiting for live map/coordinates"
                 self._stop.wait(0.4)
                 continue
 
@@ -203,7 +330,8 @@ class ActiveHuntController:
 
             target_id = int(target["id"])
             tx, ty = int(target["x"]), int(target["y"])
-            distance_tiles = max(abs(tx - int(px)), abs(ty - int(py)))
+            start = (int(px), int(py))
+            target_point = (tx, ty)
 
             app_state.patch_runtime(
                 target=f"{target.get('name')} @ {tx},{ty}",
@@ -215,24 +343,46 @@ class ActiveHuntController:
                 self._stop.wait(0.5)
                 continue
 
-            if distance_tiles <= self.attack_range_tiles:
+            try:
+                grid, _source = nav_repository.load(str(map_name))
+            except Exception as exc:
+                self._status = "path_error"
+                self._message = str(exc)
+                self._stop.wait(0.5)
+                continue
+
+            # Preferred behavior: if the monster is visible and there is a clear
+            # straight walk line, click the monster itself exactly once. RO then
+            # performs its normal walk-to-target + auto attack behavior.
+            dx = tx - start[0]
+            dy = ty - start[1]
+            if (
+                self._screen_offset_is_safe(dx, dy)
+                and clear_walk_line(grid, start, target_point)
+            ):
                 self._status = "attacking"
-                self._message = f"Attacking {target.get('name')}"
+                self._message = f"Clicking {target.get('name')} once"
                 app_state.patch_runtime(
-                    current_action="Attacking",
+                    current_action="Engaging target",
                     message=self._message,
                 )
-                self._click_map_position(
+
+                if self._click_map_position(
                     hwnd,
-                    int(px),
-                    int(py),
+                    start[0],
+                    start[1],
                     tx,
                     ty,
                     kind="attack_click",
-                )
-                self._stop.wait(self.attack_interval)
-                continue
+                ):
+                    self._engaged_target_id = target_id
+                    self._engaged_target_name = str(target.get("name") or "monster")
+                    self._wait_for_locked_target_death()
+                    continue
 
+            # Direct path is blocked (or target is outside our safe click area).
+            # Use A* only to get around the obstacle, then click as far along the
+            # currently clear corridor as possible with one movement click.
             pathing = build_pathing_state(snapshot, targeting, nav_repository)
             path_preview = pathing.get("path_preview") or []
             if not pathing.get("path_found") or len(path_preview) < 2:
@@ -245,44 +395,43 @@ class ActiveHuntController:
                 self._stop.wait(0.5)
                 continue
 
-            index = min(self.max_path_lookahead, len(path_preview) - 1)
-            step = path_preview[index]
-            sx, sy = int(step["x"]), int(step["y"])
+            move_point = self._furthest_visible_clear_path_point(
+                grid,
+                start,
+                path_preview,
+            )
+            if move_point is None:
+                self._status = "path_error"
+                self._message = "No visible clear movement point found"
+                self._stop.wait(0.5)
+                continue
 
+            mx, my = move_point
             self._status = "walking"
             self._message = (
-                f"Walking to {target.get('name')} via {sx},{sy}"
+                f"Path blocked; moving toward {target.get('name')} via {mx},{my}"
             )
             app_state.patch_runtime(
-                current_action="Walking to target",
+                current_action="Walking around obstacle",
                 message=self._message,
             )
-            self._click_map_position(
+
+            if self._click_map_position(
                 hwnd,
-                int(px),
-                int(py),
-                sx,
-                sy,
+                start[0],
+                start[1],
+                mx,
+                my,
                 kind="move_click",
-            )
+            ):
+                self._wait_for_movement_to_finish(mx, my, target_id)
+            else:
+                self._message = "Movement point was outside safe viewport"
 
-            # Wait until network state confirms movement before issuing the
-            # next route click, otherwise clicks can queue faster than RO walks.
-            start_pos = (int(px), int(py))
-            deadline = time.time() + 2.5
-            while not self._stop.is_set() and time.time() < deadline:
-                self._stop.wait(0.10)
-                fresh = authenticated_client_monitor.snapshot()
-                fresh_world = (fresh.get("live_state") or {}).get("world") or {}
-                new_pos = (fresh_world.get("x"), fresh_world.get("y"))
-                if new_pos[0] is not None and new_pos[1] is not None:
-                    if (int(new_pos[0]), int(new_pos[1])) != start_pos:
-                        break
-                if not self._target_still_present(fresh, target_id):
-                    break
+            self._stop.wait(0.15)
 
-            self._stop.wait(self.move_interval)
-
+        self._engaged_target_id = None
+        self._engaged_target_name = None
         self._running = False
         self._status = "stopped"
         self._message = "Active hunt stopped"
@@ -304,6 +453,8 @@ class ActiveHuntController:
                     "Classic.exe is not detected. Launch SoulBound and enter the game first."
                 )
             self._stop.clear()
+            self._engaged_target_id = None
+            self._engaged_target_name = None
             self._running = True
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
@@ -315,6 +466,8 @@ class ActiveHuntController:
         if thread and thread.is_alive():
             thread.join(timeout=1.5)
         self._running = False
+        self._engaged_target_id = None
+        self._engaged_target_name = None
         self._status = "stopped"
         self._message = "Active hunt stopped"
         return self.snapshot()
@@ -325,6 +478,14 @@ class ActiveHuntController:
                 "running": self._running,
                 "status": self._status,
                 "message": self._message,
+                "engaged_target": (
+                    {
+                        "id": self._engaged_target_id,
+                        "name": self._engaged_target_name,
+                    }
+                    if self._engaged_target_id is not None
+                    else None
+                ),
                 "settings": {
                     "tile_width": self.tile_width,
                     "tile_height": self.tile_height,
