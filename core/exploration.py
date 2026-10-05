@@ -27,6 +27,7 @@ class ExplorationPlanner:
         self.turn_penalty = 2.6
         self.reverse_penalty = 8.0
         self.path_coverage_weight = 1.8
+        self.frontier_bias_enabled = True
 
         self._map: str | None = None
         self._visits: dict[tuple[int, int], float] = defaultdict(float)
@@ -134,13 +135,13 @@ class ExplorationPlanner:
         route_efficiency = distance / max(1.0, len(path) - 1)
 
         reverse = 0.0
-        if self._heading is not None:
+        if self.frontier_bias_enabled and self._heading is not None:
             dot = max(-1.0, min(1.0, self._heading[0] * direction[0] + self._heading[1] * direction[1]))
             if dot < -0.20:
                 reverse = (-dot - 0.20) / 0.80
 
         recent_path_penalty = 0.0
-        if self._recent_positions:
+        if self.frontier_bias_enabled and self._recent_positions:
             for point in sampled_path:
                 nearest = min(
                     math.hypot(point[0] - p[0], point[1] - p[1])
@@ -155,7 +156,7 @@ class ExplorationPlanner:
             - turn_penalty * self.turn_penalty
             - reverse * self.reverse_penalty
             - coverage * self.coverage_weight
-            - path_coverage * self.path_coverage_weight
+            - path_coverage * (self.path_coverage_weight if self.frontier_bias_enabled else 0.0)
             - recent_path_penalty * 5.0
             - self._goal_recent_penalty(goal)
             + route_efficiency * self.distance_weight
@@ -167,7 +168,10 @@ class ExplorationPlanner:
         map_name: str,
         grid: NavGrid,
         start: tuple[int, int],
+        *,
+        frontier_bias: bool = True,
     ) -> list[tuple[int, int]] | None:
+        self.frontier_bias_enabled = bool(frontier_bias)
         self.observe(map_name, start)
 
         candidates: list[tuple[float, list[tuple[int, int]]]] = []
@@ -270,6 +274,7 @@ class ExplorationPlanner:
             ),
             "visited_cells": len(self._visits),
             "recent_position_count": len(self._recent_positions),
+            "frontier_bias_enabled": self.frontier_bias_enabled,
             "recent_goals": [
                 {"x": x, "y": y} for x, y in list(self._recent_goals)
             ],
