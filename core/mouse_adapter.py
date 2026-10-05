@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from diagnostics.authenticated_client import authenticated_client_monitor
+from diagnostics.hunt_recorder import hunting_diagnostic_recorder
 
 
 user32 = ctypes.windll.user32
@@ -513,6 +514,15 @@ class MouseGameAdapter:
         self._hold_active = True
         self._hold_hwnd = hwnd
         self._hold_point = point
+        hunting_diagnostic_recorder.event(
+            "mouse",
+            "hold_begin",
+            {
+                "screen": {"x": point[0], "y": point[1]},
+                "direction": {"dx": dx, "dy": dy},
+                "radius_px": radius_px,
+            },
+        )
         return {
             "ok": True,
             "screen": {"x": point[0], "y": point[1]},
@@ -547,6 +557,21 @@ class MouseGameAdapter:
         ):
             user32.SetCursorPos(int(point[0]), int(point[1]))
             self._hold_point = point
+            hunting_diagnostic_recorder.event(
+                "mouse",
+                "steering_turn",
+                {
+                    "from_screen": (
+                        {"x": last[0], "y": last[1]} if last else None
+                    ),
+                    "to_screen": {"x": point[0], "y": point[1]},
+                    "direction": {"dx": dx, "dy": dy},
+                    "radius_px": radius_px,
+                    "min_pixel_change": min_pixel_change,
+                },
+                screenshot=True,
+                screenshot_cooldown=0.40,
+            )
 
         return {
             "ok": True,
@@ -615,11 +640,24 @@ class MouseGameAdapter:
         }
 
     def release_hold_move(self):
+        was_active = self._hold_active
+        last_point = self._hold_point
         if self._hold_active:
             user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
         self._hold_active = False
         self._hold_hwnd = None
         self._hold_point = None
+        if was_active:
+            hunting_diagnostic_recorder.event(
+                "mouse",
+                "hold_release",
+                {
+                    "last_screen": (
+                        {"x": last_point[0], "y": last_point[1]}
+                        if last_point else None
+                    )
+                },
+            )
 
     def loot(
         self,
@@ -635,6 +673,17 @@ class MouseGameAdapter:
             return {"ok": False, "reason": "item_not_clickable"}
 
         self.release_hold_move()
+        hunting_diagnostic_recorder.event(
+            "mouse",
+            "loot_click",
+            {
+                "screen": {"x": point[0], "y": point[1]},
+                "map_from": {"x": player[0], "y": player[1]},
+                "map_item": {"x": item[0], "y": item[1]},
+            },
+            screenshot=True,
+            screenshot_cooldown=0.20,
+        )
         self._click_screen(hwnd, point[0], point[1])
         return {
             "ok": True,
@@ -681,6 +730,18 @@ class MouseGameAdapter:
             return {"ok": False, "reason": "target_not_clickable"}
 
         click_x, click_y = int(point[0]), int(point[1])
+        hunting_diagnostic_recorder.event(
+            "mouse",
+            "attack_click",
+            {
+                "screen": {"x": click_x, "y": click_y},
+                "map_from": {"x": player[0], "y": player[1]},
+                "map_target": {"x": target[0], "y": target[1]},
+                "sprite_y_offset": offset,
+                "retry_index": retry_index,
+            },
+            screenshot=True,
+        )
         self._click_screen(hwnd, click_x, click_y)
         return {
             "ok": True,
