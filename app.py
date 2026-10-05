@@ -60,6 +60,32 @@ async def probe_server(profile_id: str):
     return {"reachable": result.reachable, "message": result.message}
 
 
+@app.post("/api/server/{profile_id}/login-probe")
+async def login_probe(profile_id: str, payload: dict):
+    username = str(payload.get("username", ""))
+    password = str(payload.get("password", ""))
+    client_hash = str(payload.get("client_hash", "")).strip() or None
+
+    profile = load_server_profile(profile_id)
+    try:
+        result = await RagnarokSession(profile).login_probe(
+            username,
+            password,
+            client_hash_hex=client_hash,
+        )
+        return {
+            "connected": result.connected,
+            "accepted": result.accepted,
+            "response_opcode": result.response_opcode,
+            "response_length": result.response_length,
+            "message": result.message,
+            "details": result.details,
+            "credentials_saved": False,
+        }
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.post("/api/bot/start")
 async def start_bot():
     engine.start()
