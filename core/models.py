@@ -31,7 +31,11 @@ class ServerProfile(BaseModel):
 class MonsterLootRule(BaseModel):
     monster: str
     enabled: bool = True
-    loot_mode: str = "all"  # all | selected | excluded | none
+    behavior: str = "attack"  # attack | aggressor_only | ignore | teleport
+    priority: int = 50        # 1 = highest priority
+    min_distance: int = 0
+    max_distance: int = 0     # 0 = unlimited
+    loot_mode: str = "all"    # all | selected | excluded | none
     include_items: list[str] = Field(default_factory=list)
     exclude_items: list[str] = Field(default_factory=list)
 
@@ -41,6 +45,9 @@ class HuntSettings(BaseModel):
     monsters: list[str] = Field(default_factory=list)
     loot_all: bool = True
     monster_rules: list[MonsterLootRule] = Field(default_factory=list)
+    teleport_item: str = "Fly Wing"
+    emergency_hp_percent: int = 20
+    emergency_action: str = "teleport"  # teleport | stop | none
 
 
 class HealingSettings(BaseModel):
