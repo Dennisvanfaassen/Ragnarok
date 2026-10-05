@@ -442,6 +442,25 @@ rpc.exports = {
         };
     },
 
+    storageClose() {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+
+        // Standard Ragnarok/OpenKore storage_close for this protocol family.
+        // The server acknowledges with ZC_CLOSE_STORE (00F8).
+        const bytes = [0xf7, 0x00];
+        const packet = Memory.alloc(2);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 2, 0);
+
+        return {
+            ok: result === 2,
+            bytes_sent: result,
+            packet_hex: 'f7 00',
+            socket: mapSocket.toString()
+        };
+    },
+
     itemUse(index, targetId) {
         if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
         if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
@@ -766,6 +785,27 @@ class NativeActionBridge:
         result["executed"] = bool(result.get("ok"))
         result["command"] = "storage_add"
         self._record({"event": "direct_storage_add", "result": result})
+        return result
+
+    def storage_close(self) -> dict[str, Any]:
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "executed": False, "reason": "bridge_not_running"}
+        if not self._agent_status().get("socket_learned"):
+            return {"ok": False, "executed": False, "reason": "map_socket_not_learned"}
+        try:
+            result = dict(script.exports_sync.storage_close())
+        except Exception as exc:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+            }
+        result["executed"] = bool(result.get("ok"))
+        result["command"] = "storage_close"
+        self._record({"event": "direct_storage_close", "result": result})
         return result
 
     def item_use(self, inventory_index: int, target_id: int) -> dict[str, Any]:
