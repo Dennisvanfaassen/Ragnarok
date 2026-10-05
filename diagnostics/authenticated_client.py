@@ -97,6 +97,7 @@ class AuthenticatedClientMonitor:
     def __init__(self):
         self._lock = threading.RLock()
         self._events: deque[dict[str, Any]] = deque(maxlen=500)
+        self._client_action_trace: deque[dict[str, Any]] = deque(maxlen=200)
         self._sniffer: AsyncSniffer | None = None
         self._watcher: threading.Thread | None = None
         self._stop = threading.Event()
@@ -129,6 +130,7 @@ class AuthenticatedClientMonitor:
         self._self_move: dict[str, Any] | None = None
         self._floor_items: dict[int, dict[str, Any]] = {}
         self._aggressors: dict[int, float] = {}
+        self._client_action_trace.clear()
         self._parsed_counts: dict[str, int] = {
             "map_change": 0,
             "invalid_map_change": 0,
@@ -494,6 +496,7 @@ class AuthenticatedClientMonitor:
     def _parse_client_payload(self, payload: bytes):
         i = 0
         size = len(payload)
+        payload_timestamp = time.time()
         while i + 2 <= size:
             opcode = int.from_bytes(payload[i:i + 2], "little")
 
@@ -506,14 +509,44 @@ class AuthenticatedClientMonitor:
             # This is the strongest passive confirmation that a mouse click
             # actually registered on a specific actor in Classic.exe.
             if opcode == 0x0437 and i + 7 <= size:
-                target_id = int.from_bytes(payload[i + 2:i + 6], "little")
-                action_type = int(payload[i + 6])
-                self._world["last_client_action"] = {
-                    "timestamp": time.time(),
+                packet = payload[i:i + 7]
+                target_id = int.from_bytes(packet[2:6], "little")
+                action_type = int(packet[6])
+                now = time.time()
+                action = {
+                    "timestamp": now,
                     "target_id": target_id,
                     "type": action_type,
                     "opcode": "0x0437",
                 }
+                self._world["last_client_action"] = action
+
+                actor = self._actors.get(target_id)
+                trace = {
+                    **action,
+                    "packet_hex": packet.hex(" "),
+                    "packet_length": len(packet),
+                    "payload_offset": i,
+                    "tcp_payload_length": size,
+                    "tcp_payload_hex": payload.hex(" ")[:1024],
+                    "payload_timestamp": payload_timestamp,
+                    "actor": (
+                        {
+                            "id": int(actor.get("id")),
+                            "name": actor.get("name"),
+                            "kind": actor.get("kind"),
+                            "x": actor.get("x"),
+                            "y": actor.get("y"),
+                        }
+                        if actor is not None else None
+                    ),
+                    "player": {
+                        "map": self._world.get("map"),
+                        "x": self._world.get("x"),
+                        "y": self._world.get("y"),
+                    },
+                }
+                self._client_action_trace.append(trace)
                 self._parsed_counts["client_action"] += 1
                 i += 7
                 continue
@@ -661,6 +694,23 @@ class AuthenticatedClientMonitor:
             self._events.clear()
             self._reset_world_state()
 
+    def clear_client_action_trace(self) -> dict[str, Any]:
+        with self._lock:
+            self._client_action_trace.clear()
+        return self.client_action_trace_snapshot()
+
+    def client_action_trace_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            trace = list(self._client_action_trace)
+        return {
+            "count": len(trace),
+            "actions": trace,
+            "note": (
+                "Read-only capture of outgoing Classic.exe actor-action packets. "
+                "No packets are injected or modified."
+            ),
+        }
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             events = list(self._events)
@@ -801,6 +851,7 @@ class AuthenticatedClientMonitor:
                     "parsed_packets": dict(self._parsed_counts),
                 },
                 "events": events[-100:],
+                "client_action_trace_count": len(self._client_action_trace),
                 "note": (
                     "Observer mode only. Live Game State is decoded from the "
                     "authenticated client's normal server traffic."
