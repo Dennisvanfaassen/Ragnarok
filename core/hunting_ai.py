@@ -70,6 +70,8 @@ class HuntingAI:
         self.wander_turn_pixel_threshold = 20
         self.wander_path: list[tuple[int, int]] = []
         self.wander_goal: tuple[int, int] | None = None
+        self.wander_progress_index = 0
+        self._attack_reposition_required = False
 
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
@@ -384,6 +386,7 @@ class HuntingAI:
 
         self.wander_path = path
         self.wander_goal = path[-1]
+        self.wander_progress_index = 0
         self._log(
             "wander_route",
             goal={"x": self.wander_goal[0], "y": self.wander_goal[1]},
@@ -396,14 +399,25 @@ class HuntingAI:
     def _nearest_wander_index(self, player: tuple[int, int]) -> int:
         if not self.wander_path:
             return 0
-        best_i = 0
+
+        # Progress can only move forward. Search a limited window ahead from
+        # the last accepted path index so crossing/looping routes cannot make
+        # the character suddenly turn back toward an older path segment.
+        start = max(0, min(self.wander_progress_index, len(self.wander_path) - 1))
+        end = min(len(self.wander_path), start + 24)
+
+        best_i = start
         best_d = 999999
-        for i, point in enumerate(self.wander_path):
+        for i in range(start, end):
+            point = self.wander_path[i]
             d = max(abs(point[0] - player[0]), abs(point[1] - player[1]))
             if d < best_d:
                 best_d = d
                 best_i = i
-        return best_i
+
+        self.wander_progress_index = max(self.wander_progress_index, best_i)
+        return self.wander_progress_index
+
 
     def _step_searching(self, snapshot: dict[str, Any]):
         if self._acquire_aggressor(snapshot):
@@ -535,7 +549,8 @@ class HuntingAI:
             grid = None
 
         if (
-            mouse_game_adapter.can_project(
+            not self._attack_reposition_required
+            and mouse_game_adapter.can_project(
                 player,
                 self.target_pos,
                 sprite=True,
@@ -650,6 +665,9 @@ class HuntingAI:
         if end_pos is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
             return
+
+        if end_pos != player:
+            self._attack_reposition_required = False
 
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
@@ -808,9 +826,10 @@ class HuntingAI:
         # not spam-click it: refresh/reposition once, then try again naturally.
         self.attack_retry = 0
         self._combat_click_locked = False
+        self._attack_reposition_required = True
         self._set_state(
             "ROUTING",
-            f"Click missed {self.target_name}; refreshing approach",
+            f"Click missed {self.target_name}; repositioning before another try",
         )
 
 
@@ -1035,6 +1054,7 @@ class HuntingAI:
             # visible stop/click/start cycle.
             self.wander_path = []
             self.wander_goal = None
+            self.wander_progress_index = 0
             if not self._choose_wander_path(snapshot):
                 mouse_game_adapter.release_hold_move()
                 self._stop.wait(0.10)
@@ -1247,6 +1267,7 @@ class HuntingAI:
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
                     "combat_click_mode": "0437-confirmed_single_click_until_actor_removed",
                     "wander_corridor_mode": "astar_clear_line_only",
+                    "wander_progress_mode": "forward_only",
                     "exploration": exploration_planner.snapshot(),
                 },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
