@@ -658,14 +658,18 @@ class AuthenticatedClientMonitor:
                             (now - float(actor["move_started_at"])) / duration,
                         ),
                     )
-                    actor["x"] = int(round(
+                    render_x = (
                         int(actor["from_x"])
                         + (int(actor["to_x"]) - int(actor["from_x"])) * progress
-                    ))
-                    actor["y"] = int(round(
+                    )
+                    render_y = (
                         int(actor["from_y"])
                         + (int(actor["to_y"]) - int(actor["from_y"])) * progress
-                    ))
+                    )
+                    actor["render_x"] = round(render_x, 3)
+                    actor["render_y"] = round(render_y, 3)
+                    actor["x"] = int(round(render_x))
+                    actor["y"] = int(round(render_y))
                     actor["move_progress"] = round(progress, 3)
                 actors.append(actor)
 
@@ -697,14 +701,18 @@ class AuthenticatedClientMonitor:
                         (now - float(move["move_started_at"])) / duration,
                     ),
                 )
-                world["x"] = int(round(
+                render_x = (
                     int(move["from_x"])
                     + (int(move["to_x"]) - int(move["from_x"])) * progress
-                ))
-                world["y"] = int(round(
+                )
+                render_y = (
                     int(move["from_y"])
                     + (int(move["to_y"]) - int(move["from_y"])) * progress
-                ))
+                )
+                world["render_x"] = round(render_x, 3)
+                world["render_y"] = round(render_y, 3)
+                world["x"] = int(round(render_x))
+                world["y"] = int(round(render_y))
                 world["move_progress"] = round(progress, 3)
                 world["move_destination"] = {
                     "x": int(move["to_x"]),
@@ -714,6 +722,16 @@ class AuthenticatedClientMonitor:
                     self._world["x"] = int(move["to_x"])
                     self._world["y"] = int(move["to_y"])
                     self._self_move = None
+
+            if world.get("render_x") is None and world.get("x") is not None:
+                world["render_x"] = float(world["x"])
+            if world.get("render_y") is None and world.get("y") is not None:
+                world["render_y"] = float(world["y"])
+            for actor in actors:
+                if actor.get("render_x") is None and actor.get("x") is not None:
+                    actor["render_x"] = float(actor["x"])
+                if actor.get("render_y") is None and actor.get("y") is not None:
+                    actor["render_y"] = float(actor["y"])
 
             hp = world.get("hp")
             hp_max = world.get("hp_max")
