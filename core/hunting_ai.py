@@ -467,12 +467,16 @@ class HuntingAI:
         if not actors:
             return False
         if player:
-            actors.sort(
-                key=lambda actor: max(
+            def aggressor_sort_key(actor: dict[str, Any]):
+                rule = self._monster_rule(actor.get("name"))
+                priority = int(rule.priority) if rule is not None else 50
+                distance = max(
                     abs(int(actor.get("x") or player[0]) - player[0]),
                     abs(int(actor.get("y") or player[1]) - player[1]),
                 )
-            )
+                return (priority, distance, int(actor.get("id") or 0))
+
+            actors.sort(key=aggressor_sort_key)
         return self._lock_actor(actors[0], "aggressor")
 
     def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
