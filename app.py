@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 
 from core.engine import engine
 from core.models import BotProfile, ServerProfile
@@ -22,6 +22,7 @@ from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
 from diagnostics.pcap_scan import analyze_capture
 from diagnostics.authenticated_client import authenticated_client_monitor
+from diagnostics.hunt_recorder import hunting_diagnostic_recorder
 
 
 ROOT = Path(__file__).resolve().parent
@@ -350,3 +351,36 @@ async def delete_current_hunt_route():
     snapshot = authenticated_client_monitor.snapshot()
     world = (snapshot.get("live_state") or {}).get("world") or {}
     return hunt_route_store.delete(world.get("map"))
+
+
+@app.post("/api/diagnostics/hunting/start")
+async def start_hunting_diagnostic():
+    try:
+        return hunting_diagnostic_recorder.start()
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/diagnostics/hunting/stop")
+async def stop_hunting_diagnostic():
+    try:
+        return hunting_diagnostic_recorder.stop()
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/diagnostics/hunting")
+async def hunting_diagnostic_state():
+    return hunting_diagnostic_recorder.snapshot()
+
+
+@app.get("/api/diagnostics/hunting/download")
+async def download_hunting_diagnostic():
+    path = hunting_diagnostic_recorder.download_path()
+    if path is None:
+        raise HTTPException(404, "No diagnostic ZIP is ready yet.")
+    return FileResponse(
+        path=str(path),
+        filename=path.name,
+        media_type="application/zip",
+    )
