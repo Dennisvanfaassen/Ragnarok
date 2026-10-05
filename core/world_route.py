@@ -259,6 +259,48 @@ class WorldRoutePlanner:
 
         return None
 
+    def route_to_map(
+        self,
+        current_map: str,
+        target_map: str,
+    ) -> dict[str, Any]:
+        current = self._map(current_map)
+        target = self._map(target_map)
+        if not current or not target:
+            return {
+                "status": "waiting",
+                "message": "Current map or target map is unknown.",
+                "current_map": current or None,
+                "target_map": target or None,
+                "legs": [],
+                "next_portal": None,
+            }
+
+        result = self._map_routes(current, {target})
+        if result is None:
+            return {
+                "status": "unreachable",
+                "message": f"No known portal route from {current} to {target}.",
+                "current_map": current,
+                "target_map": target,
+                "legs": [],
+                "next_portal": None,
+            }
+
+        _, route = result
+        return {
+            "status": "ready",
+            "message": (
+                f"Already in {target}." if not route
+                else f"{len(route)} portal transition(s) to {target}."
+            ),
+            "current_map": current,
+            "target_map": target,
+            "portal_count": len(route),
+            "legs": [edge.as_dict() for edge in route],
+            "next_portal": route[0].as_dict() if route else None,
+        }
+
     def route_to_town(
         self,
         current_map: str,
