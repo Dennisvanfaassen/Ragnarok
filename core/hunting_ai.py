@@ -100,6 +100,9 @@ class HuntingAI:
         self._return_weight_reached = False
         self._last_teleport_at = 0.0
         self._last_teleport_reason: str | None = None
+        self._wander_last_position: tuple[int, int] | None = None
+        self._wander_last_progress_at = time.time()
+        self._target_failure_count: dict[int, int] = {}
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -273,6 +276,7 @@ class HuntingAI:
         self.target_pos = (int(x), int(y))
         self.route_target_pos = None
         self.attack_retry = 0
+        self._target_failure_count[int(self.target_id)] = 0
         self._log(
             "target_locked",
             target_id=self.target_id,
@@ -831,7 +835,22 @@ class HuntingAI:
                     self._set_wander_route(grid, path, goal)
                     return True
 
-            return False
+            if navigation_mode == "saved_only":
+                self._log(
+                    "saved_route_required",
+                    map=map_name,
+                    message="Saved hunting route is temporarily unusable.",
+                )
+                return False
+
+            # In the normal mode a bad/blocked saved leg must never leave the
+            # character standing still. Fall through to autonomous exploration
+            # and keep searching for configured monsters.
+            self._log(
+                "saved_route_fallback_to_exploration",
+                map=map_name,
+                goal={"x": goal[0], "y": goal[1]},
+            )
 
         if navigation_mode == "saved_only":
             self._log(
@@ -1283,11 +1302,24 @@ class HuntingAI:
                 )
                 return
 
+            target_id = int(self.target_id) if self.target_id is not None else -1
+            failures = self._target_failure_count.get(target_id, 0) + 1
+            self._target_failure_count[target_id] = failures
             self._log(
                 "route_failed",
                 target_id=self.target_id,
+                target_name=self.target_name,
+                failures=failures,
                 message=pathing.get("message"),
             )
+            if failures >= 3:
+                failed_name = self.target_name
+                self._clear_target()
+                self._set_state(
+                    "SEARCHING",
+                    f"Skipping unreachable {failed_name}; continuing hunt",
+                )
+                return
             self._set_state(
                 "FAILED",
                 pathing.get("message") or "Could not route to target",
@@ -1778,6 +1810,34 @@ class HuntingAI:
 
         exploration_planner.observe(str(map_name), player)
 
+        now = time.time()
+        if self._wander_last_position != player:
+            self._wander_last_position = player
+            self._wander_last_progress_at = now
+        elif (
+            self.wander_path
+            and now - self._wander_last_progress_at >= 2.5
+        ):
+            # A stale path after combat/loot can leave Ragnarok visually idle.
+            # Throw that path away and immediately search for a fresh route.
+            self._log(
+                "wander_stall_recovery",
+                map=str(map_name),
+                player={"x": player[0], "y": player[1]},
+                stalled_seconds=round(now - self._wander_last_progress_at, 2),
+            )
+            game_actions.release_hold_move()
+            self.wander_path = []
+            self.wander_goal = None
+            self.wander_progress_index = 0
+            self.wander_line_points = []
+            self.wander_line_index = 0
+            self.wander_reconnect_target = None
+            self.wander_reconnect_route_index = None
+            self._native_wander_destination = None
+            self._native_wander_sent_at = 0.0
+            self._wander_last_progress_at = now
+
         if (
             not self.wander_path
             or self.wander_goal is None
@@ -1793,7 +1853,11 @@ class HuntingAI:
             self.wander_line_index = 0
             if not self._choose_wander_path(snapshot):
                 game_actions.release_hold_move()
-                self._stop.wait(0.10)
+                self._set_state(
+                    "SEARCHING",
+                    "No usable wander route; retrying monster search",
+                )
+                self._stop.wait(0.12)
                 return
 
         index = self._nearest_wander_index(player)
@@ -2140,13 +2204,25 @@ class HuntingAI:
                 )
                 return
 
+            target_id = int(self.target_id) if self.target_id is not None else -1
+            failures = self._target_failure_count.get(target_id, 0) + 1
+            self._target_failure_count[target_id] = failures
             self._log(
                 "target_retry",
                 target_id=self.target_id,
                 target_name=self.target_name,
+                failures=failures,
                 reason=self.message,
             )
-            self._stop.wait(0.25)
+            if failures >= 3:
+                failed_name = self.target_name
+                self._clear_target()
+                self._set_state(
+                    "SEARCHING",
+                    f"Skipping stuck target {failed_name}; continuing hunt",
+                )
+                return
+            self._stop.wait(0.20)
             self._set_state("ROUTING", "Retrying same locked target")
             return
 
@@ -2232,6 +2308,9 @@ class HuntingAI:
             self.saved_route_map = None
             self.saved_route_waypoint_index = 0
             self.saved_route_direction = 1
+            self._wander_last_position = None
+            self._wander_last_progress_at = time.time()
+            self._target_failure_count.clear()
             self.running = True
             self._thread = threading.Thread(
                 target=self._loop,
