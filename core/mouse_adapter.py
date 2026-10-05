@@ -438,6 +438,119 @@ class MouseGameAdapter:
             "map_to": {"x": destination[0], "y": destination[1]},
         }
 
+    def _direction_screen_point(
+        self,
+        hwnd: int,
+        dx: int,
+        dy: int,
+        *,
+        radius_px: int = 170,
+    ) -> tuple[int, int] | None:
+        if not self.calibration_valid() or not self._calibration:
+            return None
+        if dx == 0 and dy == 0:
+            return None
+
+        geometry = self._geometry(hwnd)
+        if not geometry:
+            return None
+
+        coeffs = self._calibration["coefficients"]
+        cx = coeffs["screen_x"]
+        cy = coeffs["screen_y"]
+
+        # Only use the affine direction terms. The intercept is the calibrated
+        # on-screen player/ground origin. This prevents the cursor from chasing
+        # individual map cells while walking.
+        vx = cx[1] * dx + cx[2] * dy
+        vy = cy[1] * dx + cy[2] * dy
+        length = math.hypot(vx, vy)
+        if length < 1e-6:
+            return None
+
+        local_x = cx[0] + (vx / length) * radius_px
+        local_y = cy[0] + (vy / length) * radius_px
+
+        margin_x = 80
+        margin_y = 65
+        local_x = max(margin_x, min(geometry["width"] - margin_x, local_x))
+        local_y = max(margin_y, min(geometry["height"] - margin_y, local_y))
+
+        return (
+            geometry["left"] + int(round(local_x)),
+            geometry["top"] + int(round(local_y)),
+        )
+
+    def begin_hold_direction(
+        self,
+        dx: int,
+        dy: int,
+        *,
+        radius_px: int = 170,
+    ) -> dict[str, Any]:
+        hwnd = self._find_window()
+        if not hwnd:
+            return {"ok": False, "reason": "window_not_found"}
+
+        point = self._direction_screen_point(
+            hwnd,
+            dx,
+            dy,
+            radius_px=radius_px,
+        )
+        if point is None:
+            return {"ok": False, "reason": "direction_not_projectable"}
+
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetCursorPos(int(point[0]), int(point[1]))
+        time.sleep(0.015)
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+
+        self._hold_active = True
+        self._hold_hwnd = hwnd
+        self._hold_point = point
+        return {
+            "ok": True,
+            "screen": {"x": point[0], "y": point[1]},
+            "direction": {"dx": dx, "dy": dy},
+        }
+
+    def update_hold_direction(
+        self,
+        dx: int,
+        dy: int,
+        *,
+        radius_px: int = 170,
+        min_pixel_change: int = 18,
+    ) -> dict[str, Any]:
+        if not self._hold_active or not self._hold_hwnd:
+            return self.begin_hold_direction(dx, dy, radius_px=radius_px)
+
+        point = self._direction_screen_point(
+            self._hold_hwnd,
+            dx,
+            dy,
+            radius_px=radius_px,
+        )
+        if point is None:
+            return {"ok": False, "reason": "direction_not_projectable"}
+
+        last = self._hold_point
+        if (
+            last is None
+            or abs(point[0] - last[0]) >= min_pixel_change
+            or abs(point[1] - last[1]) >= min_pixel_change
+        ):
+            user32.SetCursorPos(int(point[0]), int(point[1]))
+            self._hold_point = point
+
+        return {
+            "ok": True,
+            "screen": {"x": point[0], "y": point[1]},
+            "direction": {"dx": dx, "dy": dy},
+        }
+
     def begin_hold_move(
         self,
         player: tuple[int, int],
