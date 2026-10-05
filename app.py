@@ -12,6 +12,7 @@ from core.state import app_state
 from core.targeting import build_targeting_state
 from core.pathing import build_pathing_state, nav_repository
 from core.active_control import active_hunt_controller
+from core.hotkey import hunting_hotkey
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -21,6 +22,7 @@ from diagnostics.authenticated_client import authenticated_client_monitor
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Ragnarok Bot", version="0.1.0")
+hunting_hotkey.start()
 
 
 def load_server_profile(profile_id: str) -> ServerProfile:
@@ -260,3 +262,8 @@ async def active_hunt_calibration():
 @app.post("/api/active-hunt/calibration/clear")
 async def clear_active_hunt_calibration():
     return active_hunt_controller.clear_calibration()
+
+
+@app.get("/api/active-hunt/hotkey")
+async def active_hunt_hotkey():
+    return hunting_hotkey.snapshot()
