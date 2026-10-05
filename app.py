@@ -242,3 +242,21 @@ async def stop_active_hunt():
 @app.get("/api/active-hunt")
 async def active_hunt_state():
     return active_hunt_controller.snapshot()
+
+
+@app.post("/api/active-hunt/calibrate")
+async def calibrate_active_hunt():
+    try:
+        return active_hunt_controller.start_calibration()
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/active-hunt/calibration")
+async def active_hunt_calibration():
+    return active_hunt_controller.calibration_snapshot()
+
+
+@app.post("/api/active-hunt/calibration/clear")
+async def clear_active_hunt_calibration():
+    return active_hunt_controller.clear_calibration()
