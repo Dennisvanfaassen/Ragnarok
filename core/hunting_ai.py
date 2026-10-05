@@ -46,14 +46,18 @@ class HuntingAI:
         self.route_target_pos: tuple[int, int] | None = None
 
         self.attack_range = 1
-        self.move_segment_tiles = 4
+        self.move_segment_tiles = 6
         self.target_move_reset_tiles = 2
-        self.attack_confirm_timeout = 1.8
+        self.attack_confirm_timeout = 0.65
         self.max_attack_retries = 3
-        self.move_settle_timeout = 4.0
+        self.move_settle_timeout = 1.2
+        self.direct_attack_click_range = 7
+        self.attack_walk_timeout = 3.0
+        self._attack_origin: tuple[int, int] | None = None
 
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
+        self._attack_origin = None
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -214,13 +218,12 @@ class HuntingAI:
         destination: tuple[int, int],
         target_id: int,
     ) -> tuple[int, int] | None:
+        """Return on first useful movement instead of waiting for a full stop."""
         deadline = time.time() + self.move_settle_timeout
         last_pos = origin
-        last_change = time.time()
-        moved = False
 
         while not self._stop.is_set() and time.time() < deadline:
-            self._stop.wait(0.10)
+            self._stop.wait(0.06)
             snapshot = authenticated_client_monitor.snapshot()
 
             if self._find_actor(snapshot, target_id) is None:
@@ -230,15 +233,10 @@ class HuntingAI:
             if pos is None:
                 continue
 
-            if pos != last_pos:
-                moved = True
-                last_pos = pos
-                last_change = time.time()
-
             if self._tile_distance(pos, destination) <= 1:
                 return pos
 
-            if moved and time.time() - last_change >= 0.55:
+            if pos != last_pos:
                 return pos
 
         return last_pos
@@ -268,7 +266,7 @@ class HuntingAI:
             )
         else:
             self._set_state("SEARCHING", "No valid target in live actor list")
-            self._stop.wait(0.20)
+            self._stop.wait(0.05)
 
     def _step_target_selected(self, snapshot: dict[str, Any]):
         if self._refresh_locked_target(snapshot) is None:
@@ -288,6 +286,31 @@ class HuntingAI:
             return
 
         distance = self._tile_distance(player, self.target_pos)
+
+        # Player-like behavior: if the monster is already visible/clickable,
+        # attack immediately and let Ragnarok perform the final approach.
+        try:
+            grid, _ = nav_repository.load(str(self._world(snapshot).get("map")))
+        except Exception:
+            grid = None
+
+        if (
+            distance <= self.direct_attack_click_range
+            and mouse_game_adapter.can_project(
+                player,
+                self.target_pos,
+                sprite=True,
+            )
+            and grid is not None
+        ):
+            from core.pathing import clear_walk_line
+            if clear_walk_line(grid, player, self.target_pos):
+                self._set_state(
+                    "ATTACK_READY",
+                    f"{self.target_name} is visible; attacking immediately",
+                )
+                return
+
         if distance <= self.attack_range:
             self._set_state(
                 "ATTACK_READY",
@@ -410,11 +433,27 @@ class HuntingAI:
             return
 
         distance = self._tile_distance(player, self.target_pos)
-        if distance > self.attack_range + 1:
+        if (
+            distance > self.direct_attack_click_range
+            or not mouse_game_adapter.can_project(
+                player,
+                self.target_pos,
+                sprite=True,
+            )
+        ):
             self._set_state(
                 "ROUTING",
-                f"{self.target_name} moved out of attack position",
+                f"{self.target_name} moved out of clickable range",
             )
+            return
+
+        fresh = authenticated_client_monitor.snapshot()
+        actor = self._refresh_locked_target(fresh)
+        player = self._position(fresh)
+        if actor is None:
+            self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
+            return
+        if player is None or self.target_pos is None:
             return
 
         result = mouse_game_adapter.attack(
@@ -438,6 +477,7 @@ class HuntingAI:
             return
 
         self.attack_clicked_at = time.time()
+        self._attack_origin = player
         self._set_state(
             "ATTACKING",
             f"Waiting for combat confirmation on {self.target_name}",
@@ -465,8 +505,20 @@ class HuntingAI:
             )
             return
 
-        if time.time() - self.attack_clicked_at < self.attack_confirm_timeout:
-            self._stop.wait(0.08)
+        elapsed = time.time() - self.attack_clicked_at
+        current_pos = self._position(snapshot)
+        moved_after_click = (
+            self._attack_origin is not None
+            and current_pos is not None
+            and current_pos != self._attack_origin
+        )
+
+        if moved_after_click and elapsed < self.attack_walk_timeout:
+            self._stop.wait(0.06)
+            return
+
+        if elapsed < self.attack_confirm_timeout:
+            self._stop.wait(0.05)
             return
 
         self.attack_retry += 1
@@ -478,16 +530,14 @@ class HuntingAI:
             )
             self._set_state(
                 "ATTACK_READY",
-                f"Attack was not confirmed; retry {self.attack_retry + 1}/{self.max_attack_retries}",
+                f"No combat confirmation; quick retry {self.attack_retry + 1}/{self.max_attack_retries}",
             )
             return
 
-        # OpenKore-style failure behavior: stop hammering the same interaction,
-        # re-evaluate the approach, and only try again after repositioning.
         self.attack_retry = 0
         self._set_state(
             "ROUTING",
-            "Attack was not confirmed after retries; recalculating approach",
+            "Attack click missed; recalculating from live position",
         )
 
     def _step_waiting_for_death(self, snapshot: dict[str, Any]):
@@ -520,7 +570,7 @@ class HuntingAI:
             reason=self.message,
         )
         self._clear_target()
-        self._stop.wait(0.50)
+        self._stop.wait(0.15)
         self._set_state("SEARCHING", "Recovering and selecting another target")
 
     def _loop(self):
@@ -531,7 +581,7 @@ class HuntingAI:
 
             if not snapshot.get("classic_pid"):
                 self._set_state("IDLE", "Waiting for Classic.exe")
-                self._stop.wait(0.30)
+                self._stop.wait(0.10)
                 continue
 
             if self.state in {"IDLE", "SEARCHING"}:
@@ -618,6 +668,8 @@ class HuntingAI:
                     "combat_confirm_timeout": self.attack_confirm_timeout,
                     "max_attack_retries": self.max_attack_retries,
                     "sprite_y_offset": mouse_game_adapter.sprite_y_offset,
+                    "direct_attack_click_range": self.direct_attack_click_range,
+                    "attack_walk_timeout": self.attack_walk_timeout,
                 },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
                 "actions": self.actions[-30:],
