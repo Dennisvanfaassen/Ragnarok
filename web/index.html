@@ -132,6 +132,27 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full">
+      <h2>Authenticated Client Mode</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Launches SoulBound.exe from this dashboard, waits for Classic.exe, and live-monitors
+        the authenticated Ragnarok login/character/map traffic. Observer mode only.
+      </div>
+      <div class="row">
+        <label>SoulBound.exe path
+          <input id="patcherPath" placeholder="C:\\SoulBoundRO\\SoulBound.exe">
+        </label>
+        <label>Status
+          <input id="authClientStatus" value="stopped" disabled>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="action" onclick="startAuthenticatedClient()">Launch SoulBound</button>
+        <button class="action secondary" onclick="refreshAuthenticatedClient()">Refresh status</button>
+        <button class="action danger" onclick="stopAuthenticatedClient()">Stop monitor</button>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>Wireshark capture analyzer</h2>
       <div class="muted" style="margin-bottom:12px">
         Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
@@ -217,6 +238,31 @@ async function refreshHandshake(){
 async function stopHandshake(){
   const r=await fetch('/api/diagnostics/handshake/stop',{method:'POST'});
   out(await r.json());
+}
+async function startAuthenticatedClient(){
+  const patcher_path=document.getElementById('patcherPath').value.trim();
+  if(!patcher_path){out('Enter the full path to SoulBound.exe first.');return}
+  out('Launching SoulBound.exe and starting authenticated session monitoring...');
+  const r=await fetch('/api/diagnostics/authenticated-client/start',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({patcher_path})
+  });
+  const data=await r.json();
+  document.getElementById('authClientStatus').value=data.status||'unknown';
+  out(data);
+}
+async function refreshAuthenticatedClient(){
+  const r=await fetch('/api/diagnostics/authenticated-client');
+  const data=await r.json();
+  document.getElementById('authClientStatus').value=data.status||'unknown';
+  out(data);
+}
+async function stopAuthenticatedClient(){
+  const r=await fetch('/api/diagnostics/authenticated-client/stop',{method:'POST'});
+  const data=await r.json();
+  document.getElementById('authClientStatus').value=data.status||'stopped';
+  out(data);
 }
 async function analyzePcap(){
   const input=document.getElementById('pcapFile');
