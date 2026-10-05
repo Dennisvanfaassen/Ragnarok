@@ -16,6 +16,7 @@ from core.hotkey import hunting_hotkey
 from core.world_route import world_route_planner
 from core.town_travel import town_travel_controller
 from core.map_dashboard import map_grid_payload, map_live_overlay
+from core.hunt_routes import hunt_route_store
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -318,3 +319,34 @@ async def live_map_grid():
 @app.get("/api/map/live")
 async def live_map_overlay():
     return map_live_overlay()
+
+
+@app.get("/api/hunt-route/current")
+async def current_hunt_route():
+    snapshot = authenticated_client_monitor.snapshot()
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+    return hunt_route_store.get(world.get("map"))
+
+
+@app.put("/api/hunt-route/current")
+async def save_current_hunt_route(payload: dict):
+    snapshot = authenticated_client_monitor.snapshot()
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+    map_name = str(world.get("map") or "").strip()
+    if not map_name:
+        raise HTTPException(400, "Current map is not known yet.")
+    try:
+        return hunt_route_store.save(
+            map_name,
+            list(payload.get("waypoints") or []),
+            mode=str(payload.get("mode") or "loop"),
+        )
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/hunt-route/current")
+async def delete_current_hunt_route():
+    snapshot = authenticated_client_monitor.snapshot()
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+    return hunt_route_store.delete(world.get("map"))
