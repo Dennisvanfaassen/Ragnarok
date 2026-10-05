@@ -257,6 +257,14 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </label>
       </div>
       <div class="row">
+        <label>Monster sprite Y offset (px)
+          <input id="spriteYOffset" type="number" value="-24">
+        </label>
+        <label>Window mode
+          <input value="Supported — coordinates are client-relative" disabled>
+        </label>
+      </div>
+      <div class="row">
         <label>Movement behavior
           <input value="Furthest clear point toward target" disabled>
         </label>
@@ -500,7 +508,8 @@ async function stopAuthenticatedClient(){
 async function startActiveHunt(){
   const body={
     tile_width:+document.getElementById('tileWidth').value,
-    tile_height:+document.getElementById('tileHeight').value
+    tile_height:+document.getElementById('tileHeight').value,
+    sprite_y_offset:+document.getElementById('spriteYOffset').value
   };
   const r=await fetch('/api/active-hunt/start',{
     method:'POST',
