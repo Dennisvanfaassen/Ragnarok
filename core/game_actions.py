@@ -156,6 +156,7 @@ class GameActionAdapter:
         return self._backend.can_project(*args, **kwargs)
 
     def move(self, player, destination, *args, **kwargs):
+        allow_mouse_fallback = bool(kwargs.pop("allow_mouse_fallback", True))
         if self.native_move_ready():
             result = native_action_bridge.move(
                 int(destination[0]),
@@ -165,6 +166,13 @@ class GameActionAdapter:
                 result["backend"] = "native"
                 result["input_mode"] = "map_destination"
                 return result
+
+        if not allow_mouse_fallback:
+            return {
+                "ok": False,
+                "backend": "native",
+                "reason": "native_move_not_ready",
+            }
 
         result = self._backend.move(player, destination, *args, **kwargs)
         if isinstance(result, dict):
@@ -194,8 +202,27 @@ class GameActionAdapter:
     def release_hold_move(self):
         return self._backend.release_hold_move()
 
-    def loot(self, *args, **kwargs):
-        return self._backend.loot(*args, **kwargs)
+    def loot(self, *args, item_id: int | None = None, **kwargs):
+        allow_mouse_fallback = bool(kwargs.pop("allow_mouse_fallback", True))
+        if item_id is not None and self.native_move_ready():
+            result = native_action_bridge.pickup_floor_item(int(item_id))
+            if result.get("ok"):
+                result["backend"] = "native"
+                result["input_mode"] = "floor_item_id"
+                return result
+
+        if not allow_mouse_fallback:
+            return {
+                "ok": False,
+                "backend": "native",
+                "reason": "native_loot_not_ready",
+            }
+
+        result = self._backend.loot(*args, **kwargs)
+        if isinstance(result, dict):
+            result["backend"] = "mouse"
+            result["input_mode"] = "screen_projection"
+        return result
 
     def press_hotkey(self, key: str) -> dict[str, Any]:
         result = self._backend.press_hotkey(key)
@@ -204,6 +231,7 @@ class GameActionAdapter:
         return result
 
     def attack(self, *args, actor_id: int | None = None, **kwargs):
+        allow_mouse_fallback = bool(kwargs.pop("allow_mouse_fallback", True))
         if actor_id is not None and self.native_attack_ready():
             result = native_action_bridge.attack(int(actor_id))
             if result.get("ok"):
@@ -211,6 +239,14 @@ class GameActionAdapter:
                 result["backend"] = "native"
                 result["input_mode"] = "actor_id"
                 return result
+
+        if not allow_mouse_fallback:
+            self._last_attack_backend = "native"
+            return {
+                "ok": False,
+                "backend": "native",
+                "reason": "native_attack_not_ready",
+            }
 
         self._last_attack_backend = "mouse"
         result = self._backend.attack(*args, **kwargs)
