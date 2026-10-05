@@ -74,6 +74,18 @@ class SupplySettings(BaseModel):
     butterfly_wings: int = 1
 
 
+class TownItemRule(BaseModel):
+    item_name: str = ""
+    name_id: int | None = None
+    action: str = "store"  # keep | store | sell
+
+
+class TownBuyRule(BaseModel):
+    item_name: str = ""
+    name_id: int | None = None
+    target_quantity: int = 0
+
+
 class TownSettings(BaseModel):
     # Blank means: Butterfly Wing to the character's saved respawn point,
     # then discover/use the nearest town services on the map we actually land on.
@@ -84,6 +96,9 @@ class TownSettings(BaseModel):
     auto_nearest_services: bool = True
     return_method: str = "butterfly_wing"
     supplies: SupplySettings = Field(default_factory=SupplySettings)
+    default_item_action: str = "store"  # keep | store
+    item_rules: list[TownItemRule] = Field(default_factory=list)
+    buy_rules: list[TownBuyRule] = Field(default_factory=list)
 
 
 class BotProfile(BaseModel):
