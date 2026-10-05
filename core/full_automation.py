@@ -64,6 +64,32 @@ class FullAutomationController:
             return None
         return int(x), int(y)
 
+    def _ensure_native_ready(self, timeout: float = 8.0) -> bool:
+        state = native_action_bridge.snapshot()
+        if not state.get("attached"):
+            try:
+                native_action_bridge.start()
+            except Exception as exc:
+                self.last_error = f"Could not start native action bridge: {exc}"
+                return False
+
+        deadline = time.time() + timeout
+        while not self._stop.is_set() and time.time() < deadline:
+            state = native_action_bridge.snapshot()
+            if (
+                state.get("attached")
+                and state.get("status") == "ready"
+                and (state.get("agent") or {}).get("socket_learned")
+            ):
+                return True
+            self._stop.wait(0.10)
+
+        self.last_error = (
+            "Native action bridge is attached but has not learned the map socket yet. "
+            "Move or attack once in Classic.exe."
+        )
+        return False
+
     def _wait_map_change(self, before: str, timeout: float = 12.0) -> str | None:
         deadline = time.time() + timeout
         while not self._stop.is_set() and time.time() < deadline:
@@ -342,10 +368,15 @@ class FullAutomationController:
 
     def _town_cycle(self) -> bool:
         profile = app_state.get_profile()
-        self._set("RETURNING", "70% weight reached; returning with Butterfly Wing.")
+        self._set(
+            "RETURNING",
+            f"{profile.town.return_weight_percent}% weight reached; returning with Butterfly Wing.",
+        )
         active_hunt_controller.stop()
         game_actions.release_hold_move()
 
+        if not self._ensure_native_ready():
+            return False
         if not self._use_butterfly_wing():
             return False
 
@@ -430,15 +461,8 @@ class FullAutomationController:
             if not authenticated_client_monitor.snapshot().get("classic_pid"):
                 raise RuntimeError("Classic.exe is not detected.")
             native = native_action_bridge.snapshot()
-            if not (
-                native.get("attached")
-                and native.get("status") == "ready"
-                and (native.get("agent") or {}).get("socket_learned")
-            ):
-                raise RuntimeError(
-                    "Native action bridge must be ready before full automation. "
-                    "Start it and move/attack once so the authenticated map socket is learned."
-                )
+            if not native.get("attached"):
+                native_action_bridge.start()
             self._stop.clear()
             self.running = True
             self.last_error = None
