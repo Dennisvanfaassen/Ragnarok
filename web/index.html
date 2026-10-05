@@ -64,15 +64,43 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
       <div class="row">
         <label>Hunt map<input id="huntMap" placeholder="iz_dun02"></label>
-        <label>Monsters<input id="monsters" placeholder="Obeaune, Cornutus"></label>
+        <label>Monsters to kill<input id="monsters" placeholder="Obeaune, Cornutus"></label>
       </div>
       <div class="row">
-        <label>Return at weight %<input id="weight" type="number" value="80"></label>
-        <label>Storage map<input id="storageMap" placeholder="izlude"></label>
+        <label>Loot behavior
+          <select id="lootAll"><option value="true" selected>Loot all drops</option><option value="false">Do not loot automatically</option></select>
+        </label>
+        <label>Return at weight %<input id="weight" type="number" min="1" max="99" value="70"></label>
       </div>
       <div class="row">
-        <label>Healing item<input id="healItem" placeholder="White Potion"></label>
-        <label>Heal below HP %<input id="healPercent" type="number" value="50"></label>
+        <label>Return method
+          <input value="Butterfly Wing → saved respawn point" disabled>
+        </label>
+        <label>Town service selection
+          <input value="Automatic nearest Kafra + Tool Dealer" disabled>
+        </label>
+      </div>
+      <div class="row">
+        <label>Saved town override (optional)
+          <input id="storageMap" placeholder="Leave blank = detect after Butterfly Wing">
+        </label>
+        <label>Universal routing
+          <input value="Selected hunt map ↔ detected saved town" disabled>
+        </label>
+      </div>
+      <div class="row">
+        <label>Healing hotkey<input id="healHotkey" value="1" placeholder="1"></label>
+        <label>Use healing below HP %<input id="healPercent" type="number" min="1" max="99" value="50"></label>
+      </div>
+      <div class="row">
+        <label>Healing item / note<input id="healItem" placeholder="Potion assigned to hotkey 1"></label>
+        <label>Healing enabled
+          <select id="healEnabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Restock Awakening Potions<input id="awakeningTarget" type="number" min="0" value="4"></label>
+        <label>Restock Butterfly Wings<input id="butterflyTarget" type="number" min="0" value="1"></label>
       </div>
       <div class="actions">
         <button class="action" onclick="saveProfile()">Save profile</button>
@@ -178,6 +206,14 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <div id="liveHp" class="metric" style="font-size:20px">HP —</div>
           <div id="liveSp" class="muted">SP —</div>
         </section>
+      </div>
+      <div class="row">
+        <label>Weight
+          <input id="liveWeight" value="—" disabled>
+        </label>
+        <label>Return trigger
+          <input id="liveReturnTrigger" value="70%" disabled>
+        </label>
       </div>
       <div class="row">
         <label>Nearby actors
@@ -459,12 +495,57 @@ async function saveProfile(){
   const body={
     name:document.getElementById('profileName').value,
     server_profile:document.getElementById('server').value,
-    hunt:{map:document.getElementById('huntMap').value,monsters:document.getElementById('monsters').value.split(',').map(function(x){return x.trim()}).filter(Boolean),loot_all:true},
-    healing:{enabled:!!document.getElementById('healItem').value,item:document.getElementById('healItem').value,hp_below_percent:+document.getElementById('healPercent').value},
-    town:{storage_map:document.getElementById('storageMap').value,storage_npc:'',return_weight_percent:+document.getElementById('weight').value,butterfly_wing_item:'Butterfly Wing'}
+    hunt:{
+      map:document.getElementById('huntMap').value.trim(),
+      monsters:document.getElementById('monsters').value.split(',').map(function(x){return x.trim()}).filter(Boolean),
+      loot_all:document.getElementById('lootAll').value==='true'
+    },
+    healing:{
+      enabled:document.getElementById('healEnabled').value==='true',
+      item:document.getElementById('healItem').value.trim(),
+      hp_below_percent:+document.getElementById('healPercent').value,
+      hotkey:document.getElementById('healHotkey').value.trim()||'1',
+      cooldown_seconds:0.9
+    },
+    town:{
+      storage_map:document.getElementById('storageMap').value.trim(),
+      storage_npc:'',
+      return_weight_percent:+document.getElementById('weight').value,
+      butterfly_wing_item:'Butterfly Wing',
+      auto_nearest_services:true,
+      return_method:'butterfly_wing',
+      supplies:{
+        awakening_potions:+document.getElementById('awakeningTarget').value,
+        butterfly_wings:+document.getElementById('butterflyTarget').value
+      }
+    }
   };
   const r=await fetch('/api/profile',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  out(await r.json());
+  const data=await r.json();
+  document.getElementById('liveReturnTrigger').value=(data.town&&data.town.return_weight_percent!=null?data.town.return_weight_percent:70)+'%';
+  out(data);
+}
+
+async function loadProfile(){
+  try{
+    const r=await fetch('/api/profile');
+    const p=await r.json();
+    document.getElementById('profileName').value=p.name||'Default';
+    document.getElementById('server').value=p.server_profile||'soulbound';
+    document.getElementById('huntMap').value=(p.hunt&&p.hunt.map)||'';
+    document.getElementById('monsters').value=((p.hunt&&p.hunt.monsters)||[]).join(', ');
+    document.getElementById('lootAll').value=(p.hunt&&p.hunt.loot_all===false)?'false':'true';
+    document.getElementById('weight').value=(p.town&&p.town.return_weight_percent)||70;
+    document.getElementById('storageMap').value=(p.town&&p.town.storage_map)||'';
+    document.getElementById('healEnabled').value=(p.healing&&p.healing.enabled===false)?'false':'true';
+    document.getElementById('healItem').value=(p.healing&&p.healing.item)||'';
+    document.getElementById('healPercent').value=(p.healing&&p.healing.hp_below_percent)||50;
+    document.getElementById('healHotkey').value=(p.healing&&p.healing.hotkey)||'1';
+    const supplies=(p.town&&p.town.supplies)||{};
+    document.getElementById('awakeningTarget').value=supplies.awakening_potions??4;
+    document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
+    document.getElementById('liveReturnTrigger').value=((p.town&&p.town.return_weight_percent)||70)+'%';
+  }catch(e){}
 }
 async function probe(){
   const r=await fetch('/api/server/'+document.getElementById('server').value+'/probe',{method:'POST'});
@@ -534,6 +615,10 @@ function renderLiveState(data){
   if(hpEl) hpEl.textContent='HP '+(world.hp??'—')+' / '+(world.hp_max??'—')+(world.hp_percent!=null?' ('+world.hp_percent+'%)':'');
   const spEl=document.getElementById('liveSp');
   if(spEl) spEl.textContent='SP '+(world.sp??'—')+' / '+(world.sp_max??'—')+(world.sp_percent!=null?' ('+world.sp_percent+'%)':'');
+  const weightEl=document.getElementById('liveWeight');
+  if(weightEl) weightEl.value=world.weight_percent!=null
+    ? ((world.weight??'—')+' / '+(world.weight_max??'—')+' ('+world.weight_percent+'%)')
+    : '—';
   const actorsEl=document.getElementById('liveActors');
   if(actorsEl) actorsEl.value=counts.total??0;
   const breakdown=document.getElementById('liveActorBreakdown');
@@ -1131,7 +1216,7 @@ async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh(
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
 const mapCanvas=document.getElementById('liveMapCanvas');
 if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
-refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
+loadProfile();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
 </script>
 </body>
 </html>
