@@ -206,6 +206,11 @@ async def clear_authenticated_client_item_packet_trace():
     return authenticated_client_monitor.clear_item_packet_trace()
 
 
+@app.get("/api/items/live")
+async def live_items():
+    return authenticated_client_monitor.item_state_snapshot()
+
+
 @app.post("/api/native-action/start")
 async def start_native_action_bridge():
     try:
