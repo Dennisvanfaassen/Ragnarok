@@ -304,6 +304,14 @@ async function refreshAuthenticatedClient(){
   renderLiveState(data);
   out(data);
 }
+async function refreshLiveStateQuiet(){
+  try{
+    const r=await fetch('/api/diagnostics/authenticated-client');
+    const data=await r.json();
+    document.getElementById('authClientStatus').value=data.status||'unknown';
+    renderLiveState(data);
+  }catch(e){}
+}
 async function stopAuthenticatedClient(){
   const r=await fetch('/api/diagnostics/authenticated-client/stop',{method:'POST'});
   const data=await r.json();
@@ -321,7 +329,7 @@ async function analyzePcap(){
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
-refresh();setInterval(refresh,1000);
+refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);
 </script>
 </body>
 </html>
