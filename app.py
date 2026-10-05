@@ -13,6 +13,7 @@ from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
 from diagnostics.pcap_scan import analyze_capture
+from diagnostics.authenticated_client import authenticated_client_monitor
 
 
 ROOT = Path(__file__).resolve().parent
@@ -144,3 +145,30 @@ async def analyze_pcap(file: UploadFile = File(...)):
         return analyze_capture(data)
     except Exception as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.post("/api/diagnostics/authenticated-client/start")
+async def start_authenticated_client(payload: dict):
+    patcher_path = str(payload.get("patcher_path", "")).strip()
+    if not patcher_path:
+        raise HTTPException(400, "patcher_path is required")
+    try:
+        return authenticated_client_monitor.start(patcher_path)
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/diagnostics/authenticated-client/stop")
+async def stop_authenticated_client():
+    return authenticated_client_monitor.stop()
+
+
+@app.post("/api/diagnostics/authenticated-client/clear")
+async def clear_authenticated_client():
+    authenticated_client_monitor.clear()
+    return authenticated_client_monitor.snapshot()
+
+
+@app.get("/api/diagnostics/authenticated-client")
+async def authenticated_client_state():
+    return authenticated_client_monitor.snapshot()
