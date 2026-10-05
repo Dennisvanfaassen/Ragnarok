@@ -33,6 +33,7 @@ class PortalEdge:
     dest_y: int
     source: str = "openkore"
     interactive: bool = False
+    interaction_steps: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +45,7 @@ class PortalEdge:
             "dest_y": self.dest_y,
             "source": self.source,
             "interactive": self.interactive,
+            "interaction_steps": list(self.interaction_steps),
         }
 
 
@@ -92,6 +94,7 @@ class WorldRoutePlanner:
                     dest_y=int(row["dest_y"]),
                     source="learned",
                     interactive=bool(row.get("interactive", False)),
+                    interaction_steps=tuple(row.get("interaction_steps") or ()),
                 )
                 for row in rows
             ]
@@ -131,6 +134,7 @@ class WorldRoutePlanner:
                     dest_x=int(parts[4]),
                     dest_y=int(parts[5]),
                     interactive=len(parts) > 6,
+                    interaction_steps=tuple(parts[6:]) if len(parts) > 6 else (),
                 )
             )
         return edges
