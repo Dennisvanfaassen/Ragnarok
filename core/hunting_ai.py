@@ -442,42 +442,122 @@ class HuntingAI:
             f"{name} spotted at {distance} tiles",
         )
 
-    def _acquire_aggressor(self, snapshot: dict[str, Any]) -> bool:
+    def _monster_priority(self, name: str | None) -> int:
+        rule = self._monster_rule(name)
+        return max(1, min(999, int(rule.priority))) if rule is not None else 50
+
+    def _best_aggressor_actor(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        exclude_id: int | None = None,
+    ) -> dict[str, Any] | None:
         live = snapshot.get("live_state") or {}
         ids = set(live.get("aggressor_ids") or [])
         if not ids:
-            return False
+            return None
+
         player = self._position(snapshot)
         actors = [
             actor
             for actor in (live.get("actors") or [])
             if actor.get("kind") == "monster"
             and int(actor.get("id") or -1) in ids
+            and (exclude_id is None or int(actor.get("id") or -1) != int(exclude_id))
             and self._monster_behavior(actor.get("name")) in {"attack", "aggressor_only"}
-            and not (
-                actor.get("x") is not None
-                and actor.get("y") is not None
-                and self._in_avoid_zone(
-                    self._world(snapshot).get("map"),
-                    int(actor.get("x")),
-                    int(actor.get("y")),
-                )
-            )
         ]
         if not actors:
-            return False
-        if player:
-            def aggressor_sort_key(actor: dict[str, Any]):
-                rule = self._monster_rule(actor.get("name"))
-                priority = int(rule.priority) if rule is not None else 50
+            return None
+
+        def sort_key(actor: dict[str, Any]):
+            priority = self._monster_priority(actor.get("name"))
+            if player is None:
+                distance = 999999
+            else:
                 distance = max(
                     abs(int(actor.get("x") or player[0]) - player[0]),
                     abs(int(actor.get("y") or player[1]) - player[1]),
                 )
-                return (priority, distance, int(actor.get("id") or 0))
+            return (priority, distance, int(actor.get("id") or 0))
 
-            actors.sort(key=aggressor_sort_key)
-        return self._lock_actor(actors[0], "aggressor")
+        actors.sort(key=sort_key)
+        return actors[0]
+
+    def _acquire_aggressor(self, snapshot: dict[str, Any]) -> bool:
+        actor = self._best_aggressor_actor(snapshot)
+        if actor is None:
+            return False
+        return self._lock_actor(actor, "aggressor")
+
+    def _maybe_preempt_for_higher_priority_aggressor(
+        self,
+        snapshot: dict[str, Any],
+    ) -> bool:
+        profile = app_state.get_profile()
+        if not (
+            profile.hunt.threat_first_combat
+            and profile.hunt.preempt_for_higher_priority_aggressor
+            and self.target_id is not None
+        ):
+            return False
+
+        candidate = self._best_aggressor_actor(
+            snapshot,
+            exclude_id=int(self.target_id),
+        )
+        if candidate is None:
+            return False
+
+        current_priority = self._monster_priority(self.target_name)
+        candidate_priority = self._monster_priority(candidate.get("name"))
+        if candidate_priority >= current_priority:
+            return False
+
+        old_id = self.target_id
+        old_name = self.target_name
+        if not self._lock_actor(candidate, "higher_priority_aggressor_preempt"):
+            return False
+
+        self._log(
+            "priority_preempt",
+            previous_target_id=old_id,
+            previous_target_name=old_name,
+            previous_priority=current_priority,
+            new_target_id=self.target_id,
+            new_target_name=self.target_name,
+            new_priority=candidate_priority,
+        )
+
+        # Native actor-ID attack makes pre-emption immediate and independent of
+        # sprite projection. If the bridge is temporarily unavailable, route to
+        # the new threat instead of clicking the screen.
+        if game_actions.native_attack_ready():
+            self.attack_clicked_at = time.time()
+            result = game_actions.attack(
+                actor_id=int(self.target_id),
+                allow_mouse_fallback=False,
+            )
+            self._log(
+                "priority_preempt_attack",
+                target_id=self.target_id,
+                target_name=self.target_name,
+                result=result,
+            )
+            if result.get("ok"):
+                self._attack_backend = "native"
+                self._combat_click_locked = True
+                self._combat_seen = False
+                self._set_state(
+                    "WAITING_FOR_DEATH",
+                    f"Priority switched to {self.target_name}",
+                )
+                return True
+
+        self._set_state(
+            "TARGET_SELECTED",
+            f"Priority switched to {self.target_name}",
+        )
+        return True
 
     def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
         profile = app_state.get_profile()
@@ -1119,40 +1199,50 @@ class HuntingAI:
         *,
         reason: str,
     ) -> bool:
-        """Interrupt movement and attack the locked visible actor in this cycle."""
         game_actions.release_hold_move()
+        self._stop.wait(0.015)
 
-        # Give Classic.exe one render slice to stop held-mouse steering, then
-        # project the monster from fresh network coordinates. This is short
-        # enough to feel instant but avoids aiming with the last walking frame.
-        self._stop.wait(0.025)
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
         player = self._position(fresh)
-
         if actor is None or player is None or self.target_pos is None:
             return False
 
-        player_render = self._render_position(fresh)
-        target_render = self._target_render_position(fresh)
-        if player_render is None or target_render is None:
-            return False
+        native_only = bool(app_state.get_profile().hunt.native_only_actions)
 
-        if not game_actions.can_project(
-            player_render,
-            target_render,
-            sprite=True,
-        ):
-            return False
+        # Native actor-ID combat does not need a clickable sprite or foreground
+        # window. This is the preferred hunting path.
+        if game_actions.native_attack_ready():
+            self.attack_clicked_at = time.time()
+            result = game_actions.attack(
+                actor_id=int(self.target_id) if self.target_id is not None else None,
+                allow_mouse_fallback=False,
+            )
+        else:
+            if native_only:
+                return False
+            player_render = self._render_position(fresh)
+            target_render = self._target_render_position(fresh)
+            if (
+                player_render is None
+                or target_render is None
+                or not game_actions.can_project(
+                    player_render,
+                    target_render,
+                    sprite=True,
+                )
+            ):
+                return False
+            self.attack_clicked_at = time.time()
+            result = game_actions.attack(
+                player_render,
+                target_render,
+                retry_index=0,
+                target_key=self.target_name,
+                actor_id=int(self.target_id) if self.target_id is not None else None,
+                allow_mouse_fallback=True,
+            )
 
-        self.attack_clicked_at = time.time()
-        result = game_actions.attack(
-            player_render,
-            target_render,
-            retry_index=0,
-            target_key=self.target_name,
-            actor_id=int(self.target_id) if self.target_id is not None else None,
-        )
         self._log(
             "instant_attack",
             target_id=self.target_id,
@@ -1160,18 +1250,17 @@ class HuntingAI:
             reason=reason,
             result=result,
         )
-
         if not result.get("ok"):
             return False
 
-        self._attack_backend = str(result.get("backend") or "mouse")
+        self._attack_backend = str(result.get("backend") or "native")
         self.attack_retry = 0
         self._attack_origin = player
         self._combat_click_locked = False
         self._combat_seen = False
         self._set_state(
             "ATTACKING",
-            f"Attack click sent to {self.target_name}; verifying actor click",
+            f"Attack sent to {self.target_name}; verifying combat",
         )
         return True
 
@@ -1182,22 +1271,24 @@ class HuntingAI:
             return
 
         player = self._position(snapshot)
-        if (
-            player is not None
-            and self.target_pos is not None
-            and self._render_position(snapshot) is not None
-            and self._target_render_position(snapshot) is not None
-            and game_actions.can_project(
-                self._render_position(snapshot),
-                self._target_render_position(snapshot),
-                sprite=True,
+        if player is not None and self.target_pos is not None:
+            native_ready = game_actions.native_attack_ready()
+            screen_ready = (
+                not app_state.get_profile().hunt.native_only_actions
+                and self._render_position(snapshot) is not None
+                and self._target_render_position(snapshot) is not None
+                and game_actions.can_project(
+                    self._render_position(snapshot),
+                    self._target_render_position(snapshot),
+                    sprite=True,
+                )
             )
-        ):
-            if self._attack_locked_immediately(
-                snapshot,
-                reason="visible_target_selected",
-            ):
-                return
+            if native_ready or screen_ready:
+                if self._attack_locked_immediately(
+                    snapshot,
+                    reason="visible_target_selected",
+                ):
+                    return
 
         self._set_state("ROUTING", f"Calculating route to {self.target_name}")
 
@@ -1255,14 +1346,20 @@ class HuntingAI:
 
         if (
             not self._attack_reposition_required
-            and self._render_position(snapshot) is not None
-            and self._target_render_position(snapshot) is not None
-            and game_actions.can_project(
-                self._render_position(snapshot),
-                self._target_render_position(snapshot),
-                sprite=True,
-            )
             and grid is not None
+            and (
+                game_actions.native_attack_ready()
+                or (
+                    not app_state.get_profile().hunt.native_only_actions
+                    and self._render_position(snapshot) is not None
+                    and self._target_render_position(snapshot) is not None
+                    and game_actions.can_project(
+                        self._render_position(snapshot),
+                        self._target_render_position(snapshot),
+                        sprite=True,
+                    )
+                )
+            )
         ):
             if clear_walk_line(grid, player, self.target_pos):
                 self._set_state(
@@ -1309,10 +1406,16 @@ class HuntingAI:
         if not pathing.get("path_found") or len(path_preview) < 2:
             if (
                 self.target_pos is not None
-                and game_actions.can_project(
-                    player,
-                    self.target_pos,
-                    sprite=True,
+                and (
+                    game_actions.native_attack_ready()
+                    or (
+                        not app_state.get_profile().hunt.native_only_actions
+                        and game_actions.can_project(
+                            player,
+                            self.target_pos,
+                            sprite=True,
+                        )
+                    )
                 )
             ):
                 self._log(
@@ -1368,7 +1471,11 @@ class HuntingAI:
             f"Approaching {self.target_name} via {segment[0]},{segment[1]}",
         )
 
-        result = game_actions.move(player, segment)
+        result = game_actions.move(
+            player,
+            segment,
+            allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
+        )
         self._log(
             "move",
             target_id=self.target_id,
@@ -1384,7 +1491,11 @@ class HuntingAI:
                     int(path_preview[1]["x"]),
                     int(path_preview[1]["y"]),
                 )
-                result = game_actions.move(player, fallback)
+                result = game_actions.move(
+                    player,
+                    fallback,
+                    allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
+                )
                 self._log(
                     "move_fallback",
                     target_id=self.target_id,
@@ -1443,7 +1554,6 @@ class HuntingAI:
     def _step_attack_ready(self, snapshot: dict[str, Any]):
         actor = self._refresh_locked_target(snapshot)
         player = self._position(snapshot)
-
         if actor is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
             return
@@ -1451,23 +1561,31 @@ class HuntingAI:
             self._stop.wait(0.10)
             return
 
-        distance = self._tile_distance(player, self.target_pos)
+        native_only = bool(app_state.get_profile().hunt.native_only_actions)
         player_render = self._render_position(snapshot)
         target_render = self._target_render_position(snapshot)
-        if (
-            player_render is None
-            or target_render is None
-            or not game_actions.can_project(
-                player_render,
-                target_render,
-                sprite=True,
-            )
-        ):
-            self._set_state(
-                "ROUTING",
-                f"{self.target_name} moved out of clickable range",
-            )
-            return
+
+        if not game_actions.native_attack_ready():
+            if native_only:
+                self._set_state(
+                    "FAILED",
+                    "Native combat bridge is not ready; physical click fallback is disabled.",
+                )
+                return
+            if (
+                player_render is None
+                or target_render is None
+                or not game_actions.can_project(
+                    player_render,
+                    target_render,
+                    sprite=True,
+                )
+            ):
+                self._set_state(
+                    "ROUTING",
+                    f"{self.target_name} moved out of clickable range",
+                )
+                return
 
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
@@ -1480,21 +1598,28 @@ class HuntingAI:
 
         player_render = self._render_position(fresh)
         target_render = self._target_render_position(fresh)
-        if player_render is None or target_render is None:
-            return
-
         self.attack_clicked_at = time.time()
-        result = game_actions.attack(
-            player_render,
-            target_render,
-            retry_index=self.attack_retry,
-            target_key=self.target_name,
-            actor_id=int(self.target_id) if self.target_id is not None else None,
-        )
+
+        if game_actions.native_attack_ready():
+            result = game_actions.attack(
+                actor_id=int(self.target_id) if self.target_id is not None else None,
+                allow_mouse_fallback=False,
+            )
+        else:
+            result = game_actions.attack(
+                player_render,
+                target_render,
+                retry_index=self.attack_retry,
+                target_key=self.target_name,
+                actor_id=int(self.target_id) if self.target_id is not None else None,
+                allow_mouse_fallback=True,
+            )
+
         self._log(
             "attack_attempt",
             target_id=self.target_id,
             target_name=self.target_name,
+            priority=self._monster_priority(self.target_name),
             retry=self.attack_retry,
             result=result,
         )
@@ -1502,17 +1627,17 @@ class HuntingAI:
         if not result.get("ok"):
             self._set_state(
                 "ROUTING",
-                f"Target is not safely clickable: {result.get('reason')}",
+                f"Could not attack target: {result.get('reason')}",
             )
             return
 
-        self._attack_backend = str(result.get("backend") or "mouse")
+        self._attack_backend = str(result.get("backend") or "native")
         self._attack_origin = player
         self._combat_click_locked = False
         self._combat_seen = False
         self._set_state(
             "ATTACKING",
-            f"Attack click sent to {self.target_name}; verifying actor click",
+            f"Attack sent to {self.target_name}; verifying combat",
         )
 
     def _step_attacking(self, snapshot: dict[str, Any]):
@@ -1590,6 +1715,8 @@ class HuntingAI:
                 target_render,
                 retry_index=self.attack_retry,
                 target_key=self.target_name,
+                actor_id=int(self.target_id) if self.target_id is not None else None,
+                allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
             )
             self._log(
                 "attack_precision_retry",
@@ -1616,6 +1743,9 @@ class HuntingAI:
 
 
     def _step_waiting_for_death(self, snapshot: dict[str, Any]):
+        if self._maybe_preempt_for_higher_priority_aggressor(snapshot):
+            return
+
         if self._refresh_locked_target(snapshot) is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} defeated")
             return
@@ -1704,7 +1834,12 @@ class HuntingAI:
             float(player[0]),
             float(player[1]),
         )
-        result = game_actions.loot(player_render, item_pos)
+        result = game_actions.loot(
+            player_render,
+            item_pos,
+            item_id=item_id,
+            allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
+        )
         self._log(
             "loot_attempt",
             item_id=item_id,
@@ -2143,6 +2278,14 @@ class HuntingAI:
                     result=result,
                 )
         else:
+            if app_state.get_profile().hunt.native_only_actions:
+                game_actions.release_hold_move()
+                self._set_state(
+                    "FAILED",
+                    "Native movement bridge is not ready; physical mouse fallback is disabled.",
+                )
+                return
+
             if reconnecting:
                 dx = destination[0] - player[0]
                 dy = destination[1] - player[1]
@@ -2436,6 +2579,13 @@ class HuntingAI:
                     "direct_attack_click_range": self.direct_attack_click_range,
                     "attack_walk_timeout": self.attack_walk_timeout,
                     "loot_radius": self.loot_radius,
+                    "smart_combat": {
+                        "native_only_actions": app_state.get_profile().hunt.native_only_actions,
+                        "threat_first_combat": app_state.get_profile().hunt.threat_first_combat,
+                        "preempt_for_higher_priority_aggressor": app_state.get_profile().hunt.preempt_for_higher_priority_aggressor,
+                        "loot_after_aggressors": app_state.get_profile().hunt.loot_after_aggressors,
+                        "exploration_frontier_bias": app_state.get_profile().hunt.exploration_frontier_bias,
+                    },
                     "wander_lookahead": self.wander_lookahead,
                     "wander_cursor_radius": self.wander_cursor_radius,
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
