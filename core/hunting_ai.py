@@ -406,6 +406,8 @@ class HuntingAI:
         return int(point["x"]), int(point["y"])
 
     def _loot_candidates(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        if not app_state.get_profile().hunt.loot_all:
+            return []
         items = list(((snapshot.get("live_state") or {}).get("floor_items") or []))
         if not items or not self.recent_kills:
             return []
