@@ -331,6 +331,18 @@ class HuntingAI:
             return False
 
         game_actions.release_hold_move()
+        native_state = native_action_bridge.snapshot()
+        if not native_state.get("attached"):
+            try:
+                native_action_bridge.start()
+            except Exception as exc:
+                self._log(
+                    "teleport_failed",
+                    reason=reason,
+                    error="native_bridge_start_failed",
+                    message=str(exc),
+                )
+                return False
         result = native_action_bridge.item_use(int(item["index"]), int(target_id))
         self._log(
             "teleport_item_use",
