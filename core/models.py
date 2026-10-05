@@ -35,16 +35,28 @@ class HuntSettings(BaseModel):
 
 
 class HealingSettings(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     item: str = ""
     hp_below_percent: int = 50
+    hotkey: str = "1"
+    cooldown_seconds: float = 0.9
+
+
+class SupplySettings(BaseModel):
+    awakening_potions: int = 4
+    butterfly_wings: int = 1
 
 
 class TownSettings(BaseModel):
+    # Blank means: Butterfly Wing to the character's saved respawn point,
+    # then discover/use the nearest town services on the map we actually land on.
     storage_map: str = ""
     storage_npc: str = ""
-    return_weight_percent: int = 80
+    return_weight_percent: int = 70
     butterfly_wing_item: str = "Butterfly Wing"
+    auto_nearest_services: bool = True
+    return_method: str = "butterfly_wing"
+    supplies: SupplySettings = Field(default_factory=SupplySettings)
 
 
 class BotProfile(BaseModel):
