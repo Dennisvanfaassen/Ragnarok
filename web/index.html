@@ -180,6 +180,42 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </section>
 
     <section class="card full">
+      <h2>Targeting v1</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Uses your Hunt profile monster list and live actor positions to select the nearest valid target.
+        Read-only for now: no movement or attack packets are sent.
+      </div>
+      <div class="row">
+        <section class="card" style="grid-column:span 6">
+          <h2>Selected target</h2>
+          <div id="selectedTarget" class="metric" style="font-size:20px">—</div>
+          <div id="selectedTargetMeta" class="muted">No valid target yet</div>
+        </section>
+        <section class="card" style="grid-column:span 6">
+          <h2>Candidate monsters</h2>
+          <div id="candidateCount" class="metric" style="font-size:20px">0</div>
+          <div class="muted">Filtered using Bot profile → Monsters</div>
+        </section>
+      </div>
+      <div style="overflow:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Name</th>
+              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">ID</th>
+              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">X</th>
+              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">Y</th>
+              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">Tiles</th>
+            </tr>
+          </thead>
+          <tbody id="targetRows">
+            <tr><td colspan="5" class="muted" style="padding:10px">No candidates yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>Wireshark capture analyzer</h2>
       <div class="muted" style="margin-bottom:12px">
         Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
@@ -304,12 +340,58 @@ async function refreshAuthenticatedClient(){
   renderLiveState(data);
   out(data);
 }
+function renderTargeting(data){
+  const selected=(data&&data.selected)||null;
+  const count=(data&&data.candidate_count)||0;
+  const selectedEl=document.getElementById('selectedTarget');
+  const metaEl=document.getElementById('selectedTargetMeta');
+  const countEl=document.getElementById('candidateCount');
+  const rowsEl=document.getElementById('targetRows');
+
+  if(countEl) countEl.textContent=count;
+
+  if(selected){
+    if(selectedEl) selectedEl.textContent=selected.name||('Monster #'+selected.id);
+    if(metaEl) metaEl.textContent='ID '+selected.id+' · '+selected.x+','+selected.y+' · '+selected.tile_distance+' tiles away';
+  }else{
+    if(selectedEl) selectedEl.textContent='—';
+    if(metaEl) metaEl.textContent='No valid target yet';
+  }
+
+  if(rowsEl){
+    const items=(data&&data.candidates)||[];
+    if(!items.length){
+      rowsEl.innerHTML='<tr><td colspan="5" class="muted" style="padding:10px">No candidates yet</td></tr>';
+    }else{
+      rowsEl.innerHTML=items.slice(0,20).map(function(item){
+        return '<tr>'+
+          '<td style="padding:8px;border-bottom:1px solid var(--line)">'+escapeHtml(item.name||'Unknown')+'</td>'+
+          '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+item.id+'</td>'+
+          '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+item.x+'</td>'+
+          '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+item.y+'</td>'+
+          '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+(item.tile_distance??'—')+'</td>'+
+        '</tr>';
+      }).join('');
+    }
+  }
+}
+function escapeHtml(value){
+  return String(value)
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'","&#039;");
+}
 async function refreshLiveStateQuiet(){
   try{
     const r=await fetch('/api/diagnostics/authenticated-client');
     const data=await r.json();
     document.getElementById('authClientStatus').value=data.status||'unknown';
     renderLiveState(data);
+    const tr=await fetch('/api/targeting/live');
+    const targeting=await tr.json();
+    renderTargeting(targeting);
   }catch(e){}
 }
 async function stopAuthenticatedClient(){
