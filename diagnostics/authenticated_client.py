@@ -563,6 +563,46 @@ class AuthenticatedClientMonitor:
             }
         return None
 
+    def _trace_pickup_context(self, payload: bytes):
+        """Capture raw server payload around a validated floor-item removal.
+
+        On successful pickup the server normally removes a known floor item
+        and sends an inventory-add acknowledgement close to it. Rather than
+        guessing the acknowledgement opcode, use the known floor-item ID as
+        an anchor and preserve the surrounding bytes for discovery.
+        """
+        size = len(payload)
+        if size < 6:
+            return
+
+        for i in range(0, size - 5):
+            if int.from_bytes(payload[i:i + 2], "little") != 0x00A1:
+                continue
+
+            item_id = int.from_bytes(payload[i + 2:i + 6], "little")
+            if item_id not in self._floor_items:
+                continue
+
+            start = max(0, i - 64)
+            end = min(size, i + 192)
+            self._item_packet_trace.append({
+                "timestamp": time.time(),
+                "opcode": "0x00A1",
+                "name": "pickup_context",
+                "kind": "raw_pickup_discovery",
+                "floor_item_id": item_id,
+                "payload_offset": i,
+                "tcp_payload_length": size,
+                "context_start": start,
+                "context_end": end,
+                "context_hex": payload[start:end].hex(" "),
+                "note": (
+                    "Validated floor-item disappearance. Nearby raw bytes are "
+                    "captured to identify this client's inventory-add packet."
+                ),
+            })
+            break
+
     def _trace_incremental_item_candidates(self, payload: bytes):
         size = len(payload)
         now = time.time()
@@ -918,6 +958,7 @@ class AuthenticatedClientMonitor:
                 with self._lock:
                     if stage == "map":
                         if direction == "server_to_client":
+                            self._trace_pickup_context(payload)
                             self._trace_item_candidates(payload)
                             self._trace_incremental_item_candidates(payload)
                             self._parse_payload(payload)
