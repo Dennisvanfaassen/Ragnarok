@@ -11,6 +11,7 @@ from core.models import BotProfile, ServerProfile
 from core.state import app_state
 from core.targeting import build_targeting_state
 from core.pathing import build_pathing_state, nav_repository
+from core.active_control import active_hunt_controller
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -223,3 +224,21 @@ async def live_pathing():
         )
 
     return pathing
+
+
+@app.post("/api/active-hunt/start")
+async def start_active_hunt(payload: dict):
+    try:
+        return active_hunt_controller.start(payload)
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/active-hunt/stop")
+async def stop_active_hunt():
+    return active_hunt_controller.stop()
+
+
+@app.get("/api/active-hunt")
+async def active_hunt_state():
+    return active_hunt_controller.snapshot()
