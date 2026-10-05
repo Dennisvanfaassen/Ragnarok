@@ -309,18 +309,8 @@ rpc.exports = {
     },
 
     move(x, y) {
-        if (mapSocket === null) {
-            return {
-                ok: false,
-                reason: 'map_socket_not_learned'
-            };
-        }
-        if (sendFn === null) {
-            return {
-                ok: false,
-                reason: 'send_export_unavailable'
-            };
-        }
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
 
         const px = Math.max(0, Math.min(1023, Number(x) | 0));
         const py = Math.max(0, Math.min(1023, Number(y) | 0));
@@ -341,6 +331,85 @@ rpc.exports = {
             packet_hex: bytes.map(b => ('0' + b.toString(16)).slice(-2)).join(' '),
             socket: mapSocket.toString()
         };
+    },
+
+    talkNpc(actorId, type) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const id = Number(actorId) >>> 0;
+        const talkType = Number(type === undefined ? 1 : type) & 0xff;
+        const bytes = [
+            0x90, 0x00,
+            id & 0xff,
+            (id >>> 8) & 0xff,
+            (id >>> 16) & 0xff,
+            (id >>> 24) & 0xff,
+            talkType
+        ];
+        const packet = Memory.alloc(7);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 7, 0);
+        return {
+            ok: result === 7,
+            bytes_sent: result,
+            actor_id: id,
+            type: talkType,
+            packet_hex: bytes.map(b => ('0' + b.toString(16)).slice(-2)).join(' '),
+            socket: mapSocket.toString()
+        };
+    },
+
+    continueNpc(actorId) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const id = Number(actorId) >>> 0;
+        const bytes = [
+            0xb9, 0x00,
+            id & 0xff,
+            (id >>> 8) & 0xff,
+            (id >>> 16) & 0xff,
+            (id >>> 24) & 0xff
+        ];
+        const packet = Memory.alloc(6);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 6, 0);
+        return {ok:result===6, bytes_sent:result, actor_id:id, packet_hex:bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '), socket:mapSocket.toString()};
+    },
+
+    chooseNpcOption(actorId, option) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const id = Number(actorId) >>> 0;
+        const response = Number(option) & 0xff;
+        const bytes = [
+            0xb8, 0x00,
+            id & 0xff,
+            (id >>> 8) & 0xff,
+            (id >>> 16) & 0xff,
+            (id >>> 24) & 0xff,
+            response
+        ];
+        const packet = Memory.alloc(7);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 7, 0);
+        return {ok:result===7, bytes_sent:result, actor_id:id, option:response, packet_hex:bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '), socket:mapSocket.toString()};
+    },
+
+    closeNpc(actorId) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const id = Number(actorId) >>> 0;
+        const bytes = [
+            0x46, 0x01,
+            id & 0xff,
+            (id >>> 8) & 0xff,
+            (id >>> 16) & 0xff,
+            (id >>> 24) & 0xff
+        ];
+        const packet = Memory.alloc(6);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 6, 0);
+        return {ok:result===6, bytes_sent:result, actor_id:id, packet_hex:bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '), socket:mapSocket.toString()};
     }
 };
 """
@@ -537,6 +606,45 @@ class NativeActionBridge:
             "result": result,
         })
         return result
+
+    def _npc_call(self, method: str, actor_id: int, *args) -> dict[str, Any]:
+        actor_id = int(actor_id)
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "executed": False, "reason": "bridge_not_running"}
+
+        status = self._agent_status()
+        if not status.get("socket_learned"):
+            return {"ok": False, "executed": False, "reason": "map_socket_not_learned"}
+
+        try:
+            fn = getattr(script.exports_sync, method)
+            result = dict(fn(actor_id, *args))
+        except Exception as exc:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+            }
+
+        result["executed"] = bool(result.get("ok"))
+        result["command"] = method
+        self._record({"event": "direct_npc_action", "result": result})
+        return result
+
+    def talk_npc(self, actor_id: int, talk_type: int = 1) -> dict[str, Any]:
+        return self._npc_call("talk_npc", actor_id, int(talk_type))
+
+    def continue_npc(self, actor_id: int) -> dict[str, Any]:
+        return self._npc_call("continue_npc", actor_id)
+
+    def choose_npc_option(self, actor_id: int, option: int) -> dict[str, Any]:
+        return self._npc_call("choose_npc_option", actor_id, int(option))
+
+    def close_npc(self, actor_id: int) -> dict[str, Any]:
+        return self._npc_call("close_npc", actor_id)
 
     def attack(self, actor_id: int) -> dict[str, Any]:
         actor_id = int(actor_id)
