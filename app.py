@@ -17,6 +17,7 @@ from core.world_route import world_route_planner
 from core.town_travel import town_travel_controller
 from core.map_dashboard import map_grid_payload, map_live_overlay
 from core.hunt_routes import hunt_route_store
+from core.game_actions import game_actions
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -182,6 +183,28 @@ async def clear_authenticated_client():
 @app.get("/api/diagnostics/authenticated-client")
 async def authenticated_client_state():
     return authenticated_client_monitor.snapshot()
+
+
+@app.get("/api/game-actions")
+async def game_actions_state():
+    return game_actions.snapshot()
+
+
+@app.get("/api/game-actions/direct-probe")
+async def direct_action_probe():
+    return game_actions.direct_action_probe()
+
+
+@app.post("/api/game-actions/direct-probe/attack")
+async def direct_action_attack_probe(payload: dict):
+    try:
+        actor_id = int(payload.get("actor_id"))
+    except Exception:
+        raise HTTPException(400, "actor_id is required")
+    result = game_actions.dry_run_attack(actor_id)
+    if not result.get("ok"):
+        raise HTTPException(404, result.get("reason") or "Actor not visible")
+    return result
 
 
 @app.get("/api/targeting/live")
