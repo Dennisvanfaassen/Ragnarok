@@ -67,6 +67,8 @@ class HuntingAI:
         self.loot_radius = 12
         self.recent_kills: list[dict[str, Any]] = []
         self.loot_retry: dict[int, int] = {}
+        self.loot_ignored: set[int] = set()
+        self.max_loot_retries = 3
         self.wander_min_distance = 16
         self.wander_max_distance = 32
         self.wander_lookahead = 10
@@ -675,6 +677,17 @@ class HuntingAI:
         if not hunt.loot_all and not hunt.monster_rules:
             return []
         items = list(((snapshot.get("live_state") or {}).get("floor_items") or []))
+
+        # Forget ignored IDs as soon as the client no longer reports them.
+        # This prevents one stale/unlootable floor item from blocking the whole
+        # hunting loop forever while still allowing future drops to be looted.
+        live_item_ids = {
+            int(row.get("id"))
+            for row in items
+            if row.get("id") is not None
+        }
+        self.loot_ignored.intersection_update(live_item_ids)
+
         if not items or not self.recent_kills:
             return []
 
@@ -688,6 +701,13 @@ class HuntingAI:
 
         result = []
         for item in items:
+            try:
+                item_id = int(item.get("id"))
+            except Exception:
+                item_id = -1
+            if item_id in self.loot_ignored:
+                continue
+
             ix, iy = item.get("x"), item.get("y")
             if ix is None or iy is None:
                 continue
@@ -1691,7 +1711,23 @@ class HuntingAI:
         )
 
         if not result.get("ok"):
-            self.loot_retry[item_id] = self.loot_retry.get(item_id, 0) + 1
+            retries = self.loot_retry.get(item_id, 0) + 1
+            self.loot_retry[item_id] = retries
+            if retries >= self.max_loot_retries:
+                self.loot_ignored.add(item_id)
+                self.loot_retry.pop(item_id, None)
+                self._log(
+                    "loot_skipped_after_retries",
+                    item_id=item_id,
+                    item_name_id=item.get("name_id"),
+                    retries=retries,
+                    reason=result.get("reason"),
+                )
+                self._set_state(
+                    "SEARCHING",
+                    "Skipping unlootable floor item; continuing hunt",
+                )
+                return
             self._stop.wait(0.06)
             return
 
@@ -1715,7 +1751,22 @@ class HuntingAI:
                 self.loot_retry.pop(item_id, None)
                 return
 
-        self.loot_retry[item_id] = self.loot_retry.get(item_id, 0) + 1
+        retries = self.loot_retry.get(item_id, 0) + 1
+        self.loot_retry[item_id] = retries
+        if retries >= self.max_loot_retries:
+            self.loot_ignored.add(item_id)
+            self.loot_retry.pop(item_id, None)
+            self._log(
+                "loot_skipped_after_retries",
+                item_id=item_id,
+                item_name_id=item.get("name_id"),
+                retries=retries,
+                reason="floor_item_did_not_disappear",
+            )
+            self._set_state(
+                "SEARCHING",
+                "Loot did not disappear; skipping it and continuing hunt",
+            )
 
     def _wander_corridor_is_narrow(
         self,
@@ -2311,6 +2362,8 @@ class HuntingAI:
             self._wander_last_position = None
             self._wander_last_progress_at = time.time()
             self._target_failure_count.clear()
+            self.loot_retry.clear()
+            self.loot_ignored.clear()
             self.running = True
             self._thread = threading.Thread(
                 target=self._loop,
