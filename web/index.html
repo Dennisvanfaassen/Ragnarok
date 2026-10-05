@@ -25,6 +25,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .legend-you{background:#4da3ff}.legend-monster{background:#ff4f64}.legend-player{background:#32df8f}.legend-other{background:#a1a8b5}
 #liveMapCanvas{width:100%;height:min(72vh,760px);display:block;background:#05070b;border-radius:10px;image-rendering:pixelated}
 .map-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.map-stat{background:#0c1119;border:1px solid var(--line);border-radius:10px;padding:10px}
+.route-editor{margin-top:14px;padding:14px;background:#0c1119;border:1px solid var(--line);border-radius:12px}
+.route-editor .row{align-items:end}.route-help{margin-top:9px;font-size:12px;color:var(--muted)}
+#liveMapCanvas.route-editing{cursor:crosshair;outline:2px solid var(--accent);outline-offset:2px}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.shell{grid-template-columns:1fr}.side{display:none}.card,.wide{grid-column:1/-1}.main{padding:18px}}
 </style>
@@ -380,6 +383,30 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <div class="map-shell">
         <canvas id="liveMapCanvas" width="1100" height="760"></canvas>
       </div>
+      <div class="route-editor">
+        <div class="row">
+          <label>Hunting route
+            <input id="huntRouteStatus" value="No saved route" disabled>
+          </label>
+          <label>End behavior
+            <select id="huntRouteMode">
+              <option value="loop">Loop: 1 → 2 → 3 → 1</option>
+              <option value="pingpong">Ping-pong: 1 → 2 → 3 → 2 → 1</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="editRouteButton" class="action" onclick="toggleRouteEditing()">Edit route</button>
+          <button class="action secondary" onclick="undoRoutePoint()">Undo point</button>
+          <button class="action secondary" onclick="clearRouteDraft()">Clear draft</button>
+          <button class="action" onclick="saveHuntRoute()">Save route</button>
+          <button class="action danger" onclick="deleteHuntRoute()">Delete saved route</button>
+          <button class="action" onclick="startActiveHunt()">Start hunting</button>
+        </div>
+        <div id="huntRouteHelp" class="route-help">
+          Press Edit route, then click walkable locations on the map in the exact order you want the bot to patrol.
+        </div>
+      </div>
       <div class="map-stats">
         <div class="map-stat"><div class="muted">Position</div><div id="mapPlayerPos" class="metric" style="font-size:18px">—</div></div>
         <div class="map-stat"><div class="muted">Monsters known</div><div id="mapMonsterCount" class="metric" style="font-size:18px">0</div></div>
@@ -685,6 +712,9 @@ async function refreshTownTravelQuiet(){
 let currentView='dashboard';
 let mapGrid={map:null,width:0,height:0,cells:null,baseCanvas:null};
 let mapOverlay=null;
+let huntRoute={map:null,mode:'loop',waypoints:[],exists:false};
+let routeDraft=[];
+let routeEditing=false;
 
 function switchView(view){
   currentView=view;
@@ -756,6 +786,146 @@ async function loadCurrentMapGrid(force=false){
   return data;
 }
 
+
+async function loadHuntRoute(force=false){
+  if(!mapOverlay || !mapOverlay.map) return;
+  if(!force && huntRoute.map===mapOverlay.map) return;
+  try{
+    const r=await fetch('/api/hunt-route/current');
+    const data=await r.json();
+    huntRoute=data||{map:mapOverlay.map,mode:'loop',waypoints:[],exists:false};
+    routeDraft=(huntRoute.waypoints||[]).map(p=>({x:p.x,y:p.y}));
+    const mode=document.getElementById('huntRouteMode');
+    if(mode) mode.value=huntRoute.mode||'loop';
+    renderRouteStatus();
+  }catch(e){}
+}
+
+function renderRouteStatus(){
+  const status=document.getElementById('huntRouteStatus');
+  const help=document.getElementById('huntRouteHelp');
+  const points=routeEditing?routeDraft:(huntRoute.waypoints||[]);
+  if(status){
+    status.value=(huntRoute.exists?'Saved · ':'')+points.length+' points'+
+      (routeEditing?' · editing':'');
+  }
+  if(help){
+    help.textContent=routeEditing
+      ? 'Editing: click the map to add numbered points. Clicks snap to the nearest walkable cell.'
+      : 'Saved route is used automatically whenever Hunting runs on this map.';
+  }
+  const btn=document.getElementById('editRouteButton');
+  if(btn) btn.textContent=routeEditing?'Finish editing':'Edit route';
+  const canvas=document.getElementById('liveMapCanvas');
+  if(canvas) canvas.classList.toggle('route-editing',routeEditing);
+}
+
+function toggleRouteEditing(){
+  routeEditing=!routeEditing;
+  if(routeEditing){
+    routeDraft=(huntRoute.waypoints||[]).map(p=>({x:p.x,y:p.y}));
+  }
+  renderRouteStatus();
+  drawLiveMap();
+}
+
+function undoRoutePoint(){
+  if(!routeEditing) routeEditing=true;
+  routeDraft.pop();
+  renderRouteStatus();
+  drawLiveMap();
+}
+
+function clearRouteDraft(){
+  routeEditing=true;
+  routeDraft=[];
+  renderRouteStatus();
+  drawLiveMap();
+}
+
+function nearestWalkableClient(x,y,maxRadius=8){
+  if(!mapGrid.cells) return null;
+  function walk(xx,yy){
+    return xx>=0&&yy>=0&&xx<mapGrid.width&&yy<mapGrid.height&&
+      mapGrid.cells[yy*mapGrid.width+xx]===1;
+  }
+  if(walk(x,y)) return {x,y};
+  for(let r=1;r<=maxRadius;r++){
+    let best=null,bestD=1e9;
+    for(let yy=y-r;yy<=y+r;yy++){
+      for(let xx=x-r;xx<=x+r;xx++){
+        if(Math.max(Math.abs(xx-x),Math.abs(yy-y))!==r||!walk(xx,yy)) continue;
+        const d=Math.abs(xx-x)+Math.abs(yy-y);
+        if(d<bestD){best={x:xx,y:yy};bestD=d}
+      }
+    }
+    if(best) return best;
+  }
+  return null;
+}
+
+function canvasToMap(event){
+  const canvas=document.getElementById('liveMapCanvas');
+  if(!canvas||!mapGrid.cells) return null;
+  const rect=canvas.getBoundingClientRect();
+  const dpr=Math.max(1,window.devicePixelRatio||1);
+  const cw=canvas.width,ch=canvas.height;
+  const pad=24*dpr;
+  const scale=Math.min(
+    (cw-pad*2)/mapGrid.width,
+    (ch-pad*2)/mapGrid.height
+  );
+  const drawW=mapGrid.width*scale;
+  const drawH=mapGrid.height*scale;
+  const ox=(cw-drawW)/2;
+  const oy=(ch-drawH)/2;
+  const px=(event.clientX-rect.left)*dpr;
+  const py=(event.clientY-rect.top)*dpr;
+  if(px<ox||py<oy||px>ox+drawW||py>oy+drawH) return null;
+  const x=Math.round((px-ox)/scale);
+  const y=Math.round(mapGrid.height-1-(py-oy)/scale);
+  return nearestWalkableClient(x,y);
+}
+
+function onMapCanvasClick(event){
+  if(!routeEditing) return;
+  const p=canvasToMap(event);
+  if(!p) return;
+  routeDraft.push(p);
+  renderRouteStatus();
+  drawLiveMap();
+}
+
+async function saveHuntRoute(){
+  if(!mapOverlay||!mapOverlay.map){out('Current map is not known yet.');return}
+  if(routeDraft.length<2){out('Add at least two route points first.');return}
+  const mode=document.getElementById('huntRouteMode').value;
+  const r=await fetch('/api/hunt-route/current',{
+    method:'PUT',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({waypoints:routeDraft,mode})
+  });
+  const data=await r.json();
+  if(!r.ok){out(data);return}
+  huntRoute=data;
+  routeDraft=(data.waypoints||[]).map(p=>({x:p.x,y:p.y}));
+  routeEditing=false;
+  renderRouteStatus();
+  drawLiveMap();
+  out(data);
+}
+
+async function deleteHuntRoute(){
+  const r=await fetch('/api/hunt-route/current',{method:'DELETE'});
+  const data=await r.json();
+  huntRoute=data;
+  routeDraft=[];
+  routeEditing=false;
+  renderRouteStatus();
+  drawLiveMap();
+  out(data);
+}
+
 function drawLiveMap(){
   const canvas=document.getElementById('liveMapCanvas');
   if(!canvas || !mapGrid.baseCanvas || !mapOverlay) return;
@@ -803,6 +973,39 @@ function drawLiveMap(){
     }
   }
 
+  const routePoints=routeEditing?routeDraft:(huntRoute.waypoints||[]);
+  if(routePoints.length){
+    ctx.lineWidth=3*dpr;
+    ctx.strokeStyle='#7c6cff';
+    ctx.beginPath();
+    routePoints.forEach((entry,index)=>{
+      const p=point(entry.x,entry.y);
+      if(index===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+    });
+    const mode=(routeEditing?document.getElementById('huntRouteMode').value:huntRoute.mode)||'loop';
+    if(mode==='loop' && routePoints.length>1){
+      const first=point(routePoints[0].x,routePoints[0].y);
+      ctx.lineTo(first.x,first.y);
+    }
+    ctx.stroke();
+
+    routePoints.forEach((entry,index)=>{
+      const p=point(entry.x,entry.y);
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,9*dpr,0,Math.PI*2);
+      ctx.fillStyle='#7c6cff';
+      ctx.fill();
+      ctx.lineWidth=2*dpr;
+      ctx.strokeStyle='#ffffff';
+      ctx.stroke();
+      ctx.fillStyle='#ffffff';
+      ctx.font=(10*dpr)+'px Segoe UI';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.fillText(String(index+1),p.x,p.y);
+    });
+  }
+
   for(const actor of (mapOverlay.other||[])) dot(actor,3,'#a1a8b5');
   for(const actor of (mapOverlay.players||[])) dot(actor,4,'#32df8f');
   for(const actor of (mapOverlay.monsters||[])){
@@ -827,6 +1030,9 @@ async function refreshMapLive(forceGrid=false){
 
     if(overlay.map && (forceGrid || mapGrid.map!==overlay.map || !mapGrid.cells)){
       await loadCurrentMapGrid(true);
+      await loadHuntRoute(true);
+    }else if(overlay.map && huntRoute.map!==overlay.map){
+      await loadHuntRoute(true);
     }
     if(currentView==='map') drawLiveMap();
   }catch(e){}
@@ -855,6 +1061,8 @@ async function analyzePcap(){
 }
 async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh()}
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
+const mapCanvas=document.getElementById('liveMapCanvas');
+if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
 refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);refreshHotkeyQuiet();
 </script>
 </body>
