@@ -26,6 +26,8 @@ class TownTravelController:
         self.actions: list[dict[str, Any]] = []
         self.lookahead = 10
         self.cursor_radius = 180
+        self._native_destination: tuple[int, int] | None = None
+        self._native_sent_at = 0.0
 
     def _log(self, action: str, **details):
         with self._lock:
@@ -138,35 +140,56 @@ class TownTravelController:
                 lookahead = min(len(path) - 1, index + self.lookahead)
                 destination = path[lookahead]
 
-            dx = destination[0] - player[0]
-            dy = destination[1] - player[1]
-
-            result = game_actions.update_hold_direction(
-                dx,
-                dy,
-                radius_px=self.cursor_radius,
-                min_pixel_change=18,
-            )
-
-            if not result.get("ok"):
-                # Keep walking naturally but shorten the lookahead if needed.
-                worked = False
-                for short in (7, 5, 3, 1):
-                    idx = min(len(path) - 1, index + short)
-                    point = path[idx]
-                    result = game_actions.update_hold_direction(
-                        point[0] - player[0],
-                        point[1] - player[1],
-                        radius_px=self.cursor_radius,
-                        min_pixel_change=12,
+            if game_actions.native_move_ready():
+                now = time.time()
+                if (
+                    self._native_destination != destination
+                    or now - self._native_sent_at >= 1.0
+                ):
+                    result = game_actions.move_to(destination)
+                    if not result.get("ok"):
+                        self._set(
+                            "ERROR",
+                            f"Native move to portal failed: {result.get('reason')}",
+                        )
+                        return False
+                    self._native_destination = destination
+                    self._native_sent_at = now
+                    self._log(
+                        "native_portal_move",
+                        destination={"x": destination[0], "y": destination[1]},
+                        result=result,
                     )
-                    if result.get("ok"):
-                        worked = True
-                        break
-                if not worked:
-                    game_actions.release_hold_move()
-                    self._set("ERROR", "Could not steer toward portal.")
-                    return False
+            else:
+                dx = destination[0] - player[0]
+                dy = destination[1] - player[1]
+
+                result = game_actions.update_hold_direction(
+                    dx,
+                    dy,
+                    radius_px=self.cursor_radius,
+                    min_pixel_change=18,
+                )
+
+                if not result.get("ok"):
+                    # Keep walking naturally but shorten the lookahead if needed.
+                    worked = False
+                    for short in (7, 5, 3, 1):
+                        idx = min(len(path) - 1, index + short)
+                        point = path[idx]
+                        result = game_actions.update_hold_direction(
+                            point[0] - player[0],
+                            point[1] - player[1],
+                            radius_px=self.cursor_radius,
+                            min_pixel_change=12,
+                        )
+                        if result.get("ok"):
+                            worked = True
+                            break
+                    if not worked:
+                        game_actions.release_hold_move()
+                        self._set("ERROR", "Could not steer toward portal.")
+                        return False
 
             # When on/near the trigger, keep holding toward it and wait for the
             # server map change instead of clicking repeatedly.
@@ -246,6 +269,8 @@ class TownTravelController:
             self.message = "Planning fastest physical route to town."
             self.destination_town = None
             self.current_leg = None
+            self._native_destination = None
+            self._native_sent_at = 0.0
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
             return self.snapshot()
