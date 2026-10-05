@@ -39,6 +39,9 @@ class GameActionAdapter:
         except Exception:
             return False
 
+    def native_move_ready(self) -> bool:
+        return self.native_attack_ready()
+
     def snapshot(self) -> dict[str, Any]:
         client = authenticated_client_monitor.snapshot()
         native_ready = self.native_attack_ready()
@@ -51,7 +54,8 @@ class GameActionAdapter:
                 "attack": True,
                 "loot": True,
                 "held_direction": True,
-                "native_move": False,
+                "native_move": True,
+                "native_move_ready": native_ready,
                 "native_attack": True,
                 "native_attack_ready": native_ready,
                 "native_loot": False,
@@ -151,8 +155,38 @@ class GameActionAdapter:
     def can_project(self, *args, **kwargs):
         return self._backend.can_project(*args, **kwargs)
 
-    def move(self, *args, **kwargs):
-        return self._backend.move(*args, **kwargs)
+    def move(self, player, destination, *args, **kwargs):
+        if self.native_move_ready():
+            result = native_action_bridge.move(
+                int(destination[0]),
+                int(destination[1]),
+            )
+            if result.get("ok"):
+                result["backend"] = "native"
+                result["input_mode"] = "map_destination"
+                return result
+
+        result = self._backend.move(player, destination, *args, **kwargs)
+        if isinstance(result, dict):
+            result["backend"] = "mouse"
+            result["input_mode"] = "screen_projection"
+        return result
+
+    def move_to(self, destination: tuple[int, int]) -> dict[str, Any]:
+        if self.native_move_ready():
+            result = native_action_bridge.move(
+                int(destination[0]),
+                int(destination[1]),
+            )
+            if result.get("ok"):
+                result["backend"] = "native"
+                result["input_mode"] = "map_destination"
+                return result
+        return {
+            "ok": False,
+            "backend": "native",
+            "reason": "native_move_not_ready",
+        }
 
     def update_hold_direction(self, *args, **kwargs):
         return self._backend.update_hold_direction(*args, **kwargs)
