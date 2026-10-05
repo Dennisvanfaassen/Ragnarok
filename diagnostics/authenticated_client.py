@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+
+from core.openkore_data import item_name
 from scapy.all import AsyncSniffer, IP, TCP, Raw
 
 
@@ -185,6 +187,12 @@ class AuthenticatedClientMonitor:
         self._self_move: dict[str, Any] | None = None
         self._floor_items: dict[int, dict[str, Any]] = {}
         self._aggressors: dict[int, float] = {}
+        self._inventory: dict[int, dict[str, Any]] = {}
+        self._storage: dict[int, dict[str, Any]] = {}
+        self._item_list_updated_at: dict[str, float | None] = {
+            "inventory": None,
+            "storage": None,
+        }
         self._client_action_trace.clear()
         self._item_packet_trace.clear()
         self._parsed_counts: dict[str, int] = {
@@ -577,6 +585,23 @@ class AuthenticatedClientMonitor:
                 if decoded is not None:
                     items.append(decoded)
 
+            for item in items:
+                item["name"] = item_name(int(item["name_id"]))
+
+            list_name = {
+                0: "inventory",
+                2: "storage",
+            }.get(list_type)
+
+            if list_name == "inventory":
+                for item in items:
+                    self._inventory[int(item["index"])] = dict(item)
+                self._item_list_updated_at["inventory"] = time.time()
+            elif list_name == "storage":
+                for item in items:
+                    self._storage[int(item["index"])] = dict(item)
+                self._item_list_updated_at["storage"] = time.time()
+
             self._item_packet_trace.append({
                 "timestamp": time.time(),
                 "opcode": f"0x{opcode:04X}",
@@ -586,6 +611,7 @@ class AuthenticatedClientMonitor:
                 "tcp_payload_length": size,
                 "declared_length": declared_length,
                 "list_type": list_type,
+                "list_name": list_name,
                 "record_length": record_len,
                 "item_count": len(items),
                 "items": items,
@@ -873,6 +899,35 @@ class AuthenticatedClientMonitor:
             ),
         }
 
+    def item_state_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            inventory = [
+                dict(item)
+                for _, item in sorted(self._inventory.items())
+            ]
+            storage = [
+                dict(item)
+                for _, item in sorted(self._storage.items())
+            ]
+            updated = dict(self._item_list_updated_at)
+
+        return {
+            "inventory": inventory,
+            "storage": storage,
+            "counts": {
+                "inventory_entries": len(inventory),
+                "storage_entries": len(storage),
+                "inventory_amount": sum(int(i.get("amount") or 0) for i in inventory),
+                "storage_amount": sum(int(i.get("amount") or 0) for i in storage),
+            },
+            "updated_at": updated,
+            "list_types": {
+                "0": "inventory",
+                "2": "storage",
+            },
+            "source": "authenticated Classic.exe item-list packets + OpenKore item names",
+        }
+
     def client_action_trace_snapshot(self) -> dict[str, Any]:
         with self._lock:
             trace = list(self._client_action_trace)
@@ -1022,6 +1077,14 @@ class AuthenticatedClientMonitor:
                         floor_items,
                         key=lambda item: (item.get("y", 0), item.get("x", 0), item.get("id", 0)),
                     )[:100],
+                    "inventory": [
+                        dict(item)
+                        for _, item in sorted(self._inventory.items())
+                    ],
+                    "storage": [
+                        dict(item)
+                        for _, item in sorted(self._storage.items())
+                    ],
                     "parsed_packets": dict(self._parsed_counts),
                 },
                 "events": events[-100:],
