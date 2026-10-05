@@ -33,17 +33,26 @@ class TownServiceRegistry:
         self._learned: list[dict[str, Any]] = []
         self._load_learned()
 
-        # Verified from OpenKore configuration data and useful for the first
-        # Byalan/Izlude end-to-end test. Runtime actor verification is still
-        # required before interaction.
-        self._seed_service(
-            "kafra",
-            "izlude",
-            134,
-            88,
-            name="Kafra",
-            source="openkore_reference",
-        )
+        # Kafra coordinates referenced by OpenKore configuration/examples.
+        # Runtime actor verification is still required before interaction, so a
+        # server-specific/custom NPC layout will fail safely instead of clicking
+        # an unrelated actor.
+        for map_name, x, y in [
+            ("izlude", 134, 88),
+            ("prontera", 151, 29),
+            ("geffen", 120, 62),
+            ("payon", 181, 104),
+            ("morocc", 160, 258),
+            ("alberta", 113, 60),
+        ]:
+            self._seed_service(
+                "kafra",
+                map_name,
+                x,
+                y,
+                name="Kafra",
+                source="openkore_reference",
+            )
 
     @staticmethod
     def _map(value: str | None) -> str:
