@@ -485,6 +485,26 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             <input value="Butterfly Wing → saved point → nearest services" disabled>
           </label>
         </div>
+        <div class="row">
+          <label>Teleport item
+            <input id="teleportItem" value="Fly Wing" placeholder="Fly Wing">
+          </label>
+          <label>Emergency HP action
+            <select id="emergencyAction">
+              <option value="teleport" selected>Teleport away</option>
+              <option value="stop">Stop hunting immediately</option>
+              <option value="none">No emergency action</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Emergency HP below %
+            <input id="emergencyHp" type="number" min="1" max="99" value="20">
+          </label>
+          <label>Target priority
+            <input value="Per monster · priority 1 is highest" disabled>
+          </label>
+        </div>
       </section>
 
       <section class="card">
@@ -588,6 +608,10 @@ function currentMonsterRules(){
     return {
       monster:rule.monster,
       enabled:!!rule.enabled,
+      behavior:rule.behavior||'attack',
+      priority:+(rule.priority||50),
+      min_distance:+(rule.min_distance||0),
+      max_distance:+(rule.max_distance||0),
       loot_mode:rule.loot_mode||'all',
       include_items:Array.from(rule.include_items||[]),
       exclude_items:Array.from(rule.exclude_items||[])
@@ -606,7 +630,10 @@ async function saveProfile(){
       map:document.getElementById('huntMap').value.trim(),
       monsters:selected,
       loot_all:true,
-      monster_rules:rules
+      monster_rules:rules,
+      teleport_item:document.getElementById('teleportItem').value.trim()||'Fly Wing',
+      emergency_hp_percent:+document.getElementById('emergencyHp').value,
+      emergency_action:document.getElementById('emergencyAction').value
     },
     healing:{
       enabled:document.getElementById('healEnabled').value==='true',
@@ -661,6 +688,10 @@ async function loadProfile(){
       huntMonsterRules[String(rule.monster||'').toLowerCase()]={
         monster:rule.monster,
         enabled:rule.enabled!==false,
+        behavior:rule.behavior||'attack',
+        priority:rule.priority??50,
+        min_distance:rule.min_distance??0,
+        max_distance:rule.max_distance??0,
         loot_mode:rule.loot_mode||'all',
         include_items:new Set(rule.include_items||[]),
         exclude_items:new Set(rule.exclude_items||[])
@@ -676,6 +707,9 @@ async function loadProfile(){
     document.getElementById('awakeningTarget').value=supplies.awakening_potions??4;
     document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
     document.getElementById('liveReturnTrigger').value=((p.town&&p.town.return_weight_percent)||70)+'%';
+    document.getElementById('teleportItem').value=(p.hunt&&p.hunt.teleport_item)||'Fly Wing';
+    document.getElementById('emergencyHp').value=(p.hunt&&p.hunt.emergency_hp_percent)||20;
+    document.getElementById('emergencyAction').value=(p.hunt&&p.hunt.emergency_action)||'teleport';
     if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
 }
@@ -685,6 +719,10 @@ function ensureMonsterRule(monster){
     huntMonsterRules[key]={
       monster:monster.name||String(monster),
       enabled:false,
+      behavior:'attack',
+      priority:50,
+      min_distance:0,
+      max_distance:0,
       loot_mode:'all',
       include_items:new Set(),
       exclude_items:new Set()
@@ -697,6 +735,21 @@ function updateMonsterEnabled(name,checked){
   const rule=ensureMonsterRule({name});
   rule.enabled=!!checked;
   document.getElementById('monsters').value=currentMonsterRules().filter(r=>r.enabled).map(r=>r.monster).join(', ');
+}
+
+function updateMonsterBehavior(name,behavior){
+  const rule=ensureMonsterRule({name});
+  rule.behavior=behavior;
+  if(behavior==='ignore') rule.enabled=false;
+  else rule.enabled=true;
+  renderMonsterRules();
+}
+function updateMonsterPriority(name,value){
+  ensureMonsterRule({name}).priority=Math.max(1,Math.min(999,+value||50));
+}
+function updateMonsterDistance(name,kind,value){
+  const rule=ensureMonsterRule({name});
+  rule[kind]=Math.max(0,+value||0);
 }
 
 function updateMonsterLootMode(name,mode){
@@ -758,7 +811,20 @@ function renderMonsterRules(){
       '</div></div>'+
       '<label style="display:flex;grid-template-columns:auto auto;align-items:center;gap:8px;margin:0">'+
       '<input type="checkbox" style="width:auto" '+(rule.enabled?'checked':'')+
-      ' onchange="updateMonsterEnabled(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',this.checked)"> Kill</label></div>'+
+      ' onchange="updateMonsterEnabled(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',this.checked)"> Active</label></div>'+
+      '<div class="row">'+
+      '<label>Behavior<select onchange="updateMonsterBehavior(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',this.value)">'+
+      '<option value="attack" '+(rule.behavior==='attack'?'selected':'')+'>Attack normally</option>'+
+      '<option value="aggressor_only" '+(rule.behavior==='aggressor_only'?'selected':'')+'>Only fight if it attacks me</option>'+
+      '<option value="ignore" '+(rule.behavior==='ignore'?'selected':'')+'>Ignore completely</option>'+
+      '<option value="teleport" '+(rule.behavior==='teleport'?'selected':'')+'>Teleport on sight</option>'+
+      '</select></label>'+
+      '<label>Priority<input type="number" min="1" max="999" value="'+escapeHtml(String(rule.priority??50))+'" onchange="updateMonsterPriority(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',this.value)"></label>'+
+      '</div>'+
+      '<div class="row">'+
+      '<label>Minimum target distance<input type="number" min="0" value="'+escapeHtml(String(rule.min_distance??0))+'" onchange="updateMonsterDistance(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',\'min_distance\',this.value)"></label>'+
+      '<label>Maximum target distance<input type="number" min="0" value="'+escapeHtml(String(rule.max_distance??0))+'" onchange="updateMonsterDistance(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',\'max_distance\',this.value)"></label>'+
+      '</div>'+
       '<div class="row"><label>Loot rule<select onchange="updateMonsterLootMode(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',this.value)">'+
       '<option value="all" '+(mode==='all'?'selected':'')+'>Loot all drops</option>'+
       '<option value="selected" '+(mode==='selected'?'selected':'')+'>Only selected drops</option>'+
@@ -766,6 +832,7 @@ function renderMonsterRules(){
       '<option value="none" '+(mode==='none'?'selected':'')+'>Loot nothing</option>'+
       '</select></label>'+
       '<label>Level / monster ID<input value="'+escapeHtml(String(monster.level??'—'))+' / '+escapeHtml(String(monster.id??'—'))+'" disabled></label></div>'+
+      ((rule.behavior==='teleport')?'<div class="section-note" style="margin-top:10px">Danger rule: RO Control will use '+escapeHtml(document.getElementById('teleportItem')?.value||'Fly Wing')+' as soon as this monster is visible.</div>':'')+
       ((mode==='selected'||mode==='excluded')?dropHtml:'')+
       '</div>';
   }).join('');
