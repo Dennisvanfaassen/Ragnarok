@@ -618,9 +618,10 @@ class HuntingAI:
         """Interrupt movement and attack the locked visible actor in this cycle."""
         mouse_game_adapter.release_hold_move()
 
-        # Re-read state after mouse-up. The player may still be completing the
-        # previous RO movement command, so never click using the stale wander
-        # snapshot if a fresher one is available.
+        # Give Classic.exe one render slice to stop held-mouse steering, then
+        # project the monster from fresh network coordinates. This is short
+        # enough to feel instant but avoids aiming with the last walking frame.
+        self._stop.wait(0.025)
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
         player = self._position(fresh)
@@ -1484,7 +1485,7 @@ class HuntingAI:
                     "wander_lookahead": self.wander_lookahead,
                     "wander_cursor_radius": self.wander_cursor_radius,
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
-                    "combat_click_mode": "0437-confirmed_single_click_until_actor_removed",
+                    "combat_click_mode": "fresh-frame_0437-confirmed_lock_until_death",
                     "attack_precision": mouse_game_adapter.precision_snapshot(),
                     "wander_corridor_mode": "astar_clear_line_only",
                     "wander_progress_mode": "forward_only_straight_segments",
