@@ -691,6 +691,7 @@ class HuntingAI:
             player_render,
             target_render,
             retry_index=0,
+            target_key=self.target_name,
         )
         self._log(
             "instant_attack",
@@ -751,6 +752,15 @@ class HuntingAI:
             return
 
         distance = self._tile_distance(player, self.target_pos)
+
+        if self._attack_reposition_required and distance <= 3:
+            self._attack_reposition_required = False
+            self._attack_reposition_origin = None
+            self._set_state(
+                "ATTACK_READY",
+                f"Close retry on {self.target_name}",
+            )
+            return
 
         # Player-like behavior: if the monster is already visible/clickable,
         # attack immediately and let Ragnarok perform the final approach.
@@ -886,16 +896,8 @@ class HuntingAI:
             self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
             return
 
-        if end_pos != player:
-            if self._attack_reposition_required and self._attack_reposition_origin:
-                if self._tile_distance(
-                    self._attack_reposition_origin,
-                    end_pos,
-                ) >= 2:
-                    self._attack_reposition_required = False
-                    self._attack_reposition_origin = None
-            elif not self._attack_reposition_required:
-                self._attack_reposition_origin = None
+        if end_pos != player and not self._attack_reposition_required:
+            self._attack_reposition_origin = None
 
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
@@ -972,6 +974,7 @@ class HuntingAI:
             player_render,
             target_render,
             retry_index=self.attack_retry,
+            target_key=self.target_name,
         )
         self._log(
             "attack_attempt",
@@ -1014,7 +1017,10 @@ class HuntingAI:
             self.attack_clicked_at,
         ):
             self._combat_click_locked = True
-            mouse_game_adapter.note_attack_registered(self.attack_retry)
+            mouse_game_adapter.note_attack_registered(
+                self.attack_retry,
+                target_key=self.target_name,
+            )
             self._log(
                 "client_attack_registered",
                 target_id=self.target_id,
@@ -1056,6 +1062,7 @@ class HuntingAI:
                 player_render,
                 target_render,
                 retry_index=self.attack_retry,
+                target_key=self.target_name,
             )
             self._log(
                 "attack_precision_retry",
@@ -1076,7 +1083,7 @@ class HuntingAI:
         self._attack_reposition_origin = self._position(snapshot)
         self._set_state(
             "ROUTING",
-            f"Click missed {self.target_name}; repositioning before another try",
+            f"Click missed {self.target_name}; approaching within 3 tiles before retry",
         )
 
 
@@ -1360,10 +1367,22 @@ class HuntingAI:
                 return
             destination = self.wander_line_points[self.wander_line_index]
 
-        # If the live position drifted off the planned segment, reconnect to
-        # the existing forward A* path instead of calculating a brand-new route.
-        if not clear_walk_line(grid, player, destination):
-            route_index = self._nearest_wander_index(player)
+        # Stay committed to the current straight run. Small cell-rounding
+        # deviations are normal while RO is walking and must not trigger
+        # left/right route corrections. Only reconnect when we are more than
+        # two cells away from the forward A* corridor.
+        route_index = self._nearest_wander_index(player)
+        corridor_start = max(0, route_index - 2)
+        corridor_end = min(len(self.wander_path), route_index + 20)
+        corridor_distance = min(
+            (
+                self._tile_distance(player, p)
+                for p in self.wander_path[corridor_start:corridor_end]
+            ),
+            default=999,
+        )
+
+        if corridor_distance > 2:
             remaining = [player] + self.wander_path[
                 min(route_index + 1, len(self.wander_path) - 1):
             ]
@@ -1380,6 +1399,7 @@ class HuntingAI:
                     player={"x": player[0], "y": player[1]},
                     destination={"x": destination[0], "y": destination[1]},
                     route_index=route_index,
+                    corridor_distance=corridor_distance,
                 )
             else:
                 mouse_game_adapter.release_hold_move()
