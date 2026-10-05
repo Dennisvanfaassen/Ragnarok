@@ -125,6 +125,7 @@ class AuthenticatedClientMonitor:
             "last_client_action": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
+        self._self_move: dict[str, Any] | None = None
         self._floor_items: dict[int, dict[str, Any]] = {}
         self._aggressors: dict[int, float] = {}
         self._parsed_counts: dict[str, int] = {
@@ -157,12 +158,13 @@ class AuthenticatedClientMonitor:
         char_id = int.from_bytes(data[9:13], "little")
 
         actor = self._actors.get(actor_id, {})
+        now = time.time()
         actor.update({
             "id": actor_id,
             "char_id": char_id,
             "object_type": object_type,
             "kind": _actor_kind(object_type),
-            "last_seen": time.time(),
+            "last_seen": now,
             "packet": f"0x{opcode:04X}",
         })
 
@@ -171,11 +173,21 @@ class AuthenticatedClientMonitor:
             movement = _coords6(data[67:73])
             if movement:
                 (from_x, from_y), (to_x, to_y) = movement
+                walk_speed_ms = int.from_bytes(data[13:15], "little")
+                tiles = max(abs(to_x - from_x), abs(to_y - from_y), 1)
                 actor.update({
                     "from_x": from_x,
                     "from_y": from_y,
-                    "x": to_x,
-                    "y": to_y,
+                    "to_x": to_x,
+                    "to_y": to_y,
+                    "x": from_x,
+                    "y": from_y,
+                    "walk_speed_ms": walk_speed_ms,
+                    "move_started_at": now,
+                    "move_duration": max(
+                        0.05,
+                        (walk_speed_ms * tiles) / 1000.0,
+                    ),
                 })
             if len(data) > 90:
                 name = _clean_text(data[90:])
@@ -188,6 +200,12 @@ class AuthenticatedClientMonitor:
             pos = _coords3(data[63:66])
             if pos:
                 actor["x"], actor["y"] = pos
+                actor.pop("from_x", None)
+                actor.pop("from_y", None)
+                actor.pop("to_x", None)
+                actor.pop("to_y", None)
+                actor.pop("move_started_at", None)
+                actor.pop("move_duration", None)
             if len(data) > 84:
                 name = _clean_text(data[84:])
                 if name:
@@ -283,6 +301,7 @@ class AuthenticatedClientMonitor:
                     pass
 
             self._world.update({"map": map_name, "x": x, "y": y})
+            self._self_move = None
             self._actors.clear()
             self._floor_items.clear()
             self._aggressors.clear()
@@ -292,8 +311,23 @@ class AuthenticatedClientMonitor:
         if opcode == 0x0087 and len(data) >= 12:
             movement = _coords6(data[6:12])
             if movement:
-                _start, destination = movement
-                self._world["x"], self._world["y"] = destination
+                start, destination = movement
+                tiles = max(
+                    abs(destination[0] - start[0]),
+                    abs(destination[1] - start[1]),
+                    1,
+                )
+                self._self_move = {
+                    "from_x": start[0],
+                    "from_y": start[1],
+                    "to_x": destination[0],
+                    "to_y": destination[1],
+                    "move_started_at": time.time(),
+                    # Typical client walk interpolation. This can later be
+                    # refined from observed server timing if needed.
+                    "move_duration": max(0.05, tiles * 0.15),
+                }
+                self._world["x"], self._world["y"] = start
             self._parsed_counts["character_moves"] += 1
             return
 
@@ -602,7 +636,39 @@ class AuthenticatedClientMonitor:
                 if stage in counts:
                     counts[stage] += 1
 
-            actors = list(self._actors.values())
+            now = time.time()
+            actors = []
+            for stored in self._actors.values():
+                actor = dict(stored)
+                if (
+                    actor.get("move_started_at") is not None
+                    and actor.get("to_x") is not None
+                    and actor.get("to_y") is not None
+                    and actor.get("from_x") is not None
+                    and actor.get("from_y") is not None
+                ):
+                    duration = max(
+                        0.05,
+                        float(actor.get("move_duration") or 0.05),
+                    )
+                    progress = max(
+                        0.0,
+                        min(
+                            1.0,
+                            (now - float(actor["move_started_at"])) / duration,
+                        ),
+                    )
+                    actor["x"] = int(round(
+                        int(actor["from_x"])
+                        + (int(actor["to_x"]) - int(actor["from_x"])) * progress
+                    ))
+                    actor["y"] = int(round(
+                        int(actor["from_y"])
+                        + (int(actor["to_y"]) - int(actor["from_y"])) * progress
+                    ))
+                    actor["move_progress"] = round(progress, 3)
+                actors.append(actor)
+
             floor_items = list(self._floor_items.values())
             aggressor_ids = [
                 actor_id
@@ -618,6 +684,37 @@ class AuthenticatedClientMonitor:
             }
 
             world = dict(self._world)
+            if self._self_move is not None:
+                move = self._self_move
+                duration = max(
+                    0.05,
+                    float(move.get("move_duration") or 0.05),
+                )
+                progress = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (now - float(move["move_started_at"])) / duration,
+                    ),
+                )
+                world["x"] = int(round(
+                    int(move["from_x"])
+                    + (int(move["to_x"]) - int(move["from_x"])) * progress
+                ))
+                world["y"] = int(round(
+                    int(move["from_y"])
+                    + (int(move["to_y"]) - int(move["from_y"])) * progress
+                ))
+                world["move_progress"] = round(progress, 3)
+                world["move_destination"] = {
+                    "x": int(move["to_x"]),
+                    "y": int(move["to_y"]),
+                }
+                if progress >= 1.0:
+                    self._world["x"] = int(move["to_x"])
+                    self._world["y"] = int(move["to_y"])
+                    self._self_move = None
+
             hp = world.get("hp")
             hp_max = world.get("hp_max")
             sp = world.get("sp")
