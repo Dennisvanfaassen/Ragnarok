@@ -25,6 +25,7 @@ class FullAutomationController:
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._force_cycle = threading.Event()
         self.running = False
         self.phase = "IDLE"
         self.message = "Idle"
@@ -447,9 +448,13 @@ class FullAutomationController:
                 threshold = max(1, min(99, int(profile.town.return_weight_percent)))
 
                 if (
-                    weight_percent is not None
-                    and float(weight_percent) >= float(threshold)
+                    self._force_cycle.is_set()
+                    or (
+                        weight_percent is not None
+                        and float(weight_percent) >= float(threshold)
+                    )
                 ):
+                    self._force_cycle.clear()
                     if not self._town_cycle():
                         self._set(
                             "PAUSED",
@@ -475,6 +480,7 @@ class FullAutomationController:
             if not native.get("attached"):
                 native_action_bridge.start()
             self._stop.clear()
+            self._force_cycle.clear()
             self.running = True
             self.last_error = None
             self.saved_town_map = None
@@ -482,6 +488,13 @@ class FullAutomationController:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
             return self.snapshot()
+
+    def force_town_cycle(self) -> dict[str, Any]:
+        if not self.running:
+            raise RuntimeError("Start full automation before forcing a town cycle.")
+        self._force_cycle.set()
+        self._log("force_town_cycle_requested")
+        return self.snapshot()
 
     def stop(self) -> dict[str, Any]:
         self._stop.set()
