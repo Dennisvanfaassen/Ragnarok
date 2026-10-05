@@ -10,6 +10,7 @@ from core.engine import engine
 from core.models import BotProfile, ServerProfile
 from core.state import app_state
 from core.targeting import build_targeting_state
+from core.pathing import build_pathing_state, nav_repository
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
@@ -198,3 +199,27 @@ async def live_targeting():
     )
 
     return targeting
+
+
+@app.get("/api/pathing/live")
+async def live_pathing():
+    snapshot = authenticated_client_monitor.snapshot()
+    profile = app_state.get_profile()
+    targeting = build_targeting_state(snapshot, profile.hunt.monsters)
+    pathing = build_pathing_state(snapshot, targeting, nav_repository)
+
+    if pathing.get("path_found"):
+        next_waypoint = pathing.get("next_waypoint")
+        message = (
+            f"Path ready: {pathing.get('path_steps')} steps"
+            + (
+                f", next waypoint {next_waypoint.get('x')},{next_waypoint.get('y')}"
+                if next_waypoint else ""
+            )
+        )
+        app_state.patch_runtime(
+            current_action="Path ready",
+            message=message,
+        )
+
+    return pathing
