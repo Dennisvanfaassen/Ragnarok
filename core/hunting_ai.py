@@ -387,6 +387,11 @@ class HuntingAI:
 
     def _step_searching(self, snapshot: dict[str, Any]):
         if self._acquire_aggressor(snapshot):
+            if self._attack_locked_immediately(
+                snapshot,
+                reason="search_aggressor",
+            ):
+                return
             self._set_state(
                 "TARGET_SELECTED",
                 f"Prioritizing aggressor {self.target_name}",
@@ -407,6 +412,57 @@ class HuntingAI:
 
         self._set_state("WANDERING", "No target visible; wandering")
 
+    def _attack_locked_immediately(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        reason: str,
+    ) -> bool:
+        """Interrupt movement and attack the locked visible actor in this cycle."""
+        mouse_game_adapter.release_hold_move()
+
+        # Re-read state after mouse-up. The player may still be completing the
+        # previous RO movement command, so never click using the stale wander
+        # snapshot if a fresher one is available.
+        fresh = authenticated_client_monitor.snapshot()
+        actor = self._refresh_locked_target(fresh)
+        player = self._position(fresh)
+
+        if actor is None or player is None or self.target_pos is None:
+            return False
+
+        if not mouse_game_adapter.can_project(
+            player,
+            self.target_pos,
+            sprite=True,
+        ):
+            return False
+
+        result = mouse_game_adapter.attack(
+            player,
+            self.target_pos,
+            retry_index=0,
+        )
+        self._log(
+            "instant_attack",
+            target_id=self.target_id,
+            target_name=self.target_name,
+            reason=reason,
+            result=result,
+        )
+
+        if not result.get("ok"):
+            return False
+
+        self.attack_retry = 0
+        self.attack_clicked_at = time.time()
+        self._attack_origin = player
+        self._set_state(
+            "ATTACKING",
+            f"Instant attack on {self.target_name}; waiting for combat confirmation",
+        )
+        return True
+
     def _step_target_selected(self, snapshot: dict[str, Any]):
         actor = self._refresh_locked_target(snapshot)
         if actor is None:
@@ -423,11 +479,11 @@ class HuntingAI:
                 sprite=True,
             )
         ):
-            self._set_state(
-                "ATTACK_READY",
-                f"{self.target_name} is visible; attacking immediately",
-            )
-            return
+            if self._attack_locked_immediately(
+                snapshot,
+                reason="visible_target_selected",
+            ):
+                return
 
         self._set_state("ROUTING", f"Calculating route to {self.target_name}")
 
@@ -808,6 +864,11 @@ class HuntingAI:
 
     def _step_wandering(self, snapshot: dict[str, Any]):
         if self._acquire_aggressor(snapshot):
+            if self._attack_locked_immediately(
+                snapshot,
+                reason="wander_aggressor_interrupt",
+            ):
+                return
             self._set_state(
                 "TARGET_SELECTED",
                 f"Aggressor spotted: {self.target_name}",
@@ -815,6 +876,11 @@ class HuntingAI:
             return
 
         if self._acquire_target(snapshot):
+            if self._attack_locked_immediately(
+                snapshot,
+                reason="wander_target_interrupt",
+            ):
+                return
             self._set_state(
                 "TARGET_SELECTED",
                 f"Monster spotted: {self.target_name}",
