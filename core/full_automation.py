@@ -311,6 +311,10 @@ class FullAutomationController:
         while not self._stop.is_set() and time.time() < deadline:
             after = authenticated_client_monitor.item_state_snapshot().get("updated_at", {}).get("storage")
             if after is not None and after != before:
+                # The storage list packet can arrive slightly before the client
+                # is ready to accept item-move commands. Give the Kafra window a
+                # short settling period before depositing the first item.
+                self._stop.wait(0.75)
                 return True
             self._stop.wait(0.10)
         self.last_error = "Storage list did not open after Kafra dialogue."
@@ -361,6 +365,25 @@ class FullAutomationController:
         reserved_for_sale = 0
         self._deposited_indices_this_cycle.clear()
 
+        self._log(
+            "storage_plan",
+            items=[
+                {
+                    "index": item.get("index"),
+                    "name": item.get("name"),
+                    "name_id": item.get("name_id"),
+                    "amount": item.get("amount"),
+                    "equipped": item.get("equipped"),
+                    "action": (
+                        "keep"
+                        if int(item.get("equipped") or 0) != 0
+                        else self._town_item_action(item)
+                    ),
+                }
+                for item in items
+            ],
+        )
+
         for item in items:
             equipped = int(item.get("equipped") or 0)
             index = int(item.get("index") or -1)
@@ -400,59 +423,76 @@ class FullAutomationController:
                 continue
 
             before_amount = int(item.get("amount") or 0)
-            result = native_action_bridge.storage_add(index, amount)
-            self._log(
-                "storage_deposit",
-                index=index,
-                name=item.get("name"),
-                name_id=item.get("name_id"),
-                amount=amount,
-                stackable=item.get("stackable"),
-                result=result,
-            )
-            if not result.get("ok"):
-                self.last_error = (
-                    f"Storage deposit failed for {item.get('name') or index}: "
-                    f"{result.get('reason')}"
-                )
-                return False
-
-            # Bytes-sent only means the request reached Classic.exe's socket.
-            # Wait for the server to confirm the inventory amount changed before
-            # advancing to the next item or closing storage.
             confirmed = False
-            deadline = time.time() + 2.5
-            while not self._stop.is_set() and time.time() < deadline:
-                live_inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
-                current = next(
-                    (
-                        row for row in live_inventory
-                        if int(row.get("index") or -1) == index
-                    ),
-                    None,
-                )
-                current_amount = int(current.get("amount") or 0) if current is not None else 0
-                if current is None or current_amount < before_amount:
-                    confirmed = True
-                    break
-                self._stop.wait(0.08)
+            last_result: dict[str, Any] | None = None
 
-            self._log(
-                "storage_deposit_confirmation",
-                index=index,
-                name=item.get("name"),
-                confirmed=confirmed,
-            )
+            for attempt in range(1, 4):
+                last_result = native_action_bridge.storage_add(index, amount)
+                self._log(
+                    "storage_deposit",
+                    attempt=attempt,
+                    index=index,
+                    name=item.get("name"),
+                    name_id=item.get("name_id"),
+                    amount=amount,
+                    stackable=item.get("stackable"),
+                    result=last_result,
+                )
+                if not last_result.get("ok"):
+                    self._stop.wait(0.35)
+                    continue
+
+                deadline = time.time() + 1.35
+                while not self._stop.is_set() and time.time() < deadline:
+                    live_inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+                    current = next(
+                        (
+                            row for row in live_inventory
+                            if int(row.get("index") or -1) == index
+                        ),
+                        None,
+                    )
+                    current_amount = int(current.get("amount") or 0) if current is not None else 0
+                    if current is None or current_amount < before_amount:
+                        confirmed = True
+                        break
+                    self._stop.wait(0.08)
+
+                self._log(
+                    "storage_deposit_confirmation",
+                    attempt=attempt,
+                    index=index,
+                    name=item.get("name"),
+                    confirmed=confirmed,
+                )
+                if confirmed:
+                    break
+
+                # Same verified storage-move packet, retried after a short delay.
+                # This covers the client/server race immediately after Kafra opens.
+                self._stop.wait(0.55)
+
             if not confirmed:
+                # Do not leave the player's storage window hanging open when a
+                # transfer fails. Close it cleanly, but do not continue to the
+                # Tool Dealer because the requested storage plan is incomplete.
+                cleanup = native_action_bridge.storage_close()
+                self._log(
+                    "storage_close_after_failed_deposit",
+                    index=index,
+                    name=item.get("name"),
+                    result=cleanup,
+                )
                 self.last_error = (
-                    f"Storage did not confirm moving {item.get('name') or index}. "
-                    "Storage will remain open so the item is not silently skipped."
+                    f"Storage could not move {item.get('name') or index} "
+                    f"(index {index}, amount {amount}) after 3 attempts. "
+                    "Kafra storage was closed and the town cycle was paused."
                 )
                 return False
 
             self._deposited_indices_this_cycle.add(index)
             deposited += 1
-            self._stop.wait(0.12)
+            self._stop.wait(0.18)
 
         self._log(
             "storage_deposit_complete",
