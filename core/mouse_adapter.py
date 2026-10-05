@@ -397,6 +397,23 @@ class MouseGameAdapter:
             geometry["top"] + int(round(local_y)),
         )
 
+    def can_project(
+        self,
+        player: tuple[int, int],
+        destination: tuple[int, int],
+        *,
+        sprite: bool = False,
+    ) -> bool:
+        hwnd = self._find_window()
+        if not hwnd:
+            return False
+        return self._project(
+            hwnd,
+            player,
+            destination,
+            sprite=sprite,
+        ) is not None
+
     def move(
         self,
         player: tuple[int, int],
@@ -432,8 +449,8 @@ class MouseGameAdapter:
         # Small vertical sweep on retries, but always within the same actor tile.
         offsets = [
             self.sprite_y_offset,
-            self.sprite_y_offset - 12,
-            self.sprite_y_offset + 12,
+            self.sprite_y_offset - 10,
+            self.sprite_y_offset + 10,
         ]
         offset = offsets[min(retry_index, len(offsets) - 1)]
 
