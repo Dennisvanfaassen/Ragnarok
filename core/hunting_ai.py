@@ -93,6 +93,9 @@ class HuntingAI:
         self._combat_seen = False
         self._attack_origin = None
         self._attack_backend = "mouse"
+        self._last_heal_hotkey_at = 0.0
+        self._last_heal_result: dict[str, Any] | None = None
+        self._return_weight_reached = False
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -1761,6 +1764,61 @@ class HuntingAI:
             )
         self._stop.wait(0.04 if narrow_corridor else 0.05)
 
+    def _maybe_heal(self, snapshot: dict[str, Any]) -> bool:
+        profile = app_state.get_profile()
+        settings = profile.healing
+        if not settings.enabled:
+            return False
+
+        world = self._world(snapshot)
+        hp = world.get("hp")
+        hp_max = world.get("hp_max")
+        if hp is None or not hp_max or int(hp) <= 0:
+            return False
+
+        hp_percent = float(world.get("hp_percent") or (int(hp) * 100 / int(hp_max)))
+        threshold = max(1, min(99, int(settings.hp_below_percent)))
+        if hp_percent >= threshold:
+            return False
+
+        now = time.time()
+        cooldown = max(0.35, float(settings.cooldown_seconds))
+        if now - self._last_heal_hotkey_at < cooldown:
+            return False
+
+        result = game_actions.press_hotkey(settings.hotkey or "1")
+        self._last_heal_hotkey_at = now
+        self._last_heal_result = dict(result)
+        self._log(
+            "healing_hotkey",
+            hp=int(hp),
+            hp_max=int(hp_max),
+            hp_percent=round(hp_percent, 1),
+            threshold=threshold,
+            hotkey=settings.hotkey or "1",
+            result=result,
+        )
+        return bool(result.get("ok"))
+
+    def _update_return_weight(self, snapshot: dict[str, Any]):
+        profile = app_state.get_profile()
+        world = self._world(snapshot)
+        weight_percent = world.get("weight_percent")
+        threshold = max(1, min(99, int(profile.town.return_weight_percent)))
+        reached = bool(
+            weight_percent is not None
+            and float(weight_percent) >= float(threshold)
+        )
+        if reached and not self._return_weight_reached:
+            self._log(
+                "return_weight_reached",
+                weight_percent=float(weight_percent),
+                threshold=threshold,
+                hunt_map=profile.hunt.map,
+                return_method=profile.town.return_method,
+            )
+        self._return_weight_reached = reached
+
     def _step_failed(self):
         snapshot = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(snapshot)
@@ -1801,6 +1859,12 @@ class HuntingAI:
                 self._set_state("IDLE", "Waiting for Classic.exe")
                 self._stop.wait(0.10)
                 continue
+
+            # Healing is an interrupt-level concern and runs independently of
+            # combat/path state. The configured hotkey is only pressed when the
+            # authenticated client's live HP falls below the profile threshold.
+            self._maybe_heal(snapshot)
+            self._update_return_weight(snapshot)
 
             if self.state in {"IDLE", "SEARCHING"}:
                 self._step_searching(snapshot)
@@ -1937,6 +2001,21 @@ class HuntingAI:
                         if game_actions.native_move_ready()
                         else "heading_dead_zone_velocity_curve_corner_preview"
                     ),
+                    "healing": {
+                        "enabled": app_state.get_profile().healing.enabled,
+                        "hotkey": app_state.get_profile().healing.hotkey,
+                        "hp_below_percent": app_state.get_profile().healing.hp_below_percent,
+                        "last_result": self._last_heal_result,
+                    },
+                    "town_return": {
+                        "weight_percent": (
+                            self._world(authenticated_client_monitor.snapshot()).get("weight_percent")
+                        ),
+                        "threshold_percent": app_state.get_profile().town.return_weight_percent,
+                        "return_required": self._return_weight_reached,
+                        "return_method": app_state.get_profile().town.return_method,
+                        "auto_nearest_services": app_state.get_profile().town.auto_nearest_services,
+                    },
                     "saved_hunt_route": {
                         "map": self.saved_route_map,
                         "waypoint_index": self.saved_route_waypoint_index,
