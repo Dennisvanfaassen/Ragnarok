@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import yaml
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse
 
 from core.engine import engine
@@ -12,6 +12,7 @@ from core.state import app_state
 from network.session import RagnarokSession
 from diagnostics.client_scan import scan_client
 from diagnostics.handshake_proxy import handshake_proxy
+from diagnostics.pcap_scan import analyze_capture
 
 
 ROOT = Path(__file__).resolve().parent
@@ -101,3 +102,19 @@ async def clear_handshake_proxy():
 @app.get("/api/diagnostics/handshake")
 async def handshake_state():
     return handshake_proxy.snapshot()
+
+
+@app.post("/api/diagnostics/pcap")
+async def analyze_pcap(file: UploadFile = File(...)):
+    name = (file.filename or "").lower()
+    if not (name.endswith(".pcap") or name.endswith(".pcapng")):
+        raise HTTPException(400, "Upload a .pcap or .pcapng file.")
+
+    data = await file.read()
+    if len(data) > 100 * 1024 * 1024:
+        raise HTTPException(400, "Capture is too large. Keep it under 100 MB.")
+
+    try:
+        return analyze_capture(data)
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
