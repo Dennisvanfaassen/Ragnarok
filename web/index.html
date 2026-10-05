@@ -591,6 +591,28 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             </select>
           </label>
         </div>
+        <div class="row">
+          <label>When out of Meat
+            <select id="returnOutOfMeat">
+              <option value="true" selected>Return to town</option>
+              <option value="false">Ignore</option>
+            </select>
+          </label>
+          <label>When out of Fly Wings
+            <select id="returnOutOfFlyWings">
+              <option value="true" selected>Return to town</option>
+              <option value="false">Ignore</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Live Meat
+            <input id="townMeatAmount" value="—" disabled>
+          </label>
+          <label>Live Fly Wings
+            <input id="townFlyWingAmount" value="—" disabled>
+          </label>
+        </div>
         <div class="muted">Equipped items are always protected. Core consumables remain in inventory unless you explicitly add an override rule below.</div>
       </section>
 
@@ -916,6 +938,8 @@ async function saveProfile(){
       storage_map:document.getElementById('storageMap').value.trim(),
       storage_npc:'',
       return_weight_percent:+document.getElementById('weight').value,
+      return_when_out_of_meat:document.getElementById('returnOutOfMeat').value==='true',
+      return_when_out_of_fly_wings:document.getElementById('returnOutOfFlyWings').value==='true',
       butterfly_wing_item:'Butterfly Wing',
       auto_nearest_services:true,
       return_method:'butterfly_wing',
@@ -983,6 +1007,8 @@ async function loadProfile(){
     document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
     document.getElementById('storageWeight').value=(p.town&&p.town.return_weight_percent)||70;
     document.getElementById('defaultItemAction').value=(p.town&&p.town.default_item_action)||'store';
+    document.getElementById('returnOutOfMeat').value=(p.town&&p.town.return_when_out_of_meat===false)?'false':'true';
+    document.getElementById('returnOutOfFlyWings').value=(p.town&&p.town.return_when_out_of_fly_wings===false)?'false':'true';
     townItemRules=((p.town&&p.town.item_rules)||[]).map(function(row){return {...row};});
     townBuyRules=((p.town&&p.town.buy_rules)||[]).map(function(row){return {...row};});
     renderTownRuleSummary();
@@ -1415,6 +1441,10 @@ function renderFullAutomation(data){
   if(weight) weight.value=(data&&data.weight_percent)!=null
     ? data.weight_percent+'%'
     : '—';
+  const meat=document.getElementById('townMeatAmount');
+  const fly=document.getElementById('townFlyWingAmount');
+  if(meat) meat.value=(data&&data.meat_amount)!=null?data.meat_amount:'—';
+  if(fly) fly.value=(data&&data.fly_wing_amount)!=null?data.fly_wing_amount:'—';
 }
 async function refreshFullAutomationQuiet(){
   try{
