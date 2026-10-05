@@ -580,14 +580,33 @@ async function refresh(){
   document.getElementById('target').textContent=s.target||'—';
   document.getElementById('dot').className='dot '+(s.status==='online'?'online':'');
 }
+let huntCatalogData={map:'',monsters:[]};
+let huntMonsterRules={};
+
+function currentMonsterRules(){
+  return Object.values(huntMonsterRules).map(function(rule){
+    return {
+      monster:rule.monster,
+      enabled:!!rule.enabled,
+      loot_mode:rule.loot_mode||'all',
+      include_items:Array.from(rule.include_items||[]),
+      exclude_items:Array.from(rule.exclude_items||[])
+    };
+  });
+}
+
 async function saveProfile(){
+  const rules=currentMonsterRules();
+  const selected=rules.filter(r=>r.enabled).map(r=>r.monster);
+  document.getElementById('monsters').value=selected.join(', ');
   const body={
     name:document.getElementById('profileName').value,
     server_profile:document.getElementById('server').value,
     hunt:{
       map:document.getElementById('huntMap').value.trim(),
-      monsters:document.getElementById('monsters').value.split(',').map(function(x){return x.trim()}).filter(Boolean),
-      loot_all:document.getElementById('lootAll').value==='true'
+      monsters:selected,
+      loot_all:true,
+      monster_rules:rules
     },
     healing:{
       enabled:document.getElementById('healEnabled').value==='true',
@@ -636,7 +655,17 @@ async function loadProfile(){
     document.getElementById('server').value=p.server_profile||'soulbound';
     document.getElementById('huntMap').value=(p.hunt&&p.hunt.map)||'';
     document.getElementById('monsters').value=((p.hunt&&p.hunt.monsters)||[]).join(', ');
-    document.getElementById('lootAll').value=(p.hunt&&p.hunt.loot_all===false)?'false':'true';
+    document.getElementById('lootAll').value='true';
+    huntMonsterRules={};
+    ((p.hunt&&p.hunt.monster_rules)||[]).forEach(function(rule){
+      huntMonsterRules[String(rule.monster||'').toLowerCase()]={
+        monster:rule.monster,
+        enabled:rule.enabled!==false,
+        loot_mode:rule.loot_mode||'all',
+        include_items:new Set(rule.include_items||[]),
+        exclude_items:new Set(rule.exclude_items||[])
+      };
+    });
     document.getElementById('weight').value=(p.town&&p.town.return_weight_percent)||70;
     document.getElementById('storageMap').value=(p.town&&p.town.storage_map)||'';
     document.getElementById('healEnabled').value=(p.healing&&p.healing.enabled===false)?'false':'true';
@@ -647,8 +676,125 @@ async function loadProfile(){
     document.getElementById('awakeningTarget').value=supplies.awakening_potions??4;
     document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
     document.getElementById('liveReturnTrigger').value=((p.town&&p.town.return_weight_percent)||70)+'%';
+    if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
 }
+function ensureMonsterRule(monster){
+  const key=String(monster.name||monster).toLowerCase();
+  if(!huntMonsterRules[key]){
+    huntMonsterRules[key]={
+      monster:monster.name||String(monster),
+      enabled:false,
+      loot_mode:'all',
+      include_items:new Set(),
+      exclude_items:new Set()
+    };
+  }
+  return huntMonsterRules[key];
+}
+
+function updateMonsterEnabled(name,checked){
+  const rule=ensureMonsterRule({name});
+  rule.enabled=!!checked;
+  document.getElementById('monsters').value=currentMonsterRules().filter(r=>r.enabled).map(r=>r.monster).join(', ');
+}
+
+function updateMonsterLootMode(name,mode){
+  const rule=ensureMonsterRule({name});
+  rule.loot_mode=mode;
+  renderMonsterRules();
+}
+
+function toggleDropRule(monsterName,itemName,checked){
+  const rule=ensureMonsterRule({name:monsterName});
+  const target=rule.loot_mode==='selected'?rule.include_items:rule.exclude_items;
+  if(checked) target.add(itemName); else target.delete(itemName);
+}
+
+function selectAllMonsters(enabled){
+  (huntCatalogData.monsters||[]).forEach(function(monster){
+    ensureMonsterRule(monster).enabled=!!enabled;
+  });
+  renderMonsterRules();
+}
+
+function renderMonsterRules(){
+  const box=document.getElementById('monsterRuleList');
+  if(!box) return;
+  const monsters=huntCatalogData.monsters||[];
+  if(!monsters.length){
+    box.innerHTML='<div class="section-note">No monster reference found yet. If this is a custom SoulBound map, visit it once and RO Control will merge monsters seen by Classic.exe into the catalog.</div>';
+    return;
+  }
+
+  box.innerHTML=monsters.map(function(monster){
+    const rule=ensureMonsterRule(monster);
+    const drops=monster.drops||[];
+    const mode=rule.loot_mode||'all';
+    const source=(monster.observed_live?'SoulBound observed · ':'')+
+      ((monster.sources||[]).includes('rathena_reference')?'rAthena reference':'');
+    let dropHtml='';
+    if(drops.length){
+      dropHtml='<div class="drop-grid">'+drops.map(function(drop){
+        const item=drop.name||drop.aegis_name||'Unknown';
+        const checked=mode==='selected'
+          ? rule.include_items.has(item)
+          : rule.exclude_items.has(item);
+        const label=mode==='selected'?'loot':'exclude';
+        return '<label class="drop-chip">'+
+          '<input type="checkbox" '+(checked?'checked':'')+
+          ' onchange="toggleDropRule(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',\''+escapeHtml(item).replace(/'/g,"\\'")+'\',this.checked)">'+
+          escapeHtml(item)+(drop.rate?' · '+(drop.rate/100).toFixed(2)+'%':'')+
+          ' <span class="muted">'+label+'</span></label>';
+      }).join('')+'</div>';
+    }else{
+      dropHtml='<div class="muted" style="margin-top:8px">Drop reference not available yet for this monster.</div>';
+    }
+
+    return '<div class="monster-card">'+
+      '<div class="monster-head"><div><div class="monster-title">'+escapeHtml(monster.name||'Unknown')+'</div>'+
+      '<div class="monster-meta">'+escapeHtml(source||'Reference')+
+      (monster.spawn_count!=null?' · approx. '+monster.spawn_count+' spawned':'')+
+      '</div></div>'+
+      '<label style="display:flex;grid-template-columns:auto auto;align-items:center;gap:8px;margin:0">'+
+      '<input type="checkbox" style="width:auto" '+(rule.enabled?'checked':'')+
+      ' onchange="updateMonsterEnabled(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',this.checked)"> Kill</label></div>'+
+      '<div class="row"><label>Loot rule<select onchange="updateMonsterLootMode(\''+escapeHtml(monster.name).replace(/'/g,"\\'")+'\',this.value)">'+
+      '<option value="all" '+(mode==='all'?'selected':'')+'>Loot all drops</option>'+
+      '<option value="selected" '+(mode==='selected'?'selected':'')+'>Only selected drops</option>'+
+      '<option value="excluded" '+(mode==='excluded'?'selected':'')+'>Everything except selected</option>'+
+      '<option value="none" '+(mode==='none'?'selected':'')+'>Loot nothing</option>'+
+      '</select></label>'+
+      '<label>Level / monster ID<input value="'+escapeHtml(String(monster.level??'—'))+' / '+escapeHtml(String(monster.id??'—'))+'" disabled></label></div>'+
+      ((mode==='selected'||mode==='excluded')?dropHtml:'')+
+      '</div>';
+  }).join('');
+
+  document.getElementById('monsters').value=currentMonsterRules().filter(r=>r.enabled).map(r=>r.monster).join(', ');
+}
+
+async function loadHuntingCatalog(){
+  const input=document.getElementById('huntMap');
+  const status=document.getElementById('huntCatalogStatus');
+  if(!input) return;
+  const map=input.value.trim();
+  if(!map){
+    if(status) status.value='Choose a map';
+    return;
+  }
+  if(status) status.value='Loading monster data…';
+  try{
+    const r=await fetch('/api/hunting/catalog/'+encodeURIComponent(map));
+    const data=await r.json();
+    huntCatalogData=data||{map,monsters:[]};
+    (huntCatalogData.monsters||[]).forEach(ensureMonsterRule);
+    if(status) status.value=(data.monster_count||0)+' monsters found';
+    renderMonsterRules();
+  }catch(e){
+    if(status) status.value='Catalog unavailable';
+  }
+}
+
 async function probe(){
   const r=await fetch('/api/server/'+document.getElementById('server').value+'/probe',{method:'POST'});
   out(await r.json());
