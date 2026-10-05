@@ -9,6 +9,7 @@ from core.pathing import astar, nav_repository
 from core.state import app_state
 from core.world_route import world_route_planner
 from diagnostics.authenticated_client import authenticated_client_monitor
+from diagnostics.native_action_bridge import native_action_bridge
 
 
 class TownTravelController:
@@ -86,6 +87,150 @@ class TownTravelController:
                 best_d = d
                 best_i = i
         return best_i
+
+    def _walk_to_point(
+        self,
+        map_name: str,
+        goal: tuple[int, int],
+        *,
+        tolerance: int = 3,
+        timeout: float = 45.0,
+    ) -> bool:
+        initial = self._snapshot()
+        if str(self._world(initial).get("map") or "") != map_name:
+            return False
+        player = self._position(initial)
+        if player is None:
+            return False
+        path = self._route_on_map(map_name, player, goal)
+        if not path:
+            self._set("ERROR", f"No walkable route to {map_name} {goal[0]},{goal[1]}")
+            return False
+
+        deadline = time.time() + timeout
+        while not self._stop.is_set() and time.time() < deadline:
+            snapshot = self._snapshot()
+            world = self._world(snapshot)
+            if str(world.get("map") or "") != map_name:
+                return True
+            player = self._position(snapshot)
+            if player is None:
+                self._stop.wait(0.05)
+                continue
+            if max(abs(player[0] - goal[0]), abs(player[1] - goal[1])) <= tolerance:
+                game_actions.release_hold_move()
+                return True
+
+            index = self._nearest_index(path, player)
+            lookahead = min(len(path) - 1, index + self.lookahead)
+            destination = path[lookahead]
+
+            if game_actions.native_move_ready():
+                result = game_actions.move_to(destination)
+            else:
+                result = game_actions.update_hold_direction(
+                    destination[0] - player[0],
+                    destination[1] - player[1],
+                    radius_px=self.cursor_radius,
+                    min_pixel_change=16,
+                )
+            if not result.get("ok"):
+                self._stop.wait(0.10)
+            else:
+                self._stop.wait(0.08)
+
+        game_actions.release_hold_move()
+        return False
+
+    def _nearest_other_actor(
+        self,
+        point: tuple[int, int],
+        *,
+        max_distance: int = 8,
+    ) -> dict[str, Any] | None:
+        snapshot = self._snapshot()
+        live = snapshot.get("live_state") or {}
+        candidates = []
+        for actor in live.get("actors") or []:
+            if actor.get("kind") != "other":
+                continue
+            x, y = actor.get("x"), actor.get("y")
+            if x is None or y is None:
+                continue
+            d = max(abs(int(x) - point[0]), abs(int(y) - point[1]))
+            if d <= max_distance:
+                candidates.append((d, actor))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return dict(candidates[0][1])
+
+    def _execute_interactive_portal(self, leg: dict[str, Any]) -> bool:
+        source_map = str(leg["source_map"])
+        point = (int(leg["source_x"]), int(leg["source_y"]))
+        if not self._walk_to_point(source_map, point, tolerance=4):
+            return False
+
+        actor = self._nearest_other_actor(point, max_distance=10)
+        if actor is None:
+            self._set(
+                "ERROR",
+                f"No NPC visible near interactive portal {source_map} {point[0]},{point[1]}",
+            )
+            return False
+
+        actor_id = int(actor["id"])
+        before_map = str(self._world(self._snapshot()).get("map") or "")
+        self._set(
+            "INTERACTIVE_PORTAL",
+            f"Using NPC route to {leg['dest_map']}",
+        )
+
+        result = native_action_bridge.talk_npc(actor_id, 1)
+        if not result.get("ok"):
+            self._set("ERROR", f"Could not talk to portal NPC: {result.get('reason')}")
+            return False
+        self._stop.wait(0.25)
+
+        for token in list(leg.get("interaction_steps") or []):
+            token = str(token).strip().lower()
+            if not token or token.isdigit():
+                continue
+            if token == "c":
+                result = native_action_bridge.continue_npc(actor_id)
+            elif token.startswith("r") and token[1:].isdigit():
+                # OpenKore talk route syntax rN selects menu response N.
+                result = native_action_bridge.choose_npc_option(
+                    actor_id,
+                    int(token[1:]),
+                )
+            elif token == "n":
+                result = native_action_bridge.close_npc(actor_id)
+            else:
+                continue
+            if not result.get("ok"):
+                self._set(
+                    "ERROR",
+                    f"Interactive portal step {token} failed: {result.get('reason')}",
+                )
+                return False
+            self._stop.wait(0.25)
+
+        deadline = time.time() + 8.0
+        while not self._stop.is_set() and time.time() < deadline:
+            current = str(self._world(self._snapshot()).get("map") or "")
+            if current and current != before_map:
+                self._log(
+                    "interactive_portal_crossed",
+                    source_map=before_map,
+                    dest_map=current,
+                    actor_id=actor_id,
+                )
+                return True
+            self._stop.wait(0.10)
+
+        self._set("ERROR", "Interactive portal did not change map.")
+        return False
 
     def _walk_to_portal(self, leg: dict[str, Any]) -> bool:
         source_map = str(leg["source_map"])
@@ -244,18 +389,14 @@ class TownTravelController:
                     )
                     return
 
-                if next_portal.get("interactive"):
-                    self._set(
-                        "ERROR",
-                        "Fastest known route requires an NPC/dialog warp. "
-                        "Physical portal routing is ready; NPC travel is not automated yet.",
-                    )
-                    return
-
                 self.current_leg = next_portal
                 self._log("town_leg", **next_portal)
-                if not self._walk_to_portal(next_portal):
-                    return
+                if next_portal.get("interactive"):
+                    if not self._execute_interactive_portal(next_portal):
+                        return
+                else:
+                    if not self._walk_to_portal(next_portal):
+                        return
 
                 self._stop.wait(0.08)
         finally:
