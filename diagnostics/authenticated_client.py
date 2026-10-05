@@ -214,32 +214,47 @@ class AuthenticatedClientMonitor:
             self._parse_actor(opcode, data)
 
     def _parse_payload(self, payload: bytes):
-        """Parse one or more aligned Ragnarok packets from a TCP payload.
+        """Extract Live Game State packets from a TCP payload.
 
-        We deliberately stop when an unknown packet is encountered instead of
-        guessing a length. This keeps world-state parsing conservative.
+        TCP segment boundaries are not Ragnarok packet boundaries. For the
+        observer we scan for the small set of packet types we understand and
+        validate their lengths before decoding them. This is deliberately
+        read-only and does not modify the client stream.
         """
-        offset = 0
-        while len(payload) - offset >= 2:
-            opcode = int.from_bytes(payload[offset:offset + 2], "little")
+        i = 0
+        size = len(payload)
+
+        while i + 2 <= size:
+            opcode = int.from_bytes(payload[i:i + 2], "little")
+            length = None
 
             if opcode in FIXED_PACKET_LENGTHS:
-                length = FIXED_PACKET_LENGTHS[opcode]
-            elif opcode in VARIABLE_PACKET_OPCODES:
-                if len(payload) - offset < 4:
-                    return
-                length = int.from_bytes(payload[offset + 2:offset + 4], "little")
-                if length < 4 or length > 65535:
-                    return
-            else:
-                return
+                candidate = FIXED_PACKET_LENGTHS[opcode]
+                if i + candidate <= size:
+                    length = candidate
 
-            if len(payload) - offset < length:
-                return
+            elif opcode in VARIABLE_PACKET_OPCODES and i + 4 <= size:
+                candidate = int.from_bytes(payload[i + 2:i + 4], "little")
+                # 09FD/09FE/09FF are sizeable actor packets. Requiring a
+                # realistic minimum makes accidental opcode matches unlikely.
+                if 80 <= candidate <= 2048 and i + candidate <= size:
+                    length = candidate
 
-            packet = payload[offset:offset + length]
+            if length is None:
+                i += 1
+                continue
+
+            packet = payload[i:i + length]
+
+            # Extra sanity checks for actor packets before accepting a match.
+            if opcode in VARIABLE_PACKET_OPCODES:
+                object_type = packet[4] if len(packet) > 4 else 255
+                if object_type > 20:
+                    i += 1
+                    continue
+
             self._parse_world_packet(packet)
-            offset += length
+            i += length
 
     def _packet(self, pkt):
         try:
