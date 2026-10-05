@@ -383,6 +383,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
       <div class="actions">
         <button class="action" onclick="startFullAutomation()">Start full automation</button>
+        <button class="action secondary" onclick="forceTownCycle()">Test town cycle now</button>
         <button class="action danger" onclick="stopFullAutomation()">Stop full automation</button>
         <button class="action secondary" onclick="previewHuntReturnRoute()">Preview route to hunt map</button>
       </div>
@@ -832,6 +833,12 @@ async function refreshActiveHuntQuiet(){
 }
 async function startFullAutomation(){
   const r=await fetch('/api/full-automation/start',{method:'POST'});
+  const data=await r.json();
+  renderFullAutomation(data);
+  out(data);
+}
+async function forceTownCycle(){
+  const r=await fetch('/api/full-automation/force-town-cycle',{method:'POST'});
   const data=await r.json();
   renderFullAutomation(data);
   out(data);
