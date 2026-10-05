@@ -399,6 +399,7 @@ class FullAutomationController:
                 )
                 continue
 
+            before_amount = int(item.get("amount") or 0)
             result = native_action_bridge.storage_add(index, amount)
             self._log(
                 "storage_deposit",
@@ -415,9 +416,43 @@ class FullAutomationController:
                     f"{result.get('reason')}"
                 )
                 return False
+
+            # Bytes-sent only means the request reached Classic.exe's socket.
+            # Wait for the server to confirm the inventory amount changed before
+            # advancing to the next item or closing storage.
+            confirmed = False
+            deadline = time.time() + 2.5
+            while not self._stop.is_set() and time.time() < deadline:
+                live_inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+                current = next(
+                    (
+                        row for row in live_inventory
+                        if int(row.get("index") or -1) == index
+                    ),
+                    None,
+                )
+                current_amount = int(current.get("amount") or 0) if current is not None else 0
+                if current is None or current_amount < before_amount:
+                    confirmed = True
+                    break
+                self._stop.wait(0.08)
+
+            self._log(
+                "storage_deposit_confirmation",
+                index=index,
+                name=item.get("name"),
+                confirmed=confirmed,
+            )
+            if not confirmed:
+                self.last_error = (
+                    f"Storage did not confirm moving {item.get('name') or index}. "
+                    "Storage will remain open so the item is not silently skipped."
+                )
+                return False
+
             self._deposited_indices_this_cycle.add(index)
             deposited += 1
-            self._stop.wait(0.10)
+            self._stop.wait(0.12)
 
         self._log(
             "storage_deposit_complete",
@@ -605,7 +640,10 @@ class FullAutomationController:
         if not self._deposit_all_unequipped():
             return False
 
-        self._set("CLOSING_STORAGE", "Closing Kafra storage.")
+        self._set(
+            "CLOSING_STORAGE",
+            "Storage complete; closing Kafra storage before going to the Tool Dealer.",
+        )
         close_result = native_action_bridge.storage_close()
         self._log("storage_close", result=close_result)
         if not close_result.get("ok"):
