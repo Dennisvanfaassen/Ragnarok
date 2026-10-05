@@ -2,10 +2,18 @@ id: soulbound
 name: Soulbound Journey
 host: 88.214.58.232
 port: 6900
+
+# clientinfo.xml field. Kept separate from the 0x0064 protocol field.
 version: 55
+
+# Verified from a successful Soulbound login capture.
+login_version: 2147483648
+master_version: 1
+
 service_type: korea
-server_type: primary
-packet_version:
+server_type: kRO_2021-06-30
+packet_version: "2021-06-30"
 notes: >
-  Connection values are from the client's data/clientinfo.xml.
-  packet_version is intentionally blank until verified.
+  Login/char/map packet family matched from a successful capture:
+  0064 -> 0AC4, 0065, 082D/0B72, 0066 -> 0AC5, 0436.
+  The launcher/OTP requirement remains a separate authentication dependency.
