@@ -21,6 +21,7 @@ FIXED_PACKET_LENGTHS = {
     0x007F: 6,   # received_sync
     0x0080: 7,   # actor_died_or_disappeared
     0x0087: 12,  # character_moves
+    0x008A: 29,  # actor_action
     0x0091: 22,  # map_change
     0x00B0: 8,   # stat_info
 }
@@ -97,6 +98,9 @@ class AuthenticatedClientMonitor:
             "status_points": None,
             "skill_points": None,
             "last_sync": None,
+            "self_account_id": None,
+            "self_char_id": None,
+            "last_combat": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
         self._parsed_counts: dict[str, int] = {
@@ -168,11 +172,41 @@ class AuthenticatedClientMonitor:
         }[opcode]
         self._parsed_counts[key] += 1
 
+    def _parse_client_map_packet(self, data: bytes):
+        if len(data) < 2:
+            return
+
+        opcode = int.from_bytes(data[:2], "little")
+
+        # 0436 map_login: accountID, charID, sessionID, unknown, tick, sex.
+        if opcode == 0x0436 and len(data) >= 23:
+            self._world["self_account_id"] = int.from_bytes(data[2:6], "little")
+            self._world["self_char_id"] = int.from_bytes(data[6:10], "little")
+
     def _parse_world_packet(self, data: bytes):
         if len(data) < 2:
             return
 
         opcode = int.from_bytes(data[:2], "little")
+
+        if opcode == 0x008A and len(data) >= 29:
+            source_id = int.from_bytes(data[2:6], "little")
+            target_id = int.from_bytes(data[6:10], "little")
+            self_ids = {
+                int(v)
+                for v in (
+                    self._world.get("self_account_id"),
+                    self._world.get("self_char_id"),
+                )
+                if v is not None
+            }
+            if source_id in self_ids:
+                self._world["last_combat"] = {
+                    "timestamp": time.time(),
+                    "source_id": source_id,
+                    "target_id": target_id,
+                }
+            return
 
         if opcode == 0x0091 and len(data) >= 22:
             map_name = _clean_text(data[2:18])
@@ -256,6 +290,17 @@ class AuthenticatedClientMonitor:
             self._parse_world_packet(packet)
             i += length
 
+    def _parse_client_payload(self, payload: bytes):
+        i = 0
+        size = len(payload)
+        while i + 2 <= size:
+            opcode = int.from_bytes(payload[i:i + 2], "little")
+            if opcode == 0x0436 and i + 23 <= size:
+                self._parse_client_map_packet(payload[i:i + 23])
+                i += 23
+                continue
+            i += 1
+
     def _packet(self, pkt):
         try:
             if IP not in pkt or TCP not in pkt:
@@ -281,9 +326,12 @@ class AuthenticatedClientMonitor:
             stage = RO_PORTS[server_port]
             direction = "server_to_client" if ip.src == SERVER_IP else "client_to_server"
 
-            if stage == "map" and direction == "server_to_client" and payload:
+            if stage == "map" and payload:
                 with self._lock:
-                    self._parse_payload(payload)
+                    if direction == "server_to_client":
+                        self._parse_payload(payload)
+                    else:
+                        self._parse_client_payload(payload)
 
             event = {
                 "timestamp": time.time(),
