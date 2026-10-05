@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import struct
 import subprocess
 import threading
@@ -22,11 +23,13 @@ FIXED_PACKET_LENGTHS = {
     0x0080: 7,   # actor_died_or_disappeared
     0x0087: 12,  # character_moves
     0x008A: 29,  # actor_action
-    0x0091: 22,  # map_change
+    0x0091: 22,  # legacy map_change
+    0x0092: 28,  # legacy map_changed/server move
     0x009D: 19,  # floor item exists
     0x009E: 17,  # legacy floor item appeared
     0x00A1: 6,   # floor item disappeared
     0x00B0: 8,   # stat_info
+    0x0AC7: 156, # modern map_changed (kRO 2021 family)
     0x0ADD: 24,  # modern floor item appeared
 }
 VARIABLE_PACKET_OPCODES = {0x09FD, 0x09FE, 0x09FF}
@@ -63,6 +66,20 @@ def _coords6(raw: bytes) -> tuple[tuple[int, int], tuple[int, int]] | None:
 
 def _clean_text(raw: bytes) -> str:
     return raw.split(b"\x00", 1)[0].decode("latin-1", errors="replace").strip()
+
+
+_MAP_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+(?:\.(?:gat|rsw))?$")
+
+
+def _clean_map_name(raw: bytes) -> str | None:
+    try:
+        value = raw.split(b"\x00", 1)[0].decode("ascii", errors="strict").strip()
+    except UnicodeDecodeError:
+        return None
+    if not value or len(value) > 16 or not _MAP_NAME_RE.fullmatch(value):
+        return None
+    value = re.sub(r"\.(?:gat|rsw)$", "", value, flags=re.IGNORECASE)
+    return value or None
 
 
 def _actor_kind(object_type: int) -> str:
@@ -111,6 +128,7 @@ class AuthenticatedClientMonitor:
         self._aggressors: dict[int, float] = {}
         self._parsed_counts: dict[str, int] = {
             "map_change": 0,
+            "invalid_map_change": 0,
             "character_moves": 0,
             "actor_moved": 0,
             "actor_connected": 0,
@@ -225,9 +243,20 @@ class AuthenticatedClientMonitor:
             self._parsed_counts["combat"] += 1
             return
 
-        if opcode == 0x0091 and len(data) >= 22:
-            map_name = _clean_text(data[2:18])
+        if opcode in {0x0091, 0x0092, 0x0AC7}:
+            minimum = {0x0091: 22, 0x0092: 28, 0x0AC7: 156}[opcode]
+            if len(data) < minimum:
+                return
+
+            map_name = _clean_map_name(data[2:18])
+            if map_name is None:
+                self._parsed_counts["invalid_map_change"] += 1
+                return
+
             x, y = struct.unpack_from("<HH", data, 18)
+            if not (0 <= x <= 4095 and 0 <= y <= 4095):
+                self._parsed_counts["invalid_map_change"] += 1
+                return
 
             previous_map = self._world.get("map")
             previous_x = self._world.get("x")
@@ -378,6 +407,20 @@ class AuthenticatedClientMonitor:
             self._parse_world_packet(packet)
             i += length
 
+    def _parse_character_payload(self, payload: bytes):
+        size = len(payload)
+        i = 0
+        while i + 156 <= size:
+            opcode = int.from_bytes(payload[i:i + 2], "little")
+            if opcode == 0x0AC5:
+                packet = payload[i:i + 156]
+                map_name = _clean_map_name(packet[6:22])
+                if map_name:
+                    self._world["map"] = map_name
+                i += 156
+                continue
+            i += 1
+
     def _parse_client_payload(self, payload: bytes):
         i = 0
         size = len(payload)
@@ -414,12 +457,15 @@ class AuthenticatedClientMonitor:
             stage = RO_PORTS[server_port]
             direction = "server_to_client" if ip.src == SERVER_IP else "client_to_server"
 
-            if stage == "map" and payload:
+            if payload:
                 with self._lock:
-                    if direction == "server_to_client":
-                        self._parse_payload(payload)
-                    else:
-                        self._parse_client_payload(payload)
+                    if stage == "map":
+                        if direction == "server_to_client":
+                            self._parse_payload(payload)
+                        else:
+                            self._parse_client_payload(payload)
+                    elif stage == "character" and direction == "server_to_client":
+                        self._parse_character_payload(payload)
 
             event = {
                 "timestamp": time.time(),
