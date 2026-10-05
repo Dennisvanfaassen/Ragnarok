@@ -197,6 +197,12 @@ class GameActionAdapter:
     def loot(self, *args, **kwargs):
         return self._backend.loot(*args, **kwargs)
 
+    def press_hotkey(self, key: str) -> dict[str, Any]:
+        result = self._backend.press_hotkey(key)
+        if isinstance(result, dict):
+            result.setdefault("backend", "windows_input")
+        return result
+
     def attack(self, *args, actor_id: int | None = None, **kwargs):
         if actor_id is not None and self.native_attack_ready():
             result = native_action_bridge.attack(int(actor_id))
