@@ -22,6 +22,8 @@ class TownTravelController:
         self.state = "IDLE"
         self.message = "Idle"
         self.destination_town: str | None = None
+        self.destination_map: str | None = None
+        self.mode = "town"
         self.current_leg: dict[str, Any] | None = None
         self.actions: list[dict[str, Any]] = []
         self.lookahead = 10
@@ -215,22 +217,30 @@ class TownTravelController:
                     self._stop.wait(0.1)
                     continue
 
-                preferred = str(app_state.get_profile().town.storage_map or "").strip() or None
-                route = world_route_planner.route_to_town(
-                    current_map,
-                    preferred_town=preferred,
-                )
+                if self.mode == "map" and self.destination_map:
+                    route = world_route_planner.route_to_map(
+                        current_map,
+                        self.destination_map,
+                    )
+                    destination_label = self.destination_map
+                else:
+                    preferred = str(app_state.get_profile().town.storage_map or "").strip() or None
+                    route = world_route_planner.route_to_town(
+                        current_map,
+                        preferred_town=preferred,
+                    )
+                    self.destination_town = route.get("town")
+                    destination_label = self.destination_town
 
                 if route.get("status") != "ready":
-                    self._set("ERROR", str(route.get("message") or "No town route."))
+                    self._set("ERROR", str(route.get("message") or "No route."))
                     return
 
-                self.destination_town = route.get("town")
                 next_portal = route.get("next_portal")
                 if not next_portal:
                     self._set(
                         "ARRIVED",
-                        f"Arrived in {self.destination_town}.",
+                        f"Arrived in {destination_label}.",
                     )
                     return
 
@@ -268,6 +278,35 @@ class TownTravelController:
             self.state = "PLANNING"
             self.message = "Planning fastest physical route to town."
             self.destination_town = None
+            self.destination_map = None
+            self.mode = "town"
+            self.current_leg = None
+            self._native_destination = None
+            self._native_sent_at = 0.0
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+            return self.snapshot()
+
+    def start_to_map(self, target_map: str) -> dict[str, Any]:
+        target = str(target_map or "").strip().lower()
+        if not target:
+            raise RuntimeError("Target map is required.")
+
+        with self._lock:
+            if self.running:
+                return self.snapshot()
+            if not authenticated_client_monitor.snapshot().get("classic_pid"):
+                raise RuntimeError("Classic.exe is not detected.")
+            if not game_actions.calibration_valid():
+                raise RuntimeError("Valid screen calibration is required.")
+
+            self._stop.clear()
+            self.running = True
+            self.state = "PLANNING"
+            self.message = f"Planning route to {target}."
+            self.destination_town = None
+            self.destination_map = target
+            self.mode = "map"
             self.current_leg = None
             self._native_destination = None
             self._native_sent_at = 0.0
@@ -294,6 +333,8 @@ class TownTravelController:
                 "state": self.state,
                 "message": self.message,
                 "destination_town": self.destination_town,
+                "destination_map": self.destination_map,
+                "mode": self.mode,
                 "current_leg": self.current_leg,
                 "actions": self.actions[-20:],
             }
