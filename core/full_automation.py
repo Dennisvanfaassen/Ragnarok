@@ -291,6 +291,7 @@ class FullAutomationController:
 
     def _open_kafra_storage(self, actor_id: int) -> bool:
         before = authenticated_client_monitor.item_state_snapshot().get("updated_at", {}).get("storage")
+
         steps = [
             ("talk", lambda: native_action_bridge.talk_npc(actor_id, 1)),
             ("continue_to_menu", lambda: native_action_bridge.continue_npc(actor_id)),
@@ -304,33 +305,44 @@ class FullAutomationController:
                 return False
             self._stop.wait(0.30)
 
-        # SoulBound opens the storage window while the final Kafra dialogue is
-        # still visible. Native npc_continue does not dismiss that UI state.
-        # Match the manual flow exactly: press the physical Enter key once after
-        # choosing Storage, then wait before sending storage-move packets.
-        self._stop.wait(0.35)
-        enter_result = game_actions.press_hotkey("ENTER")
-        self._log("kafra_dialog", step="physical_enter_to_close_dialog", result=enter_result)
-        if not enter_result.get("ok"):
-            self.last_error = (
-                f"Could not press Enter to close Kafra dialogue: "
-                f"{enter_result.get('reason')}"
-            )
-            return False
-        self._stop.wait(0.65)
-
+        # Important SoulBound detail:
+        # choosing Storage opens the storage window first, while a final Kafra
+        # dialogue is still active. Closing that dialogue too early is ignored.
+        # Wait until we have proof the storage window has actually opened, then
+        # close the NPC dialogue with the normal Ragnarok close-dialog packet.
         deadline = time.time() + 5.0
+        storage_opened = False
         while not self._stop.is_set() and time.time() < deadline:
             after = authenticated_client_monitor.item_state_snapshot().get("updated_at", {}).get("storage")
             if after is not None and after != before:
-                # The storage list packet can arrive slightly before the client
-                # is ready to accept item-move commands. Give the Kafra window a
-                # short settling period before depositing the first item.
-                self._stop.wait(0.75)
-                return True
+                storage_opened = True
+                break
             self._stop.wait(0.10)
-        self.last_error = "Storage list did not open after Kafra dialogue."
-        return False
+
+        if not storage_opened:
+            self.last_error = "Storage list did not open after Kafra dialogue."
+            return False
+
+        self._stop.wait(0.45)
+        close_result = native_action_bridge.close_npc(actor_id)
+        self._log(
+            "kafra_dialog",
+            step="close_final_dialog_after_storage_open",
+            result=close_result,
+        )
+        if not close_result.get("ok"):
+            self.last_error = (
+                f"Could not close the final Kafra dialogue: "
+                f"{close_result.get('reason')}"
+            )
+            return False
+
+        # Allow the client to fully leave NPC-dialogue mode before sending any
+        # storage-item movement commands. Do not use a blind physical Enter
+        # here: if the dialogue has already closed, Enter can activate an
+        # unrelated focused UI action.
+        self._stop.wait(0.85)
+        return True
 
     @staticmethod
     def _town_item_rule(item: dict[str, Any]):
