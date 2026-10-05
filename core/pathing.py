@@ -255,6 +255,7 @@ def astar(
     goal: tuple[int, int],
     *,
     max_expansions: int = 150000,
+    clearance_weight: float = 0.0,
 ) -> list[tuple[int, int]] | None:
     start = _nearest_walkable(grid, start) or start
     goal = _nearest_walkable(grid, goal)
@@ -291,7 +292,23 @@ def astar(
             nxt = (nx, ny)
             if nxt in closed:
                 continue
-            tentative = current_g + move_cost
+
+            clearance_penalty = 0.0
+            if clearance_weight > 0:
+                blocked_neighbors = 0
+                for ox in (-1, 0, 1):
+                    for oy in (-1, 0, 1):
+                        if ox == 0 and oy == 0:
+                            continue
+                        if not grid.walkable(nx + ox, ny + oy):
+                            blocked_neighbors += 1
+                clearance_penalty = (
+                    float(clearance_weight)
+                    * blocked_neighbors
+                    / 8.0
+                )
+
+            tentative = current_g + move_cost + clearance_penalty
             if tentative >= g_score.get(nxt, float("inf")):
                 continue
             g_score[nxt] = tentative
