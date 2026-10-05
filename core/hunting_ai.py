@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from core.mouse_adapter import mouse_game_adapter
+from core.exploration import exploration_planner
 from core.pathing import astar, build_pathing_state, clear_walk_line, nav_repository
 from core.state import app_state
 from core.targeting import build_targeting_state
@@ -352,27 +353,22 @@ class HuntingAI:
         except Exception:
             return False
 
-        candidates = []
-        for _ in range(30):
-            distance = random.randint(self.wander_min_distance, self.wander_max_distance)
-            angle = random.random() * math.tau
-            gx = int(round(player[0] + math.cos(angle) * distance))
-            gy = int(round(player[1] + math.sin(angle) * distance))
-            if not grid.walkable(gx, gy):
-                continue
-            path = astar(grid, player, (gx, gy), max_expansions=60000)
-            if path and len(path) >= self.wander_min_distance:
-                candidates.append(path)
-
-        if not candidates:
+        path = exploration_planner.choose_route(
+            str(map_name),
+            grid,
+            player,
+        )
+        if not path:
             return False
 
-        self.wander_path = random.choice(candidates)
-        self.wander_goal = self.wander_path[-1]
+        self.wander_path = path
+        self.wander_goal = path[-1]
         self._log(
             "wander_route",
             goal={"x": self.wander_goal[0], "y": self.wander_goal[1]},
-            steps=len(self.wander_path) - 1,
+            steps=len(path) - 1,
+            strategy="coverage_heading",
+            exploration=exploration_planner.snapshot(),
         )
         return True
 
@@ -788,9 +784,12 @@ class HuntingAI:
             return
 
         player = self._position(snapshot)
-        if player is None:
+        map_name = self._world(snapshot).get("map")
+        if player is None or not map_name:
             self._stop.wait(0.03)
             return
+
+        exploration_planner.observe(str(map_name), player)
 
         if (
             not self.wander_path
@@ -981,6 +980,7 @@ class HuntingAI:
                     "wander_lookahead": self.wander_lookahead,
                     "wander_cursor_radius": self.wander_cursor_radius,
                     "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
+                    "exploration": exploration_planner.snapshot(),
                 },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
                 "actions": self.actions[-30:],
