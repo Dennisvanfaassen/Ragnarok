@@ -17,7 +17,8 @@ const counters = {
     sendto: 0,
     WSASend: 0,
     WSASendTo: 0,
-    actor_actions: 0
+    actor_actions: 0,
+    move_actions: 0
 };
 const hooked = [];
 const recentCalls = [];
@@ -113,9 +114,38 @@ function inspectBuffer(socket, buf, length, api) {
     if (buf.isNull()) return;
 
     rememberCall(socket, buf, length, api);
-    if (length !== 7) return;
 
     try {
+        if (
+            length === 5
+            && readByte(buf, 0) === 0x5f
+            && readByte(buf, 1) === 0x03
+        ) {
+            const b0 = readByte(buf, 2);
+            const b1 = readByte(buf, 3);
+            const b2 = readByte(buf, 4);
+            const x = (b0 << 2) | (b1 >> 6);
+            const y = ((b1 & 0x3f) << 4) | (b2 >> 4);
+
+            mapSocket = socket;
+            counters.move_actions += 1;
+            send({
+                event: 'move_action_observed',
+                data: {
+                    x: x,
+                    y: y,
+                    socket: mapSocket.toString(),
+                    api: api,
+                    packet_hex: [
+                        b0, b1, b2
+                    ].map(b => ('0' + b.toString(16)).slice(-2)).join(' '),
+                    timestamp_ms: Date.now()
+                }
+            });
+            return;
+        }
+
+        if (length !== 7) return;
         if (readByte(buf, 0) !== 0x37 || readByte(buf, 1) !== 0x04) return;
 
         const type = readByte(buf, 6);
@@ -276,6 +306,41 @@ rpc.exports = {
             packet_hex: bytes.map(b => ('0' + b.toString(16)).slice(-2)).join(' '),
             socket: mapSocket.toString()
         };
+    },
+
+    move(x, y) {
+        if (mapSocket === null) {
+            return {
+                ok: false,
+                reason: 'map_socket_not_learned'
+            };
+        }
+        if (sendFn === null) {
+            return {
+                ok: false,
+                reason: 'send_export_unavailable'
+            };
+        }
+
+        const px = Math.max(0, Math.min(1023, Number(x) | 0));
+        const py = Math.max(0, Math.min(1023, Number(y) | 0));
+        const b0 = (px >> 2) & 0xff;
+        const b1 = ((px & 0x03) << 6) | ((py >> 4) & 0x3f);
+        const b2 = (py & 0x0f) << 4;
+        const bytes = [0x5f, 0x03, b0, b1, b2];
+
+        const packet = Memory.alloc(5);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 5, 0);
+
+        return {
+            ok: result === 5,
+            bytes_sent: result,
+            x: px,
+            y: py,
+            packet_hex: bytes.map(b => ('0' + b.toString(16)).slice(-2)).join(' '),
+            socket: mapSocket.toString()
+        };
     }
 };
 """
@@ -413,6 +478,63 @@ class NativeActionBridge:
                 "last_observed": None,
                 "error": str(exc),
             }
+
+    def move(self, x: int, y: int) -> dict[str, Any]:
+        x = int(x)
+        y = int(y)
+        if not (0 <= x <= 1023 and 0 <= y <= 1023):
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "destination_out_of_range",
+                "x": x,
+                "y": y,
+            }
+
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "bridge_not_running",
+                "x": x,
+                "y": y,
+            }
+
+        status = self._agent_status()
+        if not status.get("socket_learned"):
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "map_socket_not_learned",
+                "x": x,
+                "y": y,
+            }
+
+        before = time.time()
+        try:
+            result = dict(script.exports_sync.move(x, y))
+        except Exception as exc:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+                "x": x,
+                "y": y,
+            }
+
+        result.update({
+            "executed": bool(result.get("ok")),
+            "sent_at": before,
+            "command": "move_to",
+        })
+        self._record({
+            "event": "direct_move_sent",
+            "result": result,
+        })
+        return result
 
     def attack(self, actor_id: int) -> dict[str, Any]:
         actor_id = int(actor_id)
