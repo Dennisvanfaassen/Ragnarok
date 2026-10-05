@@ -404,6 +404,11 @@ class HuntingAI:
             return
 
         if self._acquire_target(snapshot):
+            if self._attack_locked_immediately(
+                snapshot,
+                reason="search_target",
+            ):
+                return
             self._set_state(
                 "TARGET_SELECTED",
                 f"Locked {self.target_name}",
