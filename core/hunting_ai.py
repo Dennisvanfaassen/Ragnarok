@@ -186,6 +186,30 @@ class HuntingAI:
         return int(x), int(y)
 
     @staticmethod
+    def _render_position(
+        snapshot: dict[str, Any],
+    ) -> tuple[float, float] | None:
+        world = HuntingAI._world(snapshot)
+        x = world.get("render_x", world.get("x"))
+        y = world.get("render_y", world.get("y"))
+        if x is None or y is None:
+            return None
+        return float(x), float(y)
+
+    def _target_render_position(
+        self,
+        snapshot: dict[str, Any],
+    ) -> tuple[float, float] | None:
+        actor = self._find_actor(snapshot, self.target_id)
+        if actor is None:
+            return None
+        x = actor.get("render_x", actor.get("x"))
+        y = actor.get("render_y", actor.get("y"))
+        if x is None or y is None:
+            return None
+        return float(x), float(y)
+
+    @staticmethod
     def _find_actor(
         snapshot: dict[str, Any],
         actor_id: int | None,
@@ -648,17 +672,22 @@ class HuntingAI:
         if actor is None or player is None or self.target_pos is None:
             return False
 
+        player_render = self._render_position(fresh)
+        target_render = self._target_render_position(fresh)
+        if player_render is None or target_render is None:
+            return False
+
         if not mouse_game_adapter.can_project(
-            player,
-            self.target_pos,
+            player_render,
+            target_render,
             sprite=True,
         ):
             return False
 
         self.attack_clicked_at = time.time()
         result = mouse_game_adapter.attack(
-            player,
-            self.target_pos,
+            player_render,
+            target_render,
             retry_index=0,
         )
         self._log(
@@ -692,9 +721,11 @@ class HuntingAI:
         if (
             player is not None
             and self.target_pos is not None
+            and self._render_position(snapshot) is not None
+            and self._target_render_position(snapshot) is not None
             and mouse_game_adapter.can_project(
-                player,
-                self.target_pos,
+                self._render_position(snapshot),
+                self._target_render_position(snapshot),
                 sprite=True,
             )
         ):
@@ -728,9 +759,11 @@ class HuntingAI:
 
         if (
             not self._attack_reposition_required
+            and self._render_position(snapshot) is not None
+            and self._target_render_position(snapshot) is not None
             and mouse_game_adapter.can_project(
-                player,
-                self.target_pos,
+                self._render_position(snapshot),
+                self._target_render_position(snapshot),
                 sprite=True,
             )
             and grid is not None
@@ -901,10 +934,16 @@ class HuntingAI:
             return
 
         distance = self._tile_distance(player, self.target_pos)
-        if not mouse_game_adapter.can_project(
-            player,
-            self.target_pos,
-            sprite=True,
+        player_render = self._render_position(snapshot)
+        target_render = self._target_render_position(snapshot)
+        if (
+            player_render is None
+            or target_render is None
+            or not mouse_game_adapter.can_project(
+                player_render,
+                target_render,
+                sprite=True,
+            )
         ):
             self._set_state(
                 "ROUTING",
@@ -921,10 +960,15 @@ class HuntingAI:
         if player is None or self.target_pos is None:
             return
 
+        player_render = self._render_position(fresh)
+        target_render = self._target_render_position(fresh)
+        if player_render is None or target_render is None:
+            return
+
         self.attack_clicked_at = time.time()
         result = mouse_game_adapter.attack(
-            player,
-            self.target_pos,
+            player_render,
+            target_render,
             retry_index=self.attack_retry,
         )
         self._log(
@@ -999,10 +1043,16 @@ class HuntingAI:
                 self._stop.wait(0.03)
                 return
 
+            player_render = self._render_position(fresh)
+            target_render = self._target_render_position(fresh)
+            if player_render is None or target_render is None:
+                self._stop.wait(0.03)
+                return
+
             self.attack_clicked_at = time.time()
             result = mouse_game_adapter.attack(
-                player,
-                self.target_pos,
+                player_render,
+                target_render,
                 retry_index=self.attack_retry,
             )
             self._log(
@@ -1109,7 +1159,11 @@ class HuntingAI:
         item = items[0]
         item_id = int(item["id"])
         item_pos = (int(item["x"]), int(item["y"]))
-        result = mouse_game_adapter.loot(player, item_pos)
+        player_render = self._render_position(snapshot) or (
+            float(player[0]),
+            float(player[1]),
+        )
+        result = mouse_game_adapter.loot(player_render, item_pos)
         self._log(
             "loot_attempt",
             item_id=item_id,
