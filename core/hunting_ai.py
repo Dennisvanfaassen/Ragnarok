@@ -711,6 +711,138 @@ class HuntingAI:
 
         self._set_state("SEARCHING", "Selecting next monster")
 
+    def _step_looting(self, snapshot: dict[str, Any]):
+        if self._acquire_aggressor(snapshot):
+            self._set_state(
+                "TARGET_SELECTED",
+                f"Interrupted loot for aggressor {self.target_name}",
+            )
+            return
+
+        items = self._loot_candidates(snapshot)
+        if not items:
+            self.loot_retry.clear()
+            self._set_state("SEARCHING", "Loot complete")
+            return
+
+        player = self._position(snapshot)
+        if player is None:
+            self._stop.wait(0.04)
+            return
+
+        item = items[0]
+        item_id = int(item["id"])
+        item_pos = (int(item["x"]), int(item["y"]))
+        result = mouse_game_adapter.loot(player, item_pos)
+        self._log(
+            "loot_attempt",
+            item_id=item_id,
+            item_name_id=item.get("name_id"),
+            x=item_pos[0],
+            y=item_pos[1],
+            result=result,
+        )
+
+        if not result.get("ok"):
+            self.loot_retry[item_id] = self.loot_retry.get(item_id, 0) + 1
+            self._stop.wait(0.06)
+            return
+
+        deadline = time.time() + 1.2
+        while not self._stop.is_set() and time.time() < deadline:
+            self._stop.wait(0.04)
+            fresh = authenticated_client_monitor.snapshot()
+
+            if self._acquire_aggressor(fresh):
+                self._set_state(
+                    "TARGET_SELECTED",
+                    f"Interrupted loot for aggressor {self.target_name}",
+                )
+                return
+
+            ids = {
+                int(entry["id"])
+                for entry in ((fresh.get("live_state") or {}).get("floor_items") or [])
+            }
+            if item_id not in ids:
+                self.loot_retry.pop(item_id, None)
+                return
+
+        self.loot_retry[item_id] = self.loot_retry.get(item_id, 0) + 1
+
+    def _step_wandering(self, snapshot: dict[str, Any]):
+        if self._acquire_aggressor(snapshot):
+            self._set_state(
+                "TARGET_SELECTED",
+                f"Aggressor spotted: {self.target_name}",
+            )
+            return
+
+        if self._acquire_target(snapshot):
+            self._set_state(
+                "TARGET_SELECTED",
+                f"Monster spotted: {self.target_name}",
+            )
+            return
+
+        player = self._position(snapshot)
+        if player is None:
+            self._stop.wait(0.03)
+            return
+
+        if (
+            not self.wander_path
+            or self.wander_goal is None
+            or self._tile_distance(player, self.wander_goal) <= 2
+        ):
+            mouse_game_adapter.release_hold_move()
+            self.wander_path = []
+            self.wander_goal = None
+            if not self._choose_wander_path(snapshot):
+                self._stop.wait(0.10)
+                return
+
+        index = self._nearest_wander_index(player)
+        if index >= len(self.wander_path) - 1:
+            mouse_game_adapter.release_hold_move()
+            self.wander_path = []
+            self.wander_goal = None
+            return
+
+        lookahead = min(
+            len(self.wander_path) - 1,
+            index + self.wander_lookahead,
+        )
+        destination = self.wander_path[lookahead]
+
+        result = mouse_game_adapter.update_hold_move(
+            player,
+            destination,
+            min_pixel_change=14,
+        )
+
+        if not result.get("ok"):
+            for short in range(4, 0, -1):
+                idx = min(len(self.wander_path) - 1, index + short)
+                destination = self.wander_path[idx]
+                result = mouse_game_adapter.update_hold_move(
+                    player,
+                    destination,
+                    min_pixel_change=8,
+                )
+                if result.get("ok"):
+                    break
+
+        if not result.get("ok"):
+            mouse_game_adapter.release_hold_move()
+            self.wander_path = []
+            self.wander_goal = None
+            self._stop.wait(0.06)
+            return
+
+        self.message = f"Wandering toward {self.wander_goal[0]},{self.wander_goal[1]}"
+        self._stop.wait(0.03)
+
     def _step_failed(self):
         snapshot = authenticated_client_monitor.snapshot()
         if self._refresh_locked_target(snapshot) is not None:
@@ -755,6 +887,10 @@ class HuntingAI:
                 self._step_waiting_for_death(snapshot)
             elif self.state == "TARGET_DEAD":
                 self._step_target_dead()
+            elif self.state == "LOOTING":
+                self._step_looting(snapshot)
+            elif self.state == "WANDERING":
+                self._step_wandering(snapshot)
             elif self.state == "FAILED":
                 self._step_failed()
             else:
@@ -789,6 +925,7 @@ class HuntingAI:
 
     def stop(self) -> dict[str, Any]:
         self._stop.set()
+        mouse_game_adapter.release_hold_move()
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=1.5)
@@ -824,6 +961,8 @@ class HuntingAI:
                     "sprite_y_offset": mouse_game_adapter.sprite_y_offset,
                     "direct_attack_click_range": self.direct_attack_click_range,
                     "attack_walk_timeout": self.attack_walk_timeout,
+                    "loot_radius": self.loot_radius,
+                    "wander_lookahead": self.wander_lookahead,
                 },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
                 "actions": self.actions[-30:],
