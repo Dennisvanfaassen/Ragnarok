@@ -251,13 +251,17 @@ rpc.exports = {
         }
 
         const id = Number(actorId) >>> 0;
+        const learnedType = (
+            lastObserved !== null
+            && (lastObserved.type === 0 || lastObserved.type === 7)
+        ) ? lastObserved.type : 7;
         const bytes = [
             0x37, 0x04,
             id & 0xff,
             (id >>> 8) & 0xff,
             (id >>> 16) & 0xff,
             (id >>> 24) & 0xff,
-            0x07
+            learnedType
         ];
 
         const packet = Memory.alloc(7);
@@ -268,6 +272,7 @@ rpc.exports = {
             ok: result === 7,
             bytes_sent: result,
             target_id: id,
+            action_type: learnedType,
             packet_hex: bytes.map(b => ('0' + b.toString(16)).slice(-2)).join(' '),
             socket: mapSocket.toString()
         };
