@@ -28,10 +28,19 @@ class ServerProfile(BaseModel):
     notes: str | None = None
 
 
+class MonsterLootRule(BaseModel):
+    monster: str
+    enabled: bool = True
+    loot_mode: str = "all"  # all | selected | excluded | none
+    include_items: list[str] = Field(default_factory=list)
+    exclude_items: list[str] = Field(default_factory=list)
+
+
 class HuntSettings(BaseModel):
     map: str = ""
     monsters: list[str] = Field(default_factory=list)
     loot_all: bool = True
+    monster_rules: list[MonsterLootRule] = Field(default_factory=list)
 
 
 class HealingSettings(BaseModel):
