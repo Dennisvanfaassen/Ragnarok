@@ -900,6 +900,76 @@ class HuntingAI:
 
         return target, route
 
+    def _fallback_exploration_route(
+        self,
+        map_name: str,
+        grid,
+        player: tuple[int, int],
+    ) -> list[tuple[int, int]] | None:
+        """Find any useful reachable forward route when frontier planning has no result."""
+        candidates: list[list[tuple[int, int]]] = []
+        recent = exploration_planner.snapshot().get("recent_goals") or []
+
+        for _ in range(28):
+            angle = random.random() * math.tau
+            distance = random.randint(14, 38)
+            gx = int(round(player[0] + math.cos(angle) * distance))
+            gy = int(round(player[1] + math.sin(angle) * distance))
+
+            goal = None
+            for radius in range(0, 7):
+                ring = []
+                for ox in range(-radius, radius + 1):
+                    for oy in range(-radius, radius + 1):
+                        if radius and max(abs(ox), abs(oy)) != radius:
+                            continue
+                        x, y = gx + ox, gy + oy
+                        if not grid.walkable(x, y):
+                            continue
+                        if self._in_avoid_zone(map_name, x, y):
+                            continue
+                        ring.append((x, y))
+                if ring:
+                    goal = min(
+                        ring,
+                        key=lambda p: math.hypot(p[0] - gx, p[1] - gy),
+                    )
+                    break
+
+            if goal is None:
+                continue
+
+            if any(
+                max(abs(goal[0] - int(r.get("x") or 0)), abs(goal[1] - int(r.get("y") or 0))) < 8
+                for r in recent
+            ):
+                continue
+
+            path = astar(
+                grid,
+                player,
+                goal,
+                max_expansions=100000,
+                clearance_weight=0.85,
+            )
+            if not path or len(path) < 6:
+                continue
+            if self._path_crosses_avoid_zone(map_name, path):
+                continue
+            candidates.append(path)
+
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda path: (
+                len(path),
+                self._tile_distance(player, path[-1]),
+            ),
+            reverse=True,
+        )
+        return candidates[0]
+
     def _choose_wander_path(self, snapshot: dict[str, Any]) -> bool:
         player = self._position(snapshot)
         map_name = self._world(snapshot).get("map")
@@ -1000,14 +1070,30 @@ class HuntingAI:
             player,
             frontier_bias=app_state.get_profile().hunt.exploration_frontier_bias,
         )
-        if not path:
-            return False
-        if self._path_crosses_avoid_zone(map_name, path):
+
+        if path and self._path_crosses_avoid_zone(map_name, path):
             self._log(
                 "wander_route_blocked_by_avoid_zone",
                 map=map_name,
                 goal={"x": path[-1][0], "y": path[-1][1]},
             )
+            path = None
+
+        if not path:
+            path = self._fallback_exploration_route(
+                map_name,
+                grid,
+                player,
+            )
+            if path:
+                self._log(
+                    "wander_fallback_route",
+                    map=map_name,
+                    goal={"x": path[-1][0], "y": path[-1][1]},
+                    steps=len(path) - 1,
+                )
+
+        if not path:
             return False
 
         self._set_wander_route(grid, path, path[-1])
