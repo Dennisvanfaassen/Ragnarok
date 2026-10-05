@@ -985,12 +985,6 @@ async function loadProfile(){
     document.getElementById('defaultItemAction').value=(p.town&&p.town.default_item_action)||'store';
     townItemRules=((p.town&&p.town.item_rules)||[]).map(function(row){return {...row};});
     townBuyRules=((p.town&&p.town.buy_rules)||[]).map(function(row){return {...row};});
-    if(!townBuyRules.length){
-      townBuyRules=[
-        {item_name:'Awakening Potion',name_id:656,target_quantity:supplies.awakening_potions??4},
-        {item_name:'Butterfly Wing',name_id:602,target_quantity:supplies.butterfly_wings??1}
-      ];
-    }
     renderTownRuleSummary();
     renderTownBuyRules();
     document.getElementById('liveReturnTrigger').value=((p.town&&p.town.return_weight_percent)||70)+'%';
