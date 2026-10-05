@@ -187,16 +187,13 @@ class HuntingAI:
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
 
-    def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
-        profile = app_state.get_profile()
-        targeting = build_targeting_state(snapshot, profile.hunt.monsters)
-        selected = targeting.get("selected")
-        if not selected:
+    def _lock_actor(self, actor: dict[str, Any], reason: str) -> bool:
+        x, y = actor.get("x"), actor.get("y")
+        if x is None or y is None:
             return False
-
-        self.target_id = int(selected["id"])
-        self.target_name = str(selected.get("name") or f"Monster #{self.target_id}")
-        self.target_pos = (int(selected["x"]), int(selected["y"]))
+        self.target_id = int(actor["id"])
+        self.target_name = str(actor.get("name") or f"Monster #{self.target_id}")
+        self.target_pos = (int(x), int(y))
         self.route_target_pos = None
         self.attack_retry = 0
         self._log(
@@ -205,8 +202,41 @@ class HuntingAI:
             target_name=self.target_name,
             x=self.target_pos[0],
             y=self.target_pos[1],
+            reason=reason,
         )
         return True
+
+    def _acquire_aggressor(self, snapshot: dict[str, Any]) -> bool:
+        live = snapshot.get("live_state") or {}
+        ids = set(live.get("aggressor_ids") or [])
+        if not ids:
+            return False
+        player = self._position(snapshot)
+        actors = [
+            actor
+            for actor in (live.get("actors") or [])
+            if actor.get("kind") == "monster"
+            and int(actor.get("id") or -1) in ids
+        ]
+        if not actors:
+            return False
+        if player:
+            actors.sort(
+                key=lambda actor: max(
+                    abs(int(actor.get("x") or player[0]) - player[0]),
+                    abs(int(actor.get("y") or player[1]) - player[1]),
+                )
+            )
+        return self._lock_actor(actors[0], "aggressor")
+
+    def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
+        profile = app_state.get_profile()
+        targeting = build_targeting_state(snapshot, profile.hunt.monsters)
+        selected = targeting.get("selected")
+        if not selected:
+            return False
+
+        return self._lock_actor(selected, "normal_target")
 
     @staticmethod
     def _tile_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -272,6 +302,89 @@ class HuntingAI:
         index = min(self.move_segment_tiles, max_index)
         point = path_preview[index]
         return int(point["x"]), int(point["y"])
+
+    def _loot_candidates(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        items = list(((snapshot.get("live_state") or {}).get("floor_items") or []))
+        if not items or not self.recent_kills:
+            return []
+
+        now = time.time()
+        self.recent_kills = [
+            kill for kill in self.recent_kills
+            if now - float(kill["time"]) <= 30.0
+        ]
+        if not self.recent_kills:
+            return []
+
+        result = []
+        for item in items:
+            ix, iy = item.get("x"), item.get("y")
+            if ix is None or iy is None:
+                continue
+            seen = float(item.get("last_seen") or 0)
+            for kill in self.recent_kills:
+                kx, ky = kill["pos"]
+                if seen + 1.0 < float(kill["time"]):
+                    continue
+                if max(abs(int(ix) - kx), abs(int(iy) - ky)) <= self.loot_radius:
+                    result.append(item)
+                    break
+
+        player = self._position(snapshot)
+        if player:
+            result.sort(
+                key=lambda item: max(
+                    abs(int(item["x"]) - player[0]),
+                    abs(int(item["y"]) - player[1]),
+                )
+            )
+        return result
+
+    def _choose_wander_path(self, snapshot: dict[str, Any]) -> bool:
+        player = self._position(snapshot)
+        map_name = self._world(snapshot).get("map")
+        if player is None or not map_name:
+            return False
+        try:
+            grid, _ = nav_repository.load(str(map_name))
+        except Exception:
+            return False
+
+        candidates = []
+        for _ in range(30):
+            distance = random.randint(self.wander_min_distance, self.wander_max_distance)
+            angle = random.random() * math.tau
+            gx = int(round(player[0] + math.cos(angle) * distance))
+            gy = int(round(player[1] + math.sin(angle) * distance))
+            if not grid.walkable(gx, gy):
+                continue
+            path = astar(grid, player, (gx, gy), max_expansions=60000)
+            if path and len(path) >= self.wander_min_distance:
+                candidates.append(path)
+
+        if not candidates:
+            return False
+
+        self.wander_path = random.choice(candidates)
+        self.wander_goal = self.wander_path[-1]
+        self._log(
+            "wander_route",
+            goal={"x": self.wander_goal[0], "y": self.wander_goal[1]},
+            steps=len(self.wander_path) - 1,
+        )
+        return True
+
+    def _nearest_wander_index(self, player: tuple[int, int]) -> int:
+        if not self.wander_path:
+            return 0
+        best_i = 0
+        best_d = 999999
+        for i, point in enumerate(self.wander_path):
+            d = max(abs(point[0] - player[0]), abs(point[1] - player[1]))
+            if d < best_d:
+                best_d = d
+                best_i = i
+        return best_i
 
     def _step_searching(self, snapshot: dict[str, Any]):
         if self._acquire_target(snapshot):
