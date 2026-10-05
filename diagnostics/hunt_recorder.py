@@ -219,6 +219,7 @@ class HuntingDiagnosticRecorder:
                 "message": hunt.get("message"),
                 "target": target,
                 "saved_route": route,
+                "navigation": hunt.get("navigation_debug") or {},
             },
             "cursor": cursor,
             "last_client_action": world.get("last_client_action"),
@@ -308,10 +309,18 @@ class HuntingDiagnosticRecorder:
             self._stop.clear()
             self.running = True
 
+            try:
+                from core.mouse_adapter import mouse_game_adapter
+                calibration = mouse_game_adapter.calibration_snapshot()
+            except Exception:
+                calibration = None
+
             metadata = {
                 "started_at": self.started_at,
-                "format_version": 1,
+                "format_version": 2,
                 "sample_interval_ms": 100,
+                "classic_geometry": self._classic_geometry(),
+                "calibration": calibration,
                 "notes": (
                     "Passive game-state diagnostics plus normal Windows input telemetry. "
                     "No credentials or packet payload bytes are recorded."
@@ -336,14 +345,18 @@ class HuntingDiagnosticRecorder:
         if not self.session_dir:
             return
 
+        events: list[dict[str, Any]] = []
         events_path = self.session_dir / "events.jsonl"
         if events_path.exists():
-            rows = []
             for line in events_path.read_text(encoding="utf-8").splitlines():
                 try:
-                    item = json.loads(line)
+                    events.append(json.loads(line))
                 except Exception:
                     continue
+
+        if events:
+            rows = []
+            for item in events:
                 details = item.get("details") or {}
                 rows.append({
                     "time": item.get("time"),
@@ -356,13 +369,99 @@ class HuntingDiagnosticRecorder:
                     "screenshot": item.get("screenshot"),
                     "details_json": json.dumps(details, ensure_ascii=False),
                 })
-            if rows:
-                with (self.session_dir / "events.csv").open(
+            with (self.session_dir / "events.csv").open(
+                "w", newline="", encoding="utf-8-sig"
+            ) as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            attack_actions = {
+                "attack_click",
+                "instant_attack",
+                "attack_attempt",
+                "attack_precision_retry",
+                "client_attack_registered",
+                "combat_confirmed",
+                "target_finished",
+            }
+            attack_rows = []
+            for item in events:
+                if item.get("action") not in attack_actions:
+                    continue
+                details = item.get("details") or {}
+                attack_rows.append({
+                    "time": item.get("time"),
+                    "elapsed": item.get("elapsed"),
+                    "source": item.get("source"),
+                    "action": item.get("action"),
+                    "cursor_x": (item.get("cursor") or {}).get("x"),
+                    "cursor_y": (item.get("cursor") or {}).get("y"),
+                    "left_down": (item.get("cursor") or {}).get("left_down"),
+                    "screenshot": item.get("screenshot"),
+                    "details_json": json.dumps(details, ensure_ascii=False),
+                })
+            if attack_rows:
+                with (self.session_dir / "attacks.csv").open(
                     "w", newline="", encoding="utf-8-sig"
                 ) as handle:
-                    writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+                    writer = csv.DictWriter(
+                        handle, fieldnames=list(attack_rows[0].keys())
+                    )
                     writer.writeheader()
-                    writer.writerows(rows)
+                    writer.writerows(attack_rows)
+
+        samples_path = self.session_dir / "samples.jsonl"
+        movement_rows = []
+        if samples_path.exists():
+            for line in samples_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                player = item.get("player") or {}
+                hunt = item.get("hunt") or {}
+                nav = hunt.get("navigation") or {}
+                cursor = item.get("cursor") or {}
+                target = hunt.get("target") or {}
+                goal = nav.get("wander_goal") or {}
+                movement_rows.append({
+                    "time": item.get("time"),
+                    "elapsed": item.get("elapsed"),
+                    "map": item.get("map"),
+                    "player_x": player.get("x"),
+                    "player_y": player.get("y"),
+                    "hunt_state": hunt.get("state"),
+                    "message": hunt.get("message"),
+                    "cursor_x": cursor.get("x"),
+                    "cursor_y": cursor.get("y"),
+                    "left_down": cursor.get("left_down"),
+                    "target_id": target.get("id"),
+                    "target_x": target.get("x"),
+                    "target_y": target.get("y"),
+                    "goal_x": goal.get("x"),
+                    "goal_y": goal.get("y"),
+                    "straight_segment_index": nav.get("straight_segment_index"),
+                    "wander_progress_index": nav.get("wander_progress_index"),
+                    "astar_path_json": json.dumps(
+                        nav.get("astar_path") or [],
+                        ensure_ascii=False,
+                    ),
+                    "straight_segments_json": json.dumps(
+                        nav.get("straight_segments") or [],
+                        ensure_ascii=False,
+                    ),
+                })
+        if movement_rows:
+            with (self.session_dir / "movement.csv").open(
+                "w", newline="", encoding="utf-8-sig"
+            ) as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=list(movement_rows[0].keys())
+                )
+                writer.writeheader()
+                writer.writerows(movement_rows)
+
 
     def stop(self) -> dict[str, Any]:
         self._stop.set()
