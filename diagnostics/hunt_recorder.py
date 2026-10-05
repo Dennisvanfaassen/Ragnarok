@@ -194,8 +194,10 @@ class HuntingDiagnosticRecorder:
         try:
             from core.hunting_ai import hunting_ai
             hunt = hunting_ai.snapshot()
+            navigation = hunting_ai.diagnostic_navigation()
         except Exception:
             hunt = {}
+            navigation = {}
 
         cursor = self._cursor()
         target = hunt.get("target") or {}
@@ -219,7 +221,7 @@ class HuntingDiagnosticRecorder:
                 "message": hunt.get("message"),
                 "target": target,
                 "saved_route": route,
-                "navigation": hunt.get("navigation_debug") or {},
+                "navigation": navigation,
             },
             "cursor": cursor,
             "last_client_action": world.get("last_client_action"),
