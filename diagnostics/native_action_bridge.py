@@ -308,6 +308,30 @@ rpc.exports = {
         };
     },
 
+    pickupFloorItem(itemId) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const id = Number(itemId) >>> 0;
+        // 0362 pTakeItem: opcode + floor item runtime ID (u32).
+        const bytes = [
+            0x62, 0x03,
+            id & 0xff,
+            (id >>> 8) & 0xff,
+            (id >>> 16) & 0xff,
+            (id >>> 24) & 0xff
+        ];
+        const packet = Memory.alloc(6);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 6, 0);
+        return {
+            ok: result === 6,
+            bytes_sent: result,
+            floor_item_id: id,
+            packet_hex: bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '),
+            socket: mapSocket.toString()
+        };
+    },
+
     move(x, y) {
         if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
         if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
@@ -678,6 +702,34 @@ class NativeActionBridge:
                 "last_observed": None,
                 "error": str(exc),
             }
+
+    def pickup_floor_item(self, floor_item_id: int) -> dict[str, Any]:
+        floor_item_id = int(floor_item_id)
+        if floor_item_id < 0:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "floor_item_id_out_of_range",
+            }
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "executed": False, "reason": "bridge_not_running"}
+        if not self._agent_status().get("socket_learned"):
+            return {"ok": False, "executed": False, "reason": "map_socket_not_learned"}
+        try:
+            result = dict(script.exports_sync.pickup_floor_item(floor_item_id))
+        except Exception as exc:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+            }
+        result["executed"] = bool(result.get("ok"))
+        result["command"] = "pickup_floor_item"
+        self._record({"event": "direct_floor_item_pickup", "result": result})
+        return result
 
     def move(self, x: int, y: int) -> dict[str, Any]:
         x = int(x)
