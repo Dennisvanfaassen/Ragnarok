@@ -436,6 +436,15 @@ class HuntingAI:
             if actor.get("kind") == "monster"
             and int(actor.get("id") or -1) in ids
             and self._monster_behavior(actor.get("name")) in {"attack", "aggressor_only"}
+            and not (
+                actor.get("x") is not None
+                and actor.get("y") is not None
+                and self._in_avoid_zone(
+                    self._world(snapshot).get("map"),
+                    int(actor.get("x")),
+                    int(actor.get("y")),
+                )
+            )
         ]
         if not actors:
             return False
@@ -459,6 +468,17 @@ class HuntingAI:
             behavior = self._monster_behavior(actor.get("name"))
             if behavior != "attack":
                 continue
+            actor_x, actor_y = actor.get("x"), actor.get("y")
+            if (
+                actor_x is not None
+                and actor_y is not None
+                and self._in_avoid_zone(
+                    self._world(snapshot).get("map"),
+                    int(actor_x),
+                    int(actor_y),
+                )
+            ):
+                continue
 
             tile_distance = actor.get("tile_distance")
             if rule is not None and tile_distance is not None:
@@ -479,6 +499,35 @@ class HuntingAI:
     @staticmethod
     def _tile_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
         return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+
+    def _in_avoid_zone(self, map_name: str | None, x: int, y: int) -> bool:
+        current = str(map_name or "").strip().lower()
+        for zone in app_state.get_profile().hunt.avoid_zones:
+            zone_map = str(zone.map or current).strip().lower()
+            if zone_map and zone_map != current:
+                continue
+            min_x, max_x = sorted((int(zone.x1), int(zone.x2)))
+            min_y, max_y = sorted((int(zone.y1), int(zone.y2)))
+            if min_x <= int(x) <= max_x and min_y <= int(y) <= max_y:
+                return True
+        return False
+
+    def _path_crosses_avoid_zone(
+        self,
+        map_name: str | None,
+        path: list[dict[str, Any]] | list[tuple[int, int]],
+    ) -> bool:
+        for point in path:
+            if isinstance(point, dict):
+                x, y = point.get("x"), point.get("y")
+            else:
+                x, y = point
+            if x is None or y is None:
+                continue
+            if self._in_avoid_zone(map_name, int(x), int(y)):
+                return True
+        return False
+
 
     def _combat_confirmed(
         self,
@@ -740,7 +789,7 @@ class HuntingAI:
                 max_expansions=150000,
                 clearance_weight=0.85,
             )
-            if path and len(path) >= 2:
+            if path and len(path) >= 2 and not self._path_crosses_avoid_zone(map_name, path):
                 self._set_wander_route(grid, path, goal)
                 self._log(
                     "saved_hunt_route",
@@ -786,6 +835,13 @@ class HuntingAI:
             player,
         )
         if not path:
+            return False
+        if self._path_crosses_avoid_zone(map_name, path):
+            self._log(
+                "wander_route_blocked_by_avoid_zone",
+                map=map_name,
+                goal={"x": path[-1][0], "y": path[-1][1]},
+            )
             return False
 
         self._set_wander_route(grid, path, path[-1])
@@ -1182,6 +1238,18 @@ class HuntingAI:
         }
         pathing = build_pathing_state(snapshot, targeting, nav_repository)
         path_preview = pathing.get("path_preview") or []
+        if path_preview and self._path_crosses_avoid_zone(
+            self._world(snapshot).get("map"),
+            path_preview,
+        ):
+            self._log(
+                "route_blocked_by_avoid_zone",
+                target_id=self.target_id,
+                target_name=self.target_name,
+            )
+            self._clear_target()
+            self._set_state("SEARCHING", "Target route crosses an avoided area")
+            return
 
         if not pathing.get("path_found") or len(path_preview) < 2:
             if (
