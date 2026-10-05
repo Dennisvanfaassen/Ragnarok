@@ -77,6 +77,8 @@ class HuntingAI:
         self.wander_line_index = 0
         self.wander_reconnect_target: tuple[int, int] | None = None
         self.wander_reconnect_route_index: int | None = None
+        self._native_wander_destination: tuple[int, int] | None = None
+        self._native_wander_sent_at = 0.0
         self.saved_route_map: str | None = None
         self.saved_route_waypoint_index = 0
         self.saved_route_direction = 1
@@ -719,6 +721,8 @@ class HuntingAI:
         self.wander_line_index = 1 if len(self.wander_line_points) > 1 else 0
         self.wander_reconnect_target = None
         self.wander_reconnect_route_index = None
+        self._native_wander_destination = None
+        self._native_wander_sent_at = 0.0
 
     def _nearest_wander_index(self, player: tuple[int, int]) -> int:
         if not self.wander_path:
@@ -1684,38 +1688,62 @@ class HuntingAI:
                 self._stop.wait(0.12)
                 return
 
-        if reconnecting:
-            dx = destination[0] - player[0]
-            dy = destination[1] - player[1]
-        else:
-            dx, dy = self._anticipated_wander_direction(
-                grid,
-                player,
-                destination,
-            )
-
         narrow_corridor = self._wander_corridor_is_narrow(
             grid,
             player,
             destination,
         )
-        steering_radius = 115 if narrow_corridor else 185
-        turn_threshold = 10 if narrow_corridor else 22
 
-        result = game_actions.update_hold_direction(
-            dx,
-            dy,
-            radius_px=steering_radius,
-            min_pixel_change=turn_threshold,
-        )
+        if game_actions.native_move_ready():
+            now = time.time()
+            resend_due = (
+                self._native_wander_destination != destination
+                or now - self._native_wander_sent_at >= 1.0
+            )
+            if resend_due:
+                result = game_actions.move_to(destination)
+                if not result.get("ok"):
+                    self._native_wander_destination = None
+                    self._native_wander_sent_at = 0.0
+                    self._stop.wait(0.08)
+                    return
+                self._native_wander_destination = destination
+                self._native_wander_sent_at = now
+                self._log(
+                    "native_wander_move",
+                    destination={"x": destination[0], "y": destination[1]},
+                    reconnecting=reconnecting,
+                    narrow_corridor=narrow_corridor,
+                    result=result,
+                )
+        else:
+            if reconnecting:
+                dx = destination[0] - player[0]
+                dy = destination[1] - player[1]
+            else:
+                dx, dy = self._anticipated_wander_direction(
+                    grid,
+                    player,
+                    destination,
+                )
 
-        if not result.get("ok"):
-            # Never substitute an arbitrary screen/cell click during wandering.
-            game_actions.release_hold_move()
-            self.wander_path = []
-            self.wander_goal = None
-            self._stop.wait(0.08)
-            return
+            steering_radius = 115 if narrow_corridor else 185
+            turn_threshold = 10 if narrow_corridor else 22
+
+            result = game_actions.update_hold_direction(
+                dx,
+                dy,
+                radius_px=steering_radius,
+                min_pixel_change=turn_threshold,
+            )
+
+            if not result.get("ok"):
+                # Never substitute an arbitrary screen/cell click during wandering.
+                game_actions.release_hold_move()
+                self.wander_path = []
+                self.wander_goal = None
+                self._stop.wait(0.08)
+                return
 
         route = hunt_route_store.get(str(map_name))
         if route.get("exists"):
@@ -1904,7 +1932,11 @@ class HuntingAI:
                     "attack_precision": game_actions.precision_snapshot(),
                     "wander_corridor_mode": "astar_clear_line_only",
                     "wander_progress_mode": "forward_only_smoothed_segments",
-                    "steering_mode": "heading_dead_zone_velocity_curve_corner_preview",
+                    "steering_mode": (
+                        "native_destination_segments"
+                        if game_actions.native_move_ready()
+                        else "heading_dead_zone_velocity_curve_corner_preview"
+                    ),
                     "saved_hunt_route": {
                         "map": self.saved_route_map,
                         "waypoint_index": self.saved_route_waypoint_index,
