@@ -288,6 +288,9 @@ class FullAutomationController:
             ("talk", lambda: native_action_bridge.talk_npc(actor_id, 1)),
             ("continue", lambda: native_action_bridge.continue_npc(actor_id)),
             ("storage_option", lambda: native_action_bridge.choose_npc_option(actor_id, 2)),
+            # The observed SoulBound Kafra flow closes the dialogue immediately
+            # after selecting Storage; the storage window remains active.
+            ("close_dialog", lambda: native_action_bridge.close_npc(actor_id)),
         ]
         for name, fn in steps:
             result = fn()
