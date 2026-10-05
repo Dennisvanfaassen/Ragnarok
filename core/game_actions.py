@@ -4,6 +4,7 @@ from typing import Any
 
 from core.mouse_adapter import mouse_game_adapter
 from diagnostics.authenticated_client import authenticated_client_monitor
+from diagnostics.native_action_bridge import native_action_bridge
 
 
 class GameActionAdapter:
@@ -17,6 +18,7 @@ class GameActionAdapter:
     def __init__(self):
         self._backend_name = "mouse"
         self._backend = mouse_game_adapter
+        self._last_attack_backend = "mouse"
 
     @property
     def backend_name(self) -> str:
@@ -26,10 +28,22 @@ class GameActionAdapter:
     def sprite_y_offset(self) -> int:
         return int(self._backend.sprite_y_offset)
 
+    def native_attack_ready(self) -> bool:
+        try:
+            state = native_action_bridge.snapshot()
+            return bool(
+                state.get("attached")
+                and state.get("status") == "ready"
+                and (state.get("agent") or {}).get("socket_learned")
+            )
+        except Exception:
+            return False
+
     def snapshot(self) -> dict[str, Any]:
         client = authenticated_client_monitor.snapshot()
+        native_ready = self.native_attack_ready()
         return {
-            "backend": self._backend_name,
+            "backend": "hybrid_native_attack" if native_ready else self._backend_name,
             "classic_pid": client.get("classic_pid"),
             "authenticated_client_seen": bool(client.get("classic_pid")),
             "capabilities": {
@@ -38,14 +52,11 @@ class GameActionAdapter:
                 "loot": True,
                 "held_direction": True,
                 "native_move": False,
-                "native_attack": False,
+                "native_attack": True,
+                "native_attack_ready": native_ready,
                 "native_loot": False,
             },
-            "native_status": (
-                "not_implemented"
-                if self._backend_name == "mouse"
-                else "available"
-            ),
+            "native_status": native_action_bridge.snapshot().get("status"),
             "calibration": self._backend.calibration_snapshot(),
         }
 
@@ -86,10 +97,11 @@ class GameActionAdapter:
                 "render_y": world.get("render_y"),
             },
             "monsters": actors,
-            "native_action_ready": False,
+            "native_action_ready": self.native_attack_ready(),
             "message": (
-                "GameActionAdapter is active. Native client actions are not "
-                "enabled yet; this probe is read-only."
+                "Native attack is ready; movement and loot still use the mouse."
+                if self.native_attack_ready()
+                else "Native attack bridge is not ready; mouse backend remains active."
             ),
         }
 
@@ -151,11 +163,30 @@ class GameActionAdapter:
     def loot(self, *args, **kwargs):
         return self._backend.loot(*args, **kwargs)
 
-    def attack(self, *args, **kwargs):
-        return self._backend.attack(*args, **kwargs)
+    def attack(self, *args, actor_id: int | None = None, **kwargs):
+        if actor_id is not None and self.native_attack_ready():
+            result = native_action_bridge.attack(int(actor_id))
+            if result.get("ok"):
+                self._last_attack_backend = "native"
+                result["backend"] = "native"
+                result["input_mode"] = "actor_id"
+                return result
+
+        self._last_attack_backend = "mouse"
+        result = self._backend.attack(*args, **kwargs)
+        if isinstance(result, dict):
+            result["backend"] = "mouse"
+            result["input_mode"] = "screen_projection"
+        return result
+
+    def last_attack_backend(self) -> str:
+        return self._last_attack_backend
 
     def note_attack_registered(self, *args, **kwargs):
-        return self._backend.note_attack_registered(*args, **kwargs)
+        # Sprite-offset learning only applies to physical mouse attacks.
+        if self._last_attack_backend == "mouse":
+            return self._backend.note_attack_registered(*args, **kwargs)
+        return None
 
     def reset_attack_learning(self):
         return self._backend.reset_attack_learning()
