@@ -481,21 +481,6 @@ class FullAutomationController:
     def _configured_buy_targets(self) -> list[dict[str, Any]]:
         profile = app_state.get_profile()
         rules = list(profile.town.buy_rules or [])
-        if not rules:
-            # Backward-compatible defaults from the original town cycle.
-            rules = [
-                type("LegacyBuyRule", (), {
-                    "item_name": "Awakening Potion",
-                    "name_id": AWAKENING_POTION_ID,
-                    "target_quantity": int(profile.town.supplies.awakening_potions),
-                })(),
-                type("LegacyBuyRule", (), {
-                    "item_name": "Butterfly Wing",
-                    "name_id": BUTTERFLY_WING_ID,
-                    "target_quantity": int(profile.town.supplies.butterfly_wings),
-                })(),
-            ]
-
         inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
         desired: list[dict[str, Any]] = []
         for rule in rules:
