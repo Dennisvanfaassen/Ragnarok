@@ -40,6 +40,7 @@ class MouseGameAdapter:
 
     def __init__(self):
         self.sprite_y_offset = -24
+        self.learned_attack_y_offset: int | None = None
         self._calibration_path = (
             Path(__file__).resolve().parents[1] / "screen_calibration.json"
         )
@@ -182,6 +183,7 @@ class MouseGameAdapter:
             "rmse_px": calibration.get("rmse_px"),
             "sample_count": len(calibration.get("samples") or []),
             "coefficients": calibration.get("coefficients"),
+            "attack_precision": self.precision_snapshot(),
         }
 
     def clear_calibration(self) -> dict[str, Any]:
@@ -657,9 +659,14 @@ class MouseGameAdapter:
 
         # Keep aiming deterministic. Retry only changes the vertical sprite
         # offset slightly; it does not scan/probe the screen with the cursor.
+        base_offset = (
+            self.learned_attack_y_offset
+            if self.learned_attack_y_offset is not None
+            else self.sprite_y_offset
+        )
         offsets = [
-            self.sprite_y_offset,
-            self.sprite_y_offset - 10,
+            base_offset,
+            base_offset - 10,
         ]
         offset = offsets[min(retry_index, len(offsets) - 1)]
 
@@ -682,6 +689,26 @@ class MouseGameAdapter:
             "map_to": {"x": target[0], "y": target[1]},
             "sprite_y_offset": offset,
             "precision_method": "stable_calibration",
+        }
+
+    def note_attack_registered(self, retry_index: int):
+        """Learn the vertical sprite offset from a click Classic.exe accepted."""
+        base = (
+            self.learned_attack_y_offset
+            if self.learned_attack_y_offset is not None
+            else self.sprite_y_offset
+        )
+        accepted = base if retry_index <= 0 else base - 10
+        self.learned_attack_y_offset = max(-80, min(30, int(accepted)))
+
+    def reset_attack_learning(self):
+        self.learned_attack_y_offset = None
+
+    def precision_snapshot(self) -> dict[str, Any]:
+        return {
+            "configured_sprite_y_offset": self.sprite_y_offset,
+            "learned_attack_y_offset": self.learned_attack_y_offset,
+            "projection_mode": "stable_calibration",
         }
 
 
