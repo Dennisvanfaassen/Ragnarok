@@ -63,7 +63,9 @@ class HuntingAI:
         self.loot_retry: dict[int, int] = {}
         self.wander_min_distance = 16
         self.wander_max_distance = 32
-        self.wander_lookahead = 7
+        self.wander_lookahead = 10
+        self.wander_cursor_radius = 175
+        self.wander_turn_pixel_threshold = 22
         self.wander_path: list[tuple[int, int]] = []
         self.wander_goal: tuple[int, int] | None = None
 
@@ -809,26 +811,38 @@ class HuntingAI:
             self.wander_goal = None
             return
 
+        # Look well ahead on the route and steer by DIRECTION, not by
+        # individual cell coordinates. This mirrors normal RO mouse walking:
+        # hold the button at a stable distance from the character and only
+        # rotate the cursor when the route bends.
         lookahead = min(
             len(self.wander_path) - 1,
             index + self.wander_lookahead,
         )
         destination = self.wander_path[lookahead]
+        dx = destination[0] - player[0]
+        dy = destination[1] - player[1]
 
-        result = mouse_game_adapter.update_hold_move(
-            player,
-            destination,
-            min_pixel_change=14,
+        result = mouse_game_adapter.update_hold_direction(
+            dx,
+            dy,
+            radius_px=self.wander_cursor_radius,
+            min_pixel_change=self.wander_turn_pixel_threshold,
         )
 
         if not result.get("ok"):
-            for short in range(4, 0, -1):
+            # Try a shorter directional lookahead, but never fall back to
+            # rapid per-cell clicking while wandering.
+            for short in (7, 5, 3):
                 idx = min(len(self.wander_path) - 1, index + short)
                 destination = self.wander_path[idx]
-                result = mouse_game_adapter.update_hold_move(
-                    player,
-                    destination,
-                    min_pixel_change=8,
+                dx = destination[0] - player[0]
+                dy = destination[1] - player[1]
+                result = mouse_game_adapter.update_hold_direction(
+                    dx,
+                    dy,
+                    radius_px=self.wander_cursor_radius,
+                    min_pixel_change=14,
                 )
                 if result.get("ok"):
                     break
@@ -837,11 +851,13 @@ class HuntingAI:
             mouse_game_adapter.release_hold_move()
             self.wander_path = []
             self.wander_goal = None
-            self._stop.wait(0.06)
+            self._stop.wait(0.08)
             return
 
-        self.message = f"Wandering toward {self.wander_goal[0]},{self.wander_goal[1]}"
-        self._stop.wait(0.03)
+        self.message = (
+            f"Wandering smoothly toward {self.wander_goal[0]},{self.wander_goal[1]}"
+        )
+        self._stop.wait(0.08)
 
     def _step_failed(self):
         snapshot = authenticated_client_monitor.snapshot()
@@ -963,6 +979,8 @@ class HuntingAI:
                     "attack_walk_timeout": self.attack_walk_timeout,
                     "loot_radius": self.loot_radius,
                     "wander_lookahead": self.wander_lookahead,
+                    "wander_cursor_radius": self.wander_cursor_radius,
+                    "wander_turn_pixel_threshold": self.wander_turn_pixel_threshold,
                 },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
                 "actions": self.actions[-30:],
