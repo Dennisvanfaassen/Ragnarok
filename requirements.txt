@@ -9,3 +9,5 @@ psutil>=6.1
 scapy>=2.6.1
 mss>=10.0
 numpy>=2.1
+
+frida>=16.5
