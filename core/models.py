@@ -92,6 +92,8 @@ class TownSettings(BaseModel):
     storage_map: str = ""
     storage_npc: str = ""
     return_weight_percent: int = 70
+    return_when_out_of_meat: bool = True
+    return_when_out_of_fly_wings: bool = True
     butterfly_wing_item: str = "Butterfly Wing"
     auto_nearest_services: bool = True
     return_method: str = "butterfly_wing"
