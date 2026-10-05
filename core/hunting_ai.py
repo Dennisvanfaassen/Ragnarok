@@ -968,6 +968,7 @@ class HuntingAI:
             map_name,
             grid,
             player,
+            frontier_bias=app_state.get_profile().hunt.exploration_frontier_bias,
         )
         if not path:
             return False
@@ -2391,14 +2392,20 @@ class HuntingAI:
         player = self._position(snapshot)
 
         if actor is not None and player is not None and self.target_pos is not None:
-            if game_actions.can_project(
-                player,
-                self.target_pos,
-                sprite=True,
+            if (
+                game_actions.native_attack_ready()
+                or (
+                    not app_state.get_profile().hunt.native_only_actions
+                    and game_actions.can_project(
+                        player,
+                        self.target_pos,
+                        sprite=True,
+                    )
+                )
             ):
                 self._set_state(
                     "ATTACK_READY",
-                    f"Recovering by attacking visible {self.target_name}",
+                    f"Recovering by attacking {self.target_name}",
                 )
                 return
 
@@ -2630,8 +2637,9 @@ class HuntingAI:
                 "calibration": game_actions.calibration_snapshot(),
                 "actions": self.actions[-30:],
                 "architecture": (
-                    "OpenKore-style state machine in map coordinates; "
-                    "mouse adapter only executes MOVE and ATTACK actions."
+                    "OpenKore-style native hunting in map coordinates; "
+                    "movement, actor attacks and floor-item pickup prefer authenticated "
+                    "in-client actions with physical click fallback disabled by default."
                 ),
             }
 
