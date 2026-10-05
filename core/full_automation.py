@@ -6,6 +6,7 @@ from typing import Any
 
 from core.active_control import active_hunt_controller
 from core.game_actions import game_actions
+from core.openkore_data import item_id_for_name
 from core.pathing import astar, nav_repository
 from core.state import app_state
 from core.town_services import (
@@ -33,6 +34,8 @@ class FullAutomationController:
         self.saved_town_map: str | None = None
         self.current_service: dict[str, Any] | None = None
         self._butterfly_used_this_cycle = False
+        self._deposited_indices_this_cycle: set[int] = set()
+        self._sold_indices_this_cycle: set[int] = set()
         self.actions: list[dict[str, Any]] = []
 
     def _log(self, action: str, **details):
@@ -309,124 +312,233 @@ class FullAutomationController:
         self.last_error = "Storage list did not open after Kafra dialogue."
         return False
 
+    @staticmethod
+    def _town_item_rule(item: dict[str, Any]):
+        profile = app_state.get_profile()
+        name_id = int(item.get("name_id") or -1)
+        name = str(item.get("name") or "").strip().casefold()
+        for rule in profile.town.item_rules:
+            if rule.name_id is not None and int(rule.name_id) == name_id:
+                return rule
+            if str(rule.item_name or "").strip().casefold() == name and name:
+                return rule
+        return None
+
+    def _town_item_action(self, item: dict[str, Any]) -> str:
+        rule = self._town_item_rule(item)
+        if rule is not None:
+            action = str(rule.action or "store").strip().lower()
+            return action if action in {"keep", "store", "sell"} else "store"
+
+        # Preserve core consumables unless the user explicitly creates a rule
+        # for them in the Selling / Storage tab.
+        keep_ids = {
+            AWAKENING_POTION_ID,
+            517,                  # Meat
+            601,                  # Fly Wing
+            BUTTERFLY_WING_ID,
+        }
+        name_id = int(item.get("name_id") or -1)
+        healing_name = str(app_state.get_profile().healing.item or "").strip().casefold()
+        item_name = str(item.get("name") or "").strip().casefold()
+        if name_id in keep_ids or (healing_name and item_name == healing_name):
+            return "keep"
+
+        default_action = str(
+            app_state.get_profile().town.default_item_action or "store"
+        ).strip().lower()
+        return default_action if default_action in {"keep", "store"} else "store"
+
     def _deposit_all_unequipped(self) -> bool:
         state = authenticated_client_monitor.item_state_snapshot()
         items = list(state.get("inventory") or [])
-
-        # Keep everyday supplies in inventory. Worn equipment is also left
-        # untouched. Unequipped equipment and all other loot are stored.
-        keep_ids = {
-            AWAKENING_POTION_ID,  # 656
-            517,                  # Meat
-            601,                  # Fly Wing
-            BUTTERFLY_WING_ID,    # 602
-        }
-
-        healing_name = str(app_state.get_profile().healing.item or "").strip().lower()
         deposited = 0
-        skipped_equipped = 0
-        skipped_supplies = 0
+        kept = 0
+        reserved_for_sale = 0
+        self._deposited_indices_this_cycle.clear()
 
         for item in items:
             equipped = int(item.get("equipped") or 0)
+            index = int(item.get("index") or -1)
+            amount = int(item.get("amount") or 0)
             if equipped != 0:
-                skipped_equipped += 1
+                kept += 1
                 self._log(
                     "storage_keep_equipped",
-                    index=item.get("index"),
+                    index=index,
                     name=item.get("name"),
                     equipped=equipped,
                 )
                 continue
-
-            name_id = int(item.get("name_id") or -1)
-            item_name = str(item.get("name") or "")
-            if name_id in keep_ids or (
-                healing_name and item_name.strip().lower() == healing_name
-            ):
-                skipped_supplies += 1
-                self._log(
-                    "storage_keep_supply",
-                    index=item.get("index"),
-                    name=item_name,
-                    name_id=name_id,
-                    amount=item.get("amount"),
-                )
+            if index < 0 or amount <= 0:
                 continue
 
-            amount = int(item.get("amount") or 0)
-            index = int(item.get("index") or -1)
-            if index < 0 or amount <= 0:
+            action = self._town_item_action(item)
+            if action == "keep":
+                kept += 1
+                self._log(
+                    "town_keep_item",
+                    index=index,
+                    name=item.get("name"),
+                    name_id=item.get("name_id"),
+                    amount=amount,
+                )
+                continue
+            if action == "sell":
+                reserved_for_sale += 1
+                self._log(
+                    "town_reserve_for_sale",
+                    index=index,
+                    name=item.get("name"),
+                    name_id=item.get("name_id"),
+                    amount=amount,
+                )
                 continue
 
             result = native_action_bridge.storage_add(index, amount)
             self._log(
                 "storage_deposit",
                 index=index,
-                name=item_name,
-                name_id=name_id,
+                name=item.get("name"),
+                name_id=item.get("name_id"),
                 amount=amount,
                 stackable=item.get("stackable"),
                 result=result,
             )
             if not result.get("ok"):
                 self.last_error = (
-                    f"Storage deposit failed for {item_name or index}: "
+                    f"Storage deposit failed for {item.get('name') or index}: "
                     f"{result.get('reason')}"
                 )
                 return False
+            self._deposited_indices_this_cycle.add(index)
             deposited += 1
             self._stop.wait(0.10)
 
         self._log(
             "storage_deposit_complete",
             deposited=deposited,
-            kept_equipped=skipped_equipped,
-            kept_supplies=skipped_supplies,
+            kept=kept,
+            reserved_for_sale=reserved_for_sale,
         )
         return True
 
-    def _restock(self, actor_id: int) -> bool:
-        profile = app_state.get_profile()
-        supplies = profile.town.supplies
+    def _sell_configured_items(self, actor_id: int) -> bool:
         inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
-        awakening_now = sum(
-            int(row.get("amount") or 0)
-            for row in inventory
-            if int(row.get("name_id") or -1) == AWAKENING_POTION_ID
-        )
-        wing_now = sum(
-            int(row.get("amount") or 0)
-            for row in inventory
-            if int(row.get("name_id") or -1) == BUTTERFLY_WING_ID
-        )
-        # The live incremental item-use packet is not decoded yet. We know one
-        # Butterfly Wing was consumed by this controller, so compensate for the
-        # stale pre-use inventory snapshot when calculating the restock deficit.
-        if self._butterfly_used_this_cycle:
-            wing_now = max(0, wing_now - 1)
+        rows: list[dict[str, int]] = []
+        details: list[dict[str, Any]] = []
+        self._sold_indices_this_cycle.clear()
 
-        desired = [
-            {
-                "item_id": AWAKENING_POTION_ID,
-                "amount": max(0, int(supplies.awakening_potions) - awakening_now),
-            },
-            {
-                "item_id": BUTTERFLY_WING_ID,
-                "amount": max(0, int(supplies.butterfly_wings) - wing_now),
-            },
-        ]
-        desired = [row for row in desired if row["amount"] > 0]
-        if not desired:
-            self._log(
-                "restock_not_needed",
-                awakening_now=awakening_now,
-                butterfly_now=wing_now,
-            )
+        for item in inventory:
+            index = int(item.get("index") or -1)
+            amount = int(item.get("amount") or 0)
+            equipped = int(item.get("equipped") or 0)
+            if (
+                index < 0
+                or amount <= 0
+                or equipped != 0
+                or index in self._deposited_indices_this_cycle
+            ):
+                continue
+            if self._town_item_action(item) != "sell":
+                continue
+            rows.append({"index": index, "amount": amount})
+            details.append({
+                "index": index,
+                "amount": amount,
+                "name": item.get("name"),
+                "name_id": item.get("name_id"),
+            })
+
+        if not rows:
+            self._log("sell_not_needed")
             return True
 
         result = native_action_bridge.talk_npc(actor_id, 1)
-        self._log("tool_dealer_talk", result=result)
+        self._log("tool_dealer_talk_for_sell", result=result)
+        if not result.get("ok"):
+            self.last_error = f"Tool Dealer talk for selling failed: {result.get('reason')}"
+            return False
+        self._stop.wait(0.25)
+
+        result = native_action_bridge.request_npc_sell(actor_id)
+        self._log("tool_dealer_sell_list", result=result)
+        if not result.get("ok"):
+            self.last_error = f"Could not request Tool Dealer sell list: {result.get('reason')}"
+            return False
+        self._stop.wait(0.35)
+
+        result = native_action_bridge.sell_bulk(rows)
+        self._log("tool_dealer_sell", items=details, result=result)
+        if not result.get("ok"):
+            self.last_error = f"Configured item sale failed: {result.get('reason')}"
+            return False
+
+        self._sold_indices_this_cycle.update(row["index"] for row in rows)
+        self._stop.wait(0.35)
+        return True
+
+    def _configured_buy_targets(self) -> list[dict[str, Any]]:
+        profile = app_state.get_profile()
+        rules = list(profile.town.buy_rules or [])
+        if not rules:
+            # Backward-compatible defaults from the original town cycle.
+            rules = [
+                type("LegacyBuyRule", (), {
+                    "item_name": "Awakening Potion",
+                    "name_id": AWAKENING_POTION_ID,
+                    "target_quantity": int(profile.town.supplies.awakening_potions),
+                })(),
+                type("LegacyBuyRule", (), {
+                    "item_name": "Butterfly Wing",
+                    "name_id": BUTTERFLY_WING_ID,
+                    "target_quantity": int(profile.town.supplies.butterfly_wings),
+                })(),
+            ]
+
+        inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+        desired: list[dict[str, Any]] = []
+        for rule in rules:
+            target = max(0, int(rule.target_quantity or 0))
+            if target <= 0:
+                continue
+            item_id = int(rule.name_id) if rule.name_id is not None else item_id_for_name(rule.item_name)
+            if item_id is None:
+                self._log(
+                    "buy_rule_unresolved",
+                    item_name=rule.item_name,
+                    target_quantity=target,
+                )
+                continue
+
+            current = sum(
+                int(row.get("amount") or 0)
+                for row in inventory
+                if int(row.get("name_id") or -1) == int(item_id)
+                and int(row.get("index") or -1) not in self._sold_indices_this_cycle
+                and int(row.get("index") or -1) not in self._deposited_indices_this_cycle
+            )
+            if int(item_id) == BUTTERFLY_WING_ID and self._butterfly_used_this_cycle:
+                current = max(0, current - 1)
+            amount = max(0, target - current)
+            if amount > 0:
+                desired.append({
+                    "item_id": int(item_id),
+                    "amount": amount,
+                    "item_name": str(rule.item_name or ""),
+                    "target_quantity": target,
+                    "current_quantity": current,
+                })
+        return desired
+
+    def _restock(self, actor_id: int) -> bool:
+        desired = self._configured_buy_targets()
+        if not desired:
+            self._log("restock_not_needed")
+            return True
+
+        result = native_action_bridge.talk_npc(actor_id, 1)
+        self._log("tool_dealer_talk_for_buy", result=result)
         if not result.get("ok"):
             self.last_error = f"Tool Dealer talk failed: {result.get('reason')}"
             return False
@@ -439,15 +551,21 @@ class FullAutomationController:
             return False
         self._stop.wait(0.35)
 
-        result = native_action_bridge.buy_bulk(desired)
+        packet_rows = [
+            {"item_id": row["item_id"], "amount": row["amount"]}
+            for row in desired
+        ]
+        result = native_action_bridge.buy_bulk(packet_rows)
         self._log("tool_dealer_buy", items=desired, result=result)
         if not result.get("ok"):
-            self.last_error = f"Supply purchase failed: {result.get('reason')}"
+            self.last_error = f"Configured purchase failed: {result.get('reason')}"
             return False
         return True
 
     def _town_cycle(self) -> bool:
         profile = app_state.get_profile()
+        self._deposited_indices_this_cycle.clear()
+        self._sold_indices_this_cycle.clear()
         self._set(
             "RETURNING",
             f"{profile.town.return_weight_percent}% weight reached; returning with Butterfly Wing.",
@@ -488,7 +606,11 @@ class FullAutomationController:
             return False
         _, dealer = found
 
-        self._set("RESTOCKING", "Buying configured Awakening Potions and Butterfly Wings.")
+        self._set("SELLING", "Selling items configured for sale.")
+        if not self._sell_configured_items(int(dealer["id"])):
+            return False
+
+        self._set("RESTOCKING", "Buying configured town supplies.")
         if not self._restock(int(dealer["id"])):
             return False
         self._butterfly_used_this_cycle = False
@@ -570,6 +692,8 @@ class FullAutomationController:
             self.saved_town_map = None
             self.current_service = None
             self._butterfly_used_this_cycle = False
+            self._deposited_indices_this_cycle.clear()
+            self._sold_indices_this_cycle.clear()
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
             return self.snapshot()
@@ -616,6 +740,9 @@ class FullAutomationController:
                     "hp_below_percent": profile.healing.hp_below_percent,
                 },
                 "supplies": profile.town.supplies.model_dump(),
+                "town_item_rules": [row.model_dump() for row in profile.town.item_rules],
+                "town_buy_rules": [row.model_dump() for row in profile.town.buy_rules],
+                "default_item_action": profile.town.default_item_action,
                 "services": town_service_registry.snapshot(),
                 "actions": self.actions[-30:],
             }
