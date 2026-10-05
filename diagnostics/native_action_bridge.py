@@ -364,6 +364,8 @@ class NativeActionBridge:
         self._status = "stopped"
         self._message = "Native action bridge is not running."
         self._events: list[dict[str, Any]] = []
+        self._trace_started_at_ms: int | None = None
+        self._trace_label: str | None = None
 
     def _record(self, event: dict[str, Any]) -> None:
         with self._lock:
@@ -604,6 +606,32 @@ class NativeActionBridge:
             "result": result,
         })
         return result
+
+    def start_interaction_trace(self, label: str = "interaction") -> dict[str, Any]:
+        self._trace_started_at_ms = int(time.time() * 1000)
+        self._trace_label = str(label or "interaction")
+        return {
+            "ok": True,
+            "label": self._trace_label,
+            "started_at_ms": self._trace_started_at_ms,
+            "message": "Interaction trace marker set.",
+        }
+
+    def interaction_trace(self) -> dict[str, Any]:
+        started = self._trace_started_at_ms
+        status = self._agent_status()
+        calls = list(status.get("recent_calls") or [])
+        if started is not None:
+            calls = [
+                call for call in calls
+                if int(call.get("timestamp_ms") or 0) >= started
+            ]
+        return {
+            "label": self._trace_label,
+            "started_at_ms": started,
+            "calls": calls,
+            "count": len(calls),
+        }
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
