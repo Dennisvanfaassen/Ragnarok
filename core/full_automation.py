@@ -423,9 +423,20 @@ class FullAutomationController:
 
     def _loop(self):
         try:
+            profile = app_state.get_profile()
+            hunt_map = str(profile.hunt.map or "").strip().lower()
+            if not hunt_map:
+                raise RuntimeError("Choose a hunt map in RO Control first.")
+
+            current_map = str(self._world(self._snapshot()).get("map") or "").strip().lower()
+            if current_map != hunt_map:
+                self._set("TRAVEL_TO_HUNT", f"Travelling to configured hunt map {hunt_map}.")
+                if not self._travel_to_map(hunt_map):
+                    raise RuntimeError(self.last_error or f"Could not reach {hunt_map}.")
+
             if not active_hunt_controller.snapshot().get("running"):
                 active_hunt_controller.start({})
-            self._set("HUNTING", "Full automation running.")
+            self._set("HUNTING", f"Hunting on {hunt_map}.")
 
             while not self._stop.is_set():
                 snapshot = self._snapshot()
