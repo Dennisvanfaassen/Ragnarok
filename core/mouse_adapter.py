@@ -47,6 +47,9 @@ class MouseGameAdapter:
         self._calibration_status = "not_calibrated"
         self._calibration_message = "Run screen calibration."
         self._calibration_thread: threading.Thread | None = None
+        self._hold_active = False
+        self._hold_hwnd: int | None = None
+        self._hold_point: tuple[int, int] | None = None
         self._load_calibration()
 
     def configure(self, *, sprite_y_offset: int | None = None):
@@ -435,6 +438,95 @@ class MouseGameAdapter:
             "map_to": {"x": destination[0], "y": destination[1]},
         }
 
+    def begin_hold_move(
+        self,
+        player: tuple[int, int],
+        destination: tuple[int, int],
+    ) -> dict[str, Any]:
+        hwnd = self._find_window()
+        if not hwnd:
+            return {"ok": False, "reason": "window_not_found"}
+
+        point = self._project(hwnd, player, destination)
+        if point is None:
+            return {"ok": False, "reason": "destination_not_clickable"}
+
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetCursorPos(int(point[0]), int(point[1]))
+        time.sleep(0.015)
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+
+        self._hold_active = True
+        self._hold_hwnd = hwnd
+        self._hold_point = point
+        return {
+            "ok": True,
+            "screen": {"x": point[0], "y": point[1]},
+            "map_from": {"x": player[0], "y": player[1]},
+            "map_to": {"x": destination[0], "y": destination[1]},
+        }
+
+    def update_hold_move(
+        self,
+        player: tuple[int, int],
+        destination: tuple[int, int],
+        *,
+        min_pixel_change: int = 10,
+    ) -> dict[str, Any]:
+        if not self._hold_active or not self._hold_hwnd:
+            return self.begin_hold_move(player, destination)
+
+        hwnd = self._hold_hwnd
+        point = self._project(hwnd, player, destination)
+        if point is None:
+            return {"ok": False, "reason": "destination_not_clickable"}
+
+        last = self._hold_point
+        if (
+            last is None
+            or abs(point[0] - last[0]) >= min_pixel_change
+            or abs(point[1] - last[1]) >= min_pixel_change
+        ):
+            user32.SetCursorPos(int(point[0]), int(point[1]))
+            self._hold_point = point
+
+        return {
+            "ok": True,
+            "screen": {"x": point[0], "y": point[1]},
+            "map_from": {"x": player[0], "y": player[1]},
+            "map_to": {"x": destination[0], "y": destination[1]},
+        }
+
+    def release_hold_move(self):
+        if self._hold_active:
+            user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        self._hold_active = False
+        self._hold_hwnd = None
+        self._hold_point = None
+
+    def loot(
+        self,
+        player: tuple[int, int],
+        item: tuple[int, int],
+    ) -> dict[str, Any]:
+        hwnd = self._find_window()
+        if not hwnd:
+            return {"ok": False, "reason": "window_not_found"}
+
+        point = self._project(hwnd, player, item, sprite=False)
+        if point is None:
+            return {"ok": False, "reason": "item_not_clickable"}
+
+        self.release_hold_move()
+        self._click_screen(hwnd, point[0], point[1])
+        return {
+            "ok": True,
+            "screen": {"x": point[0], "y": point[1]},
+            "map_from": {"x": player[0], "y": player[1]},
+            "map_to": {"x": item[0], "y": item[1]},
+        }
+
     def attack(
         self,
         player: tuple[int, int],
@@ -464,6 +556,7 @@ class MouseGameAdapter:
         if point is None:
             return {"ok": False, "reason": "target_not_clickable"}
 
+        self.release_hold_move()
         self._click_screen(hwnd, point[0], point[1])
         return {
             "ok": True,
