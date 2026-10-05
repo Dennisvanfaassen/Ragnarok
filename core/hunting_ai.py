@@ -713,13 +713,21 @@ class HuntingAI:
         except Exception:
             return False
 
-        # A user-defined hunting route has absolute priority over autonomous
-        # exploration. Each waypoint is a destination; A* supplies the safe
-        # cell path and the existing held-mouse executor walks it smoothly.
-        saved_target, saved_route = self._saved_route_target(
-            map_name,
-            player,
-        )
+        navigation_mode = str(
+            app_state.get_profile().hunt.navigation_mode or "saved_or_explore"
+        ).strip().lower()
+
+        # A user-defined hunting route normally has priority over autonomous
+        # exploration. The Hunting tab can force saved-route-only or
+        # exploration-only behavior.
+        if navigation_mode == "explore_only":
+            saved_target, saved_route = None, {"waypoints": []}
+        else:
+            saved_target, saved_route = self._saved_route_target(
+                map_name,
+                player,
+            )
+
         if saved_target is not None:
             goal = (
                 int(saved_target["x"]),
@@ -762,6 +770,14 @@ class HuntingAI:
                     self._set_wander_route(grid, path, goal)
                     return True
 
+            return False
+
+        if navigation_mode == "saved_only":
+            self._log(
+                "saved_route_required",
+                map=map_name,
+                message="No usable saved route is available.",
+            )
             return False
 
         path = exploration_planner.choose_route(
