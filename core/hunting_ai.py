@@ -1302,7 +1302,11 @@ class HuntingAI:
             target_name=old_name,
         )
         if old_pos is not None:
-            self.recent_kills.append({"time": time.time(), "pos": old_pos})
+            self.recent_kills.append({
+                "time": time.time(),
+                "pos": old_pos,
+                "monster": old_name,
+            })
             self.recent_kills = self.recent_kills[-10:]
         self._clear_target()
 
