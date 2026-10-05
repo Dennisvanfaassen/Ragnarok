@@ -352,9 +352,13 @@ class WorldRoutePlanner:
 
     def snapshot(self) -> dict[str, Any]:
         self.ensure_loaded()
+        all_maps = set(self._graph)
+        for edges in self._graph.values():
+            all_maps.update(edge.dest_map for edge in edges)
         return {
             "portal_edges": sum(len(v) for v in self._graph.values()),
             "maps_with_portals": len(self._graph),
+            "maps": sorted(all_maps),
             "towns": sorted(self._towns),
             "learned_edges": len(self._learned),
         }
