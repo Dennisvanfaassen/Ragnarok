@@ -2353,15 +2353,53 @@ class HuntingAI:
         if now - self._last_heal_hotkey_at < cooldown:
             return False
 
-        result = game_actions.press_hotkey(settings.hotkey or "1")
+        result: dict[str, Any]
+        native_only = bool(profile.hunt.native_only_actions)
+        wanted_name = str(settings.item or "Meat").strip().casefold()
+
+        if native_only:
+            items = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+            item = next(
+                (
+                    row for row in items
+                    if str(row.get("name") or "").strip().casefold() == wanted_name
+                    or (wanted_name == "meat" and int(row.get("name_id") or -1) == 517)
+                ),
+                None,
+            )
+            target_id = world.get("self_account_id") or world.get("self_char_id")
+            if item is None:
+                result = {
+                    "ok": False,
+                    "backend": "native",
+                    "reason": "healing_item_not_found",
+                    "item": settings.item or "Meat",
+                }
+            elif target_id is None:
+                result = {
+                    "ok": False,
+                    "backend": "native",
+                    "reason": "self_target_id_unknown",
+                }
+            else:
+                result = native_action_bridge.item_use(
+                    int(item["index"]),
+                    int(target_id),
+                )
+                result["backend"] = "native"
+                result["input_mode"] = "inventory_index"
+        else:
+            result = game_actions.press_hotkey(settings.hotkey or "1")
+
         self._last_heal_hotkey_at = now
         self._last_heal_result = dict(result)
         self._log(
-            "healing_hotkey",
+            "healing_action",
             hp=int(hp),
             hp_max=int(hp_max),
             hp_percent=round(hp_percent, 1),
             threshold=threshold,
+            item=settings.item or "Meat",
             hotkey=settings.hotkey or "1",
             result=result,
         )
@@ -2494,6 +2532,9 @@ class HuntingAI:
         if payload:
             self.configure(payload)
 
+        profile = app_state.get_profile()
+        self.loot_radius = max(2, min(20, int(profile.hunt.loot_radius)))
+
         with self._lock:
             if self.running:
                 return self.snapshot()
@@ -2501,9 +2542,19 @@ class HuntingAI:
                 raise RuntimeError(
                     "Classic.exe is not detected. Launch SoulBound and enter the game first."
                 )
-            if not game_actions.calibration_valid():
+
+            if profile.hunt.native_only_actions:
+                native = native_action_bridge.snapshot()
+                if not native.get("attached"):
+                    native_action_bridge.start()
+                if not native_action_bridge.snapshot().get("agent", {}).get("socket_learned"):
+                    raise RuntimeError(
+                        "Native hunting is enabled but the authenticated map socket "
+                        "has not been learned yet."
+                    )
+            elif not game_actions.calibration_valid():
                 raise RuntimeError(
-                    "A valid screen calibration is required for the current Classic.exe window size."
+                    "A valid screen calibration is required when physical fallback is enabled."
                 )
 
             self._run_id += 1
