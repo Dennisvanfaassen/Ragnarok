@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
+import random
 import threading
 import time
 from typing import Any
 
 from core.mouse_adapter import mouse_game_adapter
-from core.pathing import build_pathing_state, nav_repository
+from core.pathing import astar, build_pathing_state, clear_walk_line, nav_repository
 from core.state import app_state
 from core.targeting import build_targeting_state
 from diagnostics.authenticated_client import authenticated_client_monitor
@@ -21,6 +23,8 @@ STATES = {
     "ATTACKING",
     "WAITING_FOR_DEATH",
     "TARGET_DEAD",
+    "LOOTING",
+    "WANDERING",
     "FAILED",
 }
 
@@ -54,6 +58,14 @@ class HuntingAI:
         self.direct_attack_click_range = 7
         self.attack_walk_timeout = 3.0
         self._attack_origin: tuple[int, int] | None = None
+        self.loot_radius = 12
+        self.recent_kills: list[dict[str, Any]] = []
+        self.loot_retry: dict[int, int] = {}
+        self.wander_min_distance = 16
+        self.wander_max_distance = 32
+        self.wander_lookahead = 7
+        self.wander_path: list[tuple[int, int]] = []
+        self.wander_goal: tuple[int, int] | None = None
 
         self.attack_retry = 0
         self.attack_clicked_at = 0.0
@@ -100,6 +112,9 @@ class HuntingAI:
     def _set_state(self, state: str, message: str):
         if state not in STATES:
             raise ValueError(f"Unknown AI state: {state}")
+        previous = self.state
+        if previous == "WANDERING" and state != "WANDERING":
+            mouse_game_adapter.release_hold_move()
         with self._lock:
             changed = state != self.state
             self.state = state
