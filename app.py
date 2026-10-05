@@ -226,6 +226,32 @@ async def native_action_attack(payload: dict):
     return result
 
 
+@app.post("/api/native-action/move")
+async def native_action_move(payload: dict):
+    try:
+        x = int(payload.get("x"))
+        y = int(payload.get("y"))
+    except Exception:
+        raise HTTPException(400, "x and y are required")
+    result = native_action_bridge.move(x, y)
+    if not result.get("ok"):
+        raise HTTPException(400, result)
+    return result
+
+
+@app.post("/api/native-action/interaction-trace/start")
+async def native_action_interaction_trace_start(payload: dict | None = None):
+    payload = payload or {}
+    return native_action_bridge.start_interaction_trace(
+        str(payload.get("label") or "interaction")
+    )
+
+
+@app.get("/api/native-action/interaction-trace")
+async def native_action_interaction_trace():
+    return native_action_bridge.interaction_trace()
+
+
 @app.get("/api/game-actions")
 async def game_actions_state():
     return game_actions.snapshot()
