@@ -15,6 +15,7 @@ from core.state import app_state
 from core.targeting import build_targeting_state
 from diagnostics.authenticated_client import authenticated_client_monitor
 from diagnostics.hunt_recorder import hunting_diagnostic_recorder
+from diagnostics.native_action_bridge import native_action_bridge
 
 
 STATES = {
@@ -97,6 +98,8 @@ class HuntingAI:
         self._last_heal_hotkey_at = 0.0
         self._last_heal_result: dict[str, Any] | None = None
         self._return_weight_reached = False
+        self._last_teleport_at = 0.0
+        self._last_teleport_reason: str | None = None
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -280,6 +283,147 @@ class HuntingAI:
         )
         return True
 
+    @staticmethod
+    def _monster_rule(name: str | None):
+        normalized = str(name or "").strip().lower()
+        if not normalized:
+            return None
+        for rule in app_state.get_profile().hunt.monster_rules:
+            if str(rule.monster or "").strip().lower() == normalized:
+                return rule
+        return None
+
+    def _monster_behavior(self, name: str | None) -> str:
+        rule = self._monster_rule(name)
+        if rule is None:
+            return "attack"
+        if not rule.enabled:
+            return "ignore"
+        return str(rule.behavior or "attack").strip().lower()
+
+    def _use_teleport_item(self, snapshot: dict[str, Any], reason: str) -> bool:
+        now = time.time()
+        if now - self._last_teleport_at < 1.5:
+            return False
+
+        profile = app_state.get_profile()
+        wanted_name = str(profile.hunt.teleport_item or "Fly Wing").strip().lower()
+        items = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+        item = next(
+            (
+                row for row in items
+                if str(row.get("name") or "").strip().lower() == wanted_name
+                or (
+                    wanted_name == "fly wing"
+                    and int(row.get("name_id") or -1) == 601
+                )
+            ),
+            None,
+        )
+        if item is None:
+            self._log("teleport_failed", reason=reason, error="teleport_item_not_found")
+            return False
+
+        world = self._world(snapshot)
+        target_id = world.get("self_account_id") or world.get("self_char_id")
+        if target_id is None:
+            self._log("teleport_failed", reason=reason, error="self_target_id_unknown")
+            return False
+
+        game_actions.release_hold_move()
+        result = native_action_bridge.item_use(int(item["index"]), int(target_id))
+        self._log(
+            "teleport_item_use",
+            reason=reason,
+            item=item.get("name"),
+            inventory_index=item.get("index"),
+            result=result,
+        )
+        if not result.get("ok"):
+            return False
+
+        self._last_teleport_at = now
+        self._last_teleport_reason = reason
+        self._clear_target()
+        self.wander_path = []
+        self.wander_goal = None
+        self.wander_line_points = []
+        self.wander_line_index = 0
+        self._set_state("SEARCHING", f"Teleported: {reason}")
+        self._stop.wait(0.45)
+        return True
+
+    def _maybe_emergency_action(self, snapshot: dict[str, Any]) -> bool:
+        profile = app_state.get_profile()
+        action = str(profile.hunt.emergency_action or "none").strip().lower()
+        if action == "none":
+            return False
+
+        world = self._world(snapshot)
+        hp = world.get("hp")
+        hp_max = world.get("hp_max")
+        if hp is None or not hp_max or int(hp) <= 0:
+            return False
+        hp_percent = float(world.get("hp_percent") or (int(hp) * 100 / int(hp_max)))
+        threshold = max(1, min(99, int(profile.hunt.emergency_hp_percent)))
+        if hp_percent >= threshold:
+            return False
+
+        if action == "teleport":
+            return self._use_teleport_item(
+                snapshot,
+                f"emergency HP {hp_percent:.1f}% < {threshold}%",
+            )
+
+        if action == "stop":
+            game_actions.release_hold_move()
+            self._log(
+                "emergency_stop",
+                hp_percent=hp_percent,
+                threshold=threshold,
+            )
+            self._set_state("FAILED", f"Emergency stop at {hp_percent:.1f}% HP")
+            self._stop.set()
+            return True
+
+        return False
+
+    def _maybe_teleport_for_monster(self, snapshot: dict[str, Any]) -> bool:
+        actors = ((snapshot.get("live_state") or {}).get("actors") or [])
+        teleport_names = {
+            str(rule.monster or "").strip().lower()
+            for rule in app_state.get_profile().hunt.monster_rules
+            if rule.enabled and str(rule.behavior or "").strip().lower() == "teleport"
+        }
+        if not teleport_names:
+            return False
+
+        player = self._position(snapshot)
+        visible = []
+        for actor in actors:
+            if actor.get("kind") != "monster":
+                continue
+            name = str(actor.get("name") or "").strip()
+            if name.lower() not in teleport_names:
+                continue
+            if player and actor.get("x") is not None and actor.get("y") is not None:
+                distance = max(
+                    abs(int(actor["x"]) - player[0]),
+                    abs(int(actor["y"]) - player[1]),
+                )
+            else:
+                distance = 999999
+            visible.append((distance, name, actor))
+
+        if not visible:
+            return False
+        visible.sort(key=lambda row: row[0])
+        distance, name, _ = visible[0]
+        return self._use_teleport_item(
+            snapshot,
+            f"{name} spotted at {distance} tiles",
+        )
+
     def _acquire_aggressor(self, snapshot: dict[str, Any]) -> bool:
         live = snapshot.get("live_state") or {}
         ids = set(live.get("aggressor_ids") or [])
@@ -291,6 +435,7 @@ class HuntingAI:
             for actor in (live.get("actors") or [])
             if actor.get("kind") == "monster"
             and int(actor.get("id") or -1) in ids
+            and self._monster_behavior(actor.get("name")) in {"attack", "aggressor_only"}
         ]
         if not actors:
             return False
@@ -306,11 +451,30 @@ class HuntingAI:
     def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
         profile = app_state.get_profile()
         targeting = build_targeting_state(snapshot, profile.hunt.monsters)
-        selected = targeting.get("selected")
-        if not selected:
+        player = self._position(snapshot)
+        candidates = []
+
+        for actor in targeting.get("candidates") or []:
+            rule = self._monster_rule(actor.get("name"))
+            behavior = self._monster_behavior(actor.get("name"))
+            if behavior != "attack":
+                continue
+
+            tile_distance = actor.get("tile_distance")
+            if rule is not None and tile_distance is not None:
+                if int(rule.min_distance or 0) > 0 and int(tile_distance) < int(rule.min_distance):
+                    continue
+                if int(rule.max_distance or 0) > 0 and int(tile_distance) > int(rule.max_distance):
+                    continue
+
+            priority = int(rule.priority) if rule is not None else 50
+            candidates.append((priority, int(tile_distance or 0), actor))
+
+        if not candidates:
             return False
 
-        return self._lock_actor(selected, "normal_target")
+        candidates.sort(key=lambda row: (row[0], row[1], int(row[2].get("id") or 0)))
+        return self._lock_actor(candidates[0][2], "normal_target")
 
     @staticmethod
     def _tile_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -1902,6 +2066,13 @@ class HuntingAI:
             if not snapshot.get("classic_pid"):
                 self._set_state("IDLE", "Waiting for Classic.exe")
                 self._stop.wait(0.10)
+                continue
+
+            # Emergency behavior and monster-specific teleport rules have
+            # priority over normal targeting and route movement.
+            if self._maybe_emergency_action(snapshot):
+                continue
+            if self._maybe_teleport_for_monster(snapshot):
                 continue
 
             # Healing is an interrupt-level concern and runs independently of
