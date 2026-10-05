@@ -547,7 +547,8 @@ class HuntingAI:
 
             # Pick the furthest later A* cell that can be reached by one
             # completely walkable straight line from this anchor.
-            for idx in range(len(path) - 1, anchor_index, -1):
+            max_idx = min(len(path) - 1, anchor_index + 18)
+            for idx in range(max_idx, anchor_index, -1):
                 if clear_walk_line(grid, path[anchor_index], path[idx]):
                     chosen = idx
                     break
@@ -654,6 +655,7 @@ class HuntingAI:
         ):
             return False
 
+        self.attack_clicked_at = time.time()
         result = mouse_game_adapter.attack(
             player,
             self.target_pos,
@@ -671,7 +673,6 @@ class HuntingAI:
             return False
 
         self.attack_retry = 0
-        self.attack_clicked_at = time.time()
         self._attack_origin = player
         self._combat_click_locked = False
         self._combat_seen = False
@@ -920,6 +921,7 @@ class HuntingAI:
         if player is None or self.target_pos is None:
             return
 
+        self.attack_clicked_at = time.time()
         result = mouse_game_adapter.attack(
             player,
             self.target_pos,
@@ -940,7 +942,6 @@ class HuntingAI:
             )
             return
 
-        self.attack_clicked_at = time.time()
         self._attack_origin = player
         self._combat_click_locked = False
         self._combat_seen = False
@@ -998,6 +999,7 @@ class HuntingAI:
                 self._stop.wait(0.03)
                 return
 
+            self.attack_clicked_at = time.time()
             result = mouse_game_adapter.attack(
                 player,
                 self.target_pos,
@@ -1011,7 +1013,6 @@ class HuntingAI:
                 result=result,
             )
             if result.get("ok"):
-                self.attack_clicked_at = time.time()
                 self._attack_origin = player
                 return
 
@@ -1303,15 +1304,35 @@ class HuntingAI:
                 return
             destination = self.wander_line_points[self.wander_line_index]
 
-        # If the live position drifted enough that the planned straight line is
-        # no longer safe, replan. Never steer across blocked cells.
+        # If the live position drifted off the planned segment, reconnect to
+        # the existing forward A* path instead of calculating a brand-new route.
         if not clear_walk_line(grid, player, destination):
-            self.wander_path = []
-            self.wander_goal = None
-            self.wander_line_points = []
-            self.wander_line_index = 0
-            self._stop.wait(0.03)
-            return
+            route_index = self._nearest_wander_index(player)
+            remaining = [player] + self.wander_path[
+                min(route_index + 1, len(self.wander_path) - 1):
+            ]
+            recovery_segments = self._build_straight_wander_segments(
+                grid,
+                remaining,
+            )
+            if len(recovery_segments) >= 2:
+                self.wander_line_points = recovery_segments
+                self.wander_line_index = 1
+                destination = recovery_segments[1]
+                self._log(
+                    "wander_route_reconnect",
+                    player={"x": player[0], "y": player[1]},
+                    destination={"x": destination[0], "y": destination[1]},
+                    route_index=route_index,
+                )
+            else:
+                mouse_game_adapter.release_hold_move()
+                self.wander_path = []
+                self.wander_goal = None
+                self.wander_line_points = []
+                self.wander_line_index = 0
+                self._stop.wait(0.12)
+                return
 
         dx = destination[0] - player[0]
         dy = destination[1] - player[1]
