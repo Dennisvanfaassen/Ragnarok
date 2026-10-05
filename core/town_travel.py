@@ -199,10 +199,11 @@ class TownTravelController:
             if token == "c":
                 result = native_action_bridge.continue_npc(actor_id)
             elif token.startswith("r") and token[1:].isdigit():
-                # OpenKore talk route syntax rN selects menu response N.
+                # OpenKore route syntax is zero-based (r0 = first menu entry),
+                # while Ragnarok's menu response packet is one-based.
                 result = native_action_bridge.choose_npc_option(
                     actor_id,
-                    int(token[1:]),
+                    int(token[1:]) + 1,
                 )
             elif token == "n":
                 result = native_action_bridge.close_npc(actor_id)
