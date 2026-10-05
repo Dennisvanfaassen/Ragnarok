@@ -55,6 +55,8 @@ class MouseGameAdapter:
         self._hold_point: tuple[int, int] | None = None
         self._hold_desired_point: tuple[int, int] | None = None
         self._hold_last_update = 0.0
+        self._hold_heading: tuple[float, float] | None = None
+        self._hold_velocity = 0.0
         self._load_calibration()
 
     def configure(self, *, sprite_y_offset: int | None = None):
@@ -519,6 +521,12 @@ class MouseGameAdapter:
         self._hold_point = point
         self._hold_desired_point = point
         self._hold_last_update = time.time()
+        heading_len = math.hypot(dx, dy)
+        self._hold_heading = (
+            (dx / heading_len, dy / heading_len)
+            if heading_len > 1e-6 else None
+        )
+        self._hold_velocity = 0.0
         hunting_diagnostic_recorder.event(
             "mouse",
             "hold_begin",
@@ -556,95 +564,173 @@ class MouseGameAdapter:
 
         last = self._hold_point
         self._hold_desired_point = point
+        desired_len = math.hypot(dx, dy)
+        desired_heading = (
+            (dx / desired_len, dy / desired_len)
+            if desired_len > 1e-6 else None
+        )
 
         if last is None:
             user32.SetCursorPos(int(point[0]), int(point[1]))
             self._hold_point = point
             self._hold_last_update = time.time()
+            self._hold_heading = desired_heading
+            self._hold_velocity = 0.0
+            return {
+                "ok": True,
+                "screen": {"x": point[0], "y": point[1]},
+                "direction": {"dx": dx, "dy": dy},
+                "held": True,
+            }
+
+        delta_x = point[0] - last[0]
+        delta_y = point[1] - last[1]
+        distance = math.hypot(delta_x, delta_y)
+
+        # Heading dead-zone: while the route direction changes only slightly,
+        # keep the physical cursor completely still.
+        angle_deg = 180.0
+        if self._hold_heading is not None and desired_heading is not None:
+            dot = max(
+                -1.0,
+                min(
+                    1.0,
+                    self._hold_heading[0] * desired_heading[0]
+                    + self._hold_heading[1] * desired_heading[1],
+                ),
+            )
+            angle_deg = math.degrees(math.acos(dot))
+
+        if angle_deg <= 5.5 and distance < max(36.0, min_pixel_change * 1.45):
+            return {
+                "ok": True,
+                "screen": {"x": last[0], "y": last[1]},
+                "desired_screen": {"x": point[0], "y": point[1]},
+                "direction": {"dx": dx, "dy": dy},
+                "held": True,
+                "steering": "dead_zone",
+            }
+
+        if distance < min_pixel_change:
+            return {
+                "ok": True,
+                "screen": {"x": last[0], "y": last[1]},
+                "desired_screen": {"x": point[0], "y": point[1]},
+                "direction": {"dx": dx, "dy": dy},
+                "held": True,
+                "steering": "steady",
+            }
+
+        now = time.time()
+
+        # Cursor speed follows route curvature: slow acceleration through a
+        # shallow bend, decisive movement only for a genuine corner.
+        if angle_deg < 12.0:
+            target_velocity = 18.0
+            min_interval = 0.16
+            turn_kind = "micro"
+        elif angle_deg < 32.0:
+            target_velocity = 45.0
+            min_interval = 0.075
+            turn_kind = "bend"
         else:
-            delta_x = point[0] - last[0]
-            delta_y = point[1] - last[1]
-            distance = math.hypot(delta_x, delta_y)
+            target_velocity = 220.0
+            min_interval = 0.025
+            turn_kind = "corner"
 
-            # Keep the hand very steady during normal travel. Gentle route
-            # curvature only causes tiny cursor movement; actual corners move
-            # the cursor much faster so the character turns decisively.
-            if distance >= min_pixel_change:
-                now = time.time()
-                if distance < 45:
-                    max_step = 3.0
-                    turn_kind = "micro"
-                    min_interval = 0.22
-                elif distance < 110:
-                    max_step = 10.0
-                    turn_kind = "bend"
-                    min_interval = 0.12
-                else:
-                    max_step = 75.0
-                    turn_kind = "corner"
-                    min_interval = 0.035
+        elapsed = max(0.001, now - self._hold_last_update)
+        if elapsed < min_interval:
+            return {
+                "ok": True,
+                "screen": {"x": last[0], "y": last[1]},
+                "desired_screen": {"x": point[0], "y": point[1]},
+                "direction": {"dx": dx, "dy": dy},
+                "held": True,
+                "steering": "rate_limited",
+            }
 
-                if now - self._hold_last_update < min_interval:
-                    return {
-                        "ok": True,
-                        "screen": {"x": last[0], "y": last[1]},
-                        "desired_screen": {"x": point[0], "y": point[1]},
-                        "direction": {"dx": dx, "dy": dy},
-                        "held": True,
-                    }
+        # Smooth acceleration/deceleration rather than fixed pixel jumps.
+        acceleration = 360.0 if target_velocity >= self._hold_velocity else 520.0
+        max_delta_v = acceleration * elapsed
+        if self._hold_velocity < target_velocity:
+            self._hold_velocity = min(
+                target_velocity,
+                self._hold_velocity + max_delta_v,
+            )
+        else:
+            self._hold_velocity = max(
+                target_velocity,
+                self._hold_velocity - max_delta_v,
+            )
 
-                if distance <= max_step:
-                    next_point = point
-                else:
-                    scale = max_step / distance
-                    next_point = (
-                        int(round(last[0] + delta_x * scale)),
-                        int(round(last[1] + delta_y * scale)),
-                    )
+        max_step = max(2.0, self._hold_velocity * elapsed)
+        if turn_kind == "corner":
+            max_step = max(max_step, 22.0)
 
-                user32.SetCursorPos(
-                    int(next_point[0]),
-                    int(next_point[1]),
+        if distance <= max_step:
+            next_point = point
+        else:
+            scale = max_step / distance
+            next_point = (
+                int(round(last[0] + delta_x * scale)),
+                int(round(last[1] + delta_y * scale)),
+            )
+
+        user32.SetCursorPos(int(next_point[0]), int(next_point[1]))
+        self._hold_point = next_point
+        self._hold_last_update = now
+
+        # Slowly track heading during small bends; snap heading on real corners.
+        if desired_heading is not None:
+            if self._hold_heading is None or turn_kind == "corner":
+                self._hold_heading = desired_heading
+            else:
+                blend = 0.22 if turn_kind == "micro" else 0.45
+                hx = (
+                    self._hold_heading[0] * (1.0 - blend)
+                    + desired_heading[0] * blend
                 )
-                self._hold_point = next_point
-                self._hold_last_update = time.time()
-
-                hunting_diagnostic_recorder.event(
-                    "mouse",
-                    "steering_turn",
-                    {
-                        "from_screen": {
-                            "x": last[0],
-                            "y": last[1],
-                        },
-                        "desired_screen": {
-                            "x": point[0],
-                            "y": point[1],
-                        },
-                        "to_screen": {
-                            "x": next_point[0],
-                            "y": next_point[1],
-                        },
-                        "direction": {"dx": dx, "dy": dy},
-                        "radius_px": radius_px,
-                        "turn_kind": turn_kind,
-                        "remaining_px": round(
-                            math.hypot(
-                                point[0] - next_point[0],
-                                point[1] - next_point[1],
-                            ),
-                            1,
-                        ),
-                    },
-                    screenshot=turn_kind == "corner",
-                    screenshot_cooldown=0.40,
+                hy = (
+                    self._hold_heading[1] * (1.0 - blend)
+                    + desired_heading[1] * blend
                 )
+                hlen = math.hypot(hx, hy)
+                if hlen > 1e-6:
+                    self._hold_heading = (hx / hlen, hy / hlen)
+
+        hunting_diagnostic_recorder.event(
+            "mouse",
+            "steering_turn",
+            {
+                "from_screen": {"x": last[0], "y": last[1]},
+                "desired_screen": {"x": point[0], "y": point[1]},
+                "to_screen": {"x": next_point[0], "y": next_point[1]},
+                "direction": {"dx": dx, "dy": dy},
+                "radius_px": radius_px,
+                "turn_kind": turn_kind,
+                "angle_deg": round(angle_deg, 2),
+                "cursor_velocity_px_s": round(self._hold_velocity, 1),
+                "remaining_px": round(
+                    math.hypot(
+                        point[0] - next_point[0],
+                        point[1] - next_point[1],
+                    ),
+                    1,
+                ),
+            },
+            screenshot=turn_kind == "corner",
+            screenshot_cooldown=0.40,
+        )
 
         return {
             "ok": True,
-            "screen": {"x": point[0], "y": point[1]},
+            "screen": {"x": next_point[0], "y": next_point[1]},
+            "desired_screen": {"x": point[0], "y": point[1]},
             "direction": {"dx": dx, "dy": dy},
+            "held": True,
+            "steering": turn_kind,
         }
+
 
     def begin_hold_move(
         self,
@@ -716,6 +802,8 @@ class MouseGameAdapter:
         self._hold_point = None
         self._hold_desired_point = None
         self._hold_last_update = 0.0
+        self._hold_heading = None
+        self._hold_velocity = 0.0
         if was_active:
             hunting_diagnostic_recorder.event(
                 "mouse",
