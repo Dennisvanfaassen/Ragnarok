@@ -492,6 +492,18 @@ rpc.exports = {
         return {ok:result===7, bytes_sent:result, actor_id:id, packet_hex:bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '), socket:mapSocket.toString()};
     },
 
+    requestNpcSell(actorId) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const id = Number(actorId) >>> 0;
+        // 00C5 type 1 requests the NPC sell list.
+        const bytes = [0xc5,0x00,id&0xff,(id>>>8)&0xff,(id>>>16)&0xff,(id>>>24)&0xff,0x01];
+        const packet = Memory.alloc(7);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 7, 0);
+        return {ok:result===7, bytes_sent:result, actor_id:id, packet_hex:bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '), socket:mapSocket.toString()};
+    },
+
     buyBulk(items) {
         if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
         if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
@@ -503,6 +515,25 @@ rpc.exports = {
             const amount = Math.max(1, Math.min(65535, Number(row.amount) | 0));
             const itemId = Math.max(0, Math.min(65535, Number(row.item_id) | 0));
             bytes.push(amount&0xff,(amount>>>8)&0xff,itemId&0xff,(itemId>>>8)&0xff);
+        }
+        const packet = Memory.alloc(length);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, length, 0);
+        return {ok:result===length, bytes_sent:result, length:length, items:rows, packet_hex:bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '), socket:mapSocket.toString()};
+    },
+
+    sellBulk(items) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const rows = Array.isArray(items) ? items : [];
+        if (!rows.length) return {ok:false, reason:'empty_sell_list'};
+        // 00C9: len + repeated inventory index (u16) + amount (u16).
+        const length = 4 + rows.length * 4;
+        const bytes = [0xc9,0x00,length&0xff,(length>>>8)&0xff];
+        for (const row of rows) {
+            const index = Math.max(0, Math.min(65535, Number(row.index) | 0));
+            const amount = Math.max(1, Math.min(65535, Number(row.amount) | 0));
+            bytes.push(index&0xff,(index>>>8)&0xff,amount&0xff,(amount>>>8)&0xff);
         }
         const packet = Memory.alloc(length);
         packet.writeByteArray(bytes);
@@ -831,6 +862,9 @@ class NativeActionBridge:
     def request_npc_buy(self, actor_id: int) -> dict[str, Any]:
         return self._npc_call("request_npc_buy", int(actor_id))
 
+    def request_npc_sell(self, actor_id: int) -> dict[str, Any]:
+        return self._npc_call("request_npc_sell", int(actor_id))
+
     def buy_bulk(self, items: list[dict[str, int]]) -> dict[str, Any]:
         rows = [
             {"amount": int(row["amount"]), "item_id": int(row["item_id"])}
@@ -852,6 +886,30 @@ class NativeActionBridge:
         result["executed"] = bool(result.get("ok"))
         result["command"] = "buy_bulk"
         self._record({"event": "direct_buy_bulk", "result": result})
+        return result
+
+    def sell_bulk(self, items: list[dict[str, int]]) -> dict[str, Any]:
+        rows = [
+            {"index": int(row["index"]), "amount": int(row["amount"])}
+            for row in items
+            if int(row.get("amount") or 0) > 0
+            and int(row.get("index") or -1) >= 0
+        ]
+        if not rows:
+            return {"ok": False, "executed": False, "reason": "empty_sell_list"}
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "executed": False, "reason": "bridge_not_running"}
+        if not self._agent_status().get("socket_learned"):
+            return {"ok": False, "executed": False, "reason": "map_socket_not_learned"}
+        try:
+            result = dict(script.exports_sync.sell_bulk(rows))
+        except Exception as exc:
+            return {"ok": False, "executed": False, "reason": "agent_call_failed", "message": str(exc)}
+        result["executed"] = bool(result.get("ok"))
+        result["command"] = "sell_bulk"
+        self._record({"event": "direct_sell_bulk", "result": result})
         return result
 
     def attack(self, actor_id: int) -> dict[str, Any]:
