@@ -19,6 +19,10 @@ from diagnostics.authenticated_client import authenticated_client_monitor
 from diagnostics.native_action_bridge import native_action_bridge
 
 
+MEAT_ID = 517
+FLY_WING_ID = 601
+
+
 class FullAutomationController:
     """End-to-end hunt -> town -> storage -> restock -> hunt controller."""
 
@@ -552,6 +556,7 @@ class FullAutomationController:
         *,
         forced: bool = False,
         resume_hunt: bool = True,
+        trigger_reason: str | None = None,
     ) -> bool:
         profile = app_state.get_profile()
         self._deposited_indices_this_cycle.clear()
@@ -578,9 +583,12 @@ class FullAutomationController:
             )
             self._log("town_cycle_start_in_place", map=current_map)
         else:
+            reason = trigger_reason or (
+                f"{profile.town.return_weight_percent}% weight reached"
+            )
             self._set(
                 "RETURNING",
-                f"{profile.town.return_weight_percent}% weight reached; returning with Butterfly Wing.",
+                f"{reason}; returning with Butterfly Wing.",
             )
             if not self._use_butterfly_wing():
                 return False
@@ -639,6 +647,43 @@ class FullAutomationController:
         active_hunt_controller.start({})
         return True
 
+    def _automatic_town_trigger(
+        self,
+        *,
+        weight_percent: float | int | None,
+        threshold: int,
+    ) -> str | None:
+        profile = app_state.get_profile()
+
+        if (
+            weight_percent is not None
+            and float(weight_percent) >= float(threshold)
+        ):
+            return f"{float(weight_percent):.1f}% weight reached (limit {threshold}%)"
+
+        item_state = authenticated_client_monitor.item_state_snapshot()
+        # Do not treat an uninitialized/unknown inventory as empty.
+        if (item_state.get("updated_at") or {}).get("inventory") is None:
+            return None
+
+        inventory = item_state.get("inventory") or []
+        meat_amount = sum(
+            int(row.get("amount") or 0)
+            for row in inventory
+            if int(row.get("name_id") or -1) == MEAT_ID
+        )
+        fly_wing_amount = sum(
+            int(row.get("amount") or 0)
+            for row in inventory
+            if int(row.get("name_id") or -1) == FLY_WING_ID
+        )
+
+        if profile.town.return_when_out_of_meat and meat_amount <= 0:
+            return "Out of Meat"
+        if profile.town.return_when_out_of_fly_wings and fly_wing_amount <= 0:
+            return "Out of Fly Wings"
+        return None
+
     def _loop(self):
         try:
             profile = app_state.get_profile()
@@ -665,15 +710,27 @@ class FullAutomationController:
                 threshold = max(1, min(99, int(profile.town.return_weight_percent)))
 
                 forced_cycle = self._force_cycle.is_set()
-                if (
-                    forced_cycle
-                    or (
-                        weight_percent is not None
-                        and float(weight_percent) >= float(threshold)
-                    )
-                ):
+                automatic_reason = self._automatic_town_trigger(
+                    weight_percent=weight_percent,
+                    threshold=threshold,
+                )
+                if forced_cycle or automatic_reason is not None:
                     self._force_cycle.clear()
-                    if not self._town_cycle(forced=forced_cycle, resume_hunt=True):
+                    trigger_reason = (
+                        "Manual town-cycle request"
+                        if forced_cycle
+                        else automatic_reason
+                    )
+                    self._log(
+                        "town_cycle_triggered",
+                        reason=trigger_reason,
+                        weight_percent=weight_percent,
+                    )
+                    if not self._town_cycle(
+                        forced=forced_cycle,
+                        resume_hunt=True,
+                        trigger_reason=trigger_reason,
+                    ):
                         self._set(
                             "PAUSED",
                             self.last_error or "Town cycle failed.",
@@ -757,6 +814,18 @@ class FullAutomationController:
     def snapshot(self) -> dict[str, Any]:
         profile = app_state.get_profile()
         world = self._world(self._snapshot())
+        item_state = authenticated_client_monitor.item_state_snapshot()
+        inventory = item_state.get("inventory") or []
+        meat_amount = sum(
+            int(row.get("amount") or 0)
+            for row in inventory
+            if int(row.get("name_id") or -1) == MEAT_ID
+        )
+        fly_wing_amount = sum(
+            int(row.get("amount") or 0)
+            for row in inventory
+            if int(row.get("name_id") or -1) == FLY_WING_ID
+        )
         with self._lock:
             return {
                 "running": self.running,
@@ -770,6 +839,10 @@ class FullAutomationController:
                 "loot_all": profile.hunt.loot_all,
                 "weight_percent": world.get("weight_percent"),
                 "return_weight_percent": profile.town.return_weight_percent,
+                "return_when_out_of_meat": profile.town.return_when_out_of_meat,
+                "return_when_out_of_fly_wings": profile.town.return_when_out_of_fly_wings,
+                "meat_amount": meat_amount,
+                "fly_wing_amount": fly_wing_amount,
                 "healing": {
                     "enabled": profile.healing.enabled,
                     "hotkey": profile.healing.hotkey,
