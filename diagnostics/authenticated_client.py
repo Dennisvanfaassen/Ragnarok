@@ -23,7 +23,11 @@ FIXED_PACKET_LENGTHS = {
     0x0087: 12,  # character_moves
     0x008A: 29,  # actor_action
     0x0091: 22,  # map_change
+    0x009D: 19,  # floor item exists
+    0x009E: 17,  # legacy floor item appeared
+    0x00A1: 6,   # floor item disappeared
     0x00B0: 8,   # stat_info
+    0x0ADD: 24,  # modern floor item appeared
 }
 VARIABLE_PACKET_OPCODES = {0x09FD, 0x09FE, 0x09FF}
 
@@ -103,6 +107,8 @@ class AuthenticatedClientMonitor:
             "last_combat": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
+        self._floor_items: dict[int, dict[str, Any]] = {}
+        self._aggressors: dict[int, float] = {}
         self._parsed_counts: dict[str, int] = {
             "map_change": 0,
             "character_moves": 0,
@@ -112,6 +118,9 @@ class AuthenticatedClientMonitor:
             "actor_removed": 0,
             "stat_info": 0,
             "sync": 0,
+            "combat": 0,
+            "item_seen": 0,
+            "item_removed": 0,
         }
 
     def _set_status(self, status: str, message: str):
@@ -200,12 +209,20 @@ class AuthenticatedClientMonitor:
                 )
                 if v is not None
             }
+            now = time.time()
             if source_id in self_ids:
                 self._world["last_combat"] = {
-                    "timestamp": time.time(),
+                    "timestamp": now,
                     "source_id": source_id,
                     "target_id": target_id,
                 }
+            elif target_id in self_ids:
+                actor = self._actors.get(source_id)
+                if actor and actor.get("kind") == "monster":
+                    self._aggressors[source_id] = now
+                    actor["aggressive_to_me"] = True
+                    actor["last_aggression"] = now
+            self._parsed_counts["combat"] += 1
             return
 
         if opcode == 0x0091 and len(data) >= 22:
@@ -213,6 +230,8 @@ class AuthenticatedClientMonitor:
             x, y = struct.unpack_from("<HH", data, 18)
             self._world.update({"map": map_name, "x": x, "y": y})
             self._actors.clear()
+            self._floor_items.clear()
+            self._aggressors.clear()
             self._parsed_counts["map_change"] += 1
             return
 
@@ -241,7 +260,53 @@ class AuthenticatedClientMonitor:
         if opcode == 0x0080 and len(data) >= 7:
             actor_id = int.from_bytes(data[2:6], "little")
             self._actors.pop(actor_id, None)
+            self._aggressors.pop(actor_id, None)
             self._parsed_counts["actor_removed"] += 1
+            return
+
+        if opcode == 0x009D and len(data) >= 19:
+            item_id = int.from_bytes(data[2:6], "little")
+            self._floor_items[item_id] = {
+                "id": item_id,
+                "name_id": int.from_bytes(data[6:10], "little"),
+                "x": int.from_bytes(data[11:13], "little"),
+                "y": int.from_bytes(data[13:15], "little"),
+                "amount": int.from_bytes(data[15:17], "little"),
+                "last_seen": time.time(),
+            }
+            self._parsed_counts["item_seen"] += 1
+            return
+
+        if opcode == 0x009E and len(data) >= 17:
+            item_id = int.from_bytes(data[2:6], "little")
+            self._floor_items[item_id] = {
+                "id": item_id,
+                "name_id": int.from_bytes(data[6:8], "little"),
+                "x": int.from_bytes(data[9:11], "little"),
+                "y": int.from_bytes(data[11:13], "little"),
+                "amount": int.from_bytes(data[15:17], "little"),
+                "last_seen": time.time(),
+            }
+            self._parsed_counts["item_seen"] += 1
+            return
+
+        if opcode == 0x0ADD and len(data) >= 24:
+            item_id = int.from_bytes(data[2:6], "little")
+            self._floor_items[item_id] = {
+                "id": item_id,
+                "name_id": int.from_bytes(data[6:10], "little"),
+                "x": int.from_bytes(data[13:15], "little"),
+                "y": int.from_bytes(data[15:17], "little"),
+                "amount": int.from_bytes(data[19:21], "little"),
+                "last_seen": time.time(),
+            }
+            self._parsed_counts["item_seen"] += 1
+            return
+
+        if opcode == 0x00A1 and len(data) >= 6:
+            item_id = int.from_bytes(data[2:6], "little")
+            self._floor_items.pop(item_id, None)
+            self._parsed_counts["item_removed"] += 1
             return
 
         if opcode in VARIABLE_PACKET_OPCODES:
@@ -449,6 +514,13 @@ class AuthenticatedClientMonitor:
                     counts[stage] += 1
 
             actors = list(self._actors.values())
+            floor_items = list(self._floor_items.values())
+            aggressor_ids = [
+                actor_id
+                for actor_id in self._aggressors
+                if actor_id in self._actors
+                and self._actors[actor_id].get("kind") == "monster"
+            ]
             actor_counts = {
                 "total": len(actors),
                 "monsters": sum(1 for a in actors if a.get("kind") == "monster"),
@@ -482,6 +554,11 @@ class AuthenticatedClientMonitor:
                     "actors": sorted(
                         actors,
                         key=lambda a: (a.get("kind", ""), a.get("name", ""), a.get("id", 0)),
+                    )[:100],
+                    "aggressor_ids": aggressor_ids,
+                    "floor_items": sorted(
+                        floor_items,
+                        key=lambda item: (item.get("y", 0), item.get("x", 0), item.get("id", 0)),
                     )[:100],
                     "parsed_packets": dict(self._parsed_counts),
                 },
