@@ -77,6 +77,29 @@ ITEM_PACKET_CANDIDATES = {
 # Confirmed modern item-list layouts from OpenKore ServerType0.
 # 0B09: header = len(v), type(C), then 34-byte stackable records.
 # 0B39: header = len(v), type(C), then 68-byte non-stackable type9 records.
+# Incremental item packets to validate against this client. OpenKore has
+# multiple historical layouts for some opcodes, so these are traced with
+# strict structural checks before they are allowed to mutate live state.
+INCREMENTAL_ITEM_CANDIDATES = {
+    0x00AF: {
+        "name": "inventory_item_removed",
+        "lengths": {6},
+    },
+    0x00F6: {
+        "name": "storage_item_removed",
+        "lengths": {8},
+    },
+    0x0A37: {
+        "name": "inventory_item_added",
+        "lengths": {57, 69},
+    },
+    0x0A0A: {
+        "name": "storage_item_added",
+        "lengths": {52, 57},
+    },
+}
+
+
 CONFIRMED_ITEM_LIST_LAYOUTS = {
     0x0B09: {
         "name": "item_list_stackable",
@@ -543,6 +566,120 @@ class AuthenticatedClientMonitor:
             }
         return None
 
+    def _trace_incremental_item_candidates(self, payload: bytes):
+        size = len(payload)
+        now = time.time()
+
+        for i in range(max(0, size - 1)):
+            if i + 2 > size:
+                break
+            opcode = int.from_bytes(payload[i:i + 2], "little")
+            spec = INCREMENTAL_ITEM_CANDIDATES.get(opcode)
+            if spec is None:
+                continue
+
+            for packet_len in sorted(spec["lengths"]):
+                if i + packet_len > size:
+                    continue
+                packet = payload[i:i + packet_len]
+
+                decoded: dict[str, Any] | None = None
+                if opcode == 0x00AF and packet_len == 6:
+                    index = int.from_bytes(packet[2:4], "little")
+                    amount = int.from_bytes(packet[4:6], "little")
+                    if index in self._inventory and amount > 0:
+                        decoded = {
+                            "index": index,
+                            "amount": amount,
+                        }
+
+                elif opcode == 0x00F6 and packet_len == 8:
+                    index = int.from_bytes(packet[2:4], "little")
+                    amount = int.from_bytes(packet[4:8], "little")
+                    if index in self._storage and amount > 0:
+                        decoded = {
+                            "index": index,
+                            "amount": amount,
+                        }
+
+                elif opcode == 0x0A37 and packet_len in {57, 69}:
+                    index = int.from_bytes(packet[2:4], "little")
+                    amount = int.from_bytes(packet[4:6], "little")
+                    # 57-byte variants use a 16-bit nameID; 69-byte expanded
+                    # item-ID variants use a 32-bit nameID.
+                    if packet_len == 69:
+                        name_id = int.from_bytes(packet[6:10], "little")
+                        identified = int(packet[10])
+                        item_type = int(packet[33])
+                        fail = int(packet[34])
+                    else:
+                        name_id = int.from_bytes(packet[6:8], "little")
+                        identified = int(packet[8])
+                        # The remaining fields vary by generation; don't
+                        # over-decode until this variant is observed.
+                        item_type = None
+                        fail = int(packet[-1]) if packet else 255
+
+                    if (
+                        index > 0
+                        and amount > 0
+                        and name_id > 0
+                        and identified <= 7
+                        and fail in {0, 1}
+                    ):
+                        decoded = {
+                            "index": index,
+                            "amount": amount,
+                            "name_id": name_id,
+                            "name": item_name(name_id),
+                            "item_type": item_type,
+                            "identified_raw": identified,
+                            "fail": fail,
+                        }
+
+                elif opcode == 0x0A0A and packet_len in {52, 57}:
+                    index = int.from_bytes(packet[2:4], "little")
+                    amount = int.from_bytes(packet[4:8], "little")
+                    if packet_len == 57:
+                        name_id = int.from_bytes(packet[8:12], "little")
+                        item_type = int(packet[12])
+                        identified = int(packet[13])
+                    else:
+                        name_id = int.from_bytes(packet[8:10], "little")
+                        item_type = int(packet[10])
+                        identified = int(packet[11])
+
+                    if (
+                        index > 0
+                        and amount > 0
+                        and name_id > 0
+                        and identified <= 7
+                    ):
+                        decoded = {
+                            "index": index,
+                            "amount": amount,
+                            "name_id": name_id,
+                            "name": item_name(name_id),
+                            "item_type": item_type,
+                            "identified_raw": identified,
+                        }
+
+                if decoded is None:
+                    continue
+
+                self._item_packet_trace.append({
+                    "timestamp": now,
+                    "opcode": f"0x{opcode:04X}",
+                    "name": str(spec["name"]),
+                    "kind": "incremental",
+                    "packet_length": packet_len,
+                    "payload_offset": i,
+                    "tcp_payload_length": size,
+                    "decoded": decoded,
+                    "packet_hex": packet.hex(" "),
+                })
+                break
+
     def _trace_item_candidates(self, payload: bytes):
         """Trace only structurally valid modern item-list packets.
 
@@ -765,6 +902,7 @@ class AuthenticatedClientMonitor:
                     if stage == "map":
                         if direction == "server_to_client":
                             self._trace_item_candidates(payload)
+                            self._trace_incremental_item_candidates(payload)
                             self._parse_payload(payload)
                         else:
                             self._parse_client_payload(payload)
