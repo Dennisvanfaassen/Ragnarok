@@ -32,6 +32,7 @@ class FullAutomationController:
         self.last_error: str | None = None
         self.saved_town_map: str | None = None
         self.current_service: dict[str, Any] | None = None
+        self._butterfly_used_this_cycle = False
         self.actions: list[dict[str, Any]] = []
 
     def _log(self, action: str, **details):
@@ -277,6 +278,7 @@ class FullAutomationController:
             self.last_error = "Butterfly Wing did not produce a map change."
             return False
         self.saved_town_map = landed
+        self._butterfly_used_this_cycle = True
         self._log("butterfly_landed", map=landed)
         return True
 
@@ -307,8 +309,11 @@ class FullAutomationController:
     def _deposit_all_unequipped(self) -> bool:
         state = authenticated_client_monitor.item_state_snapshot()
         items = list(state.get("inventory") or [])
+        keep_ids = {AWAKENING_POTION_ID, BUTTERFLY_WING_ID}
         for item in items:
             if bool(item.get("equipped")):
+                continue
+            if int(item.get("name_id") or -1) in keep_ids:
                 continue
             amount = int(item.get("amount") or 0)
             index = int(item.get("index") or -1)
@@ -334,17 +339,41 @@ class FullAutomationController:
     def _restock(self, actor_id: int) -> bool:
         profile = app_state.get_profile()
         supplies = profile.town.supplies
+        inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+        awakening_now = sum(
+            int(row.get("amount") or 0)
+            for row in inventory
+            if int(row.get("name_id") or -1) == AWAKENING_POTION_ID
+        )
+        wing_now = sum(
+            int(row.get("amount") or 0)
+            for row in inventory
+            if int(row.get("name_id") or -1) == BUTTERFLY_WING_ID
+        )
+        # The live incremental item-use packet is not decoded yet. We know one
+        # Butterfly Wing was consumed by this controller, so compensate for the
+        # stale pre-use inventory snapshot when calculating the restock deficit.
+        if self._butterfly_used_this_cycle:
+            wing_now = max(0, wing_now - 1)
+
         desired = [
             {
                 "item_id": AWAKENING_POTION_ID,
-                "amount": max(0, int(supplies.awakening_potions)),
+                "amount": max(0, int(supplies.awakening_potions) - awakening_now),
             },
             {
                 "item_id": BUTTERFLY_WING_ID,
-                "amount": max(0, int(supplies.butterfly_wings)),
+                "amount": max(0, int(supplies.butterfly_wings) - wing_now),
             },
         ]
         desired = [row for row in desired if row["amount"] > 0]
+        if not desired:
+            self._log(
+                "restock_not_needed",
+                awakening_now=awakening_now,
+                butterfly_now=wing_now,
+            )
+            return True
 
         result = native_action_bridge.talk_npc(actor_id, 1)
         self._log("tool_dealer_talk", result=result)
@@ -408,6 +437,7 @@ class FullAutomationController:
         self._set("RESTOCKING", "Buying configured Awakening Potions and Butterfly Wings.")
         if not self._restock(int(dealer["id"])):
             return False
+        self._butterfly_used_this_cycle = False
 
         hunt_map = str(profile.hunt.map or "").strip().lower()
         if not hunt_map:
@@ -485,6 +515,7 @@ class FullAutomationController:
             self.last_error = None
             self.saved_town_map = None
             self.current_service = None
+            self._butterfly_used_this_cycle = False
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
             return self.snapshot()
