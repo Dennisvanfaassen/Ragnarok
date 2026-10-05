@@ -63,7 +63,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <label>Server<select id="server"><option value="soulbound">Soulbound Journey</option></select></label>
       </div>
       <div class="row">
-        <label>Hunt map<input id="huntMap" placeholder="iz_dun02"></label>
+        <label>Hunt map<input id="huntMap" list="huntMapOptions" placeholder="iz_dun02"><datalist id="huntMapOptions"></datalist></label>
         <label>Monsters to kill<input id="monsters" placeholder="Obeaune, Cornutus"></label>
       </div>
       <div class="row">
@@ -552,6 +552,19 @@ async function saveProfile(){
   const data=await r.json();
   document.getElementById('liveReturnTrigger').value=(data.town&&data.town.return_weight_percent!=null?data.town.return_weight_percent:70)+'%';
   out(data);
+}
+
+async function loadRoutableMaps(){
+  try{
+    const r=await fetch('/api/world-route');
+    const data=await r.json();
+    const list=document.getElementById('huntMapOptions');
+    if(list){
+      list.innerHTML=(data.maps||[]).map(function(name){
+        return '<option value="'+escapeHtml(name)+'"></option>';
+      }).join('');
+    }
+  }catch(e){}
 }
 
 async function loadProfile(){
@@ -1279,7 +1292,7 @@ async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh(
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
 const mapCanvas=document.getElementById('liveMapCanvas');
 if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
-loadProfile();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
+loadRoutableMaps();loadProfile();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
 </script>
 </body>
 </html>
