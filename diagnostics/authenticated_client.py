@@ -22,6 +22,7 @@ FIXED_PACKET_LENGTHS = {
     0x007F: 6,   # received_sync
     0x0080: 7,   # actor_died_or_disappeared
     0x0087: 12,  # character_moves
+    0x0088: 10,  # actor_movement_interrupted
     0x008A: 29,  # actor_action
     0x0091: 22,  # legacy map_change
     0x0092: 28,  # legacy map_changed/server move
@@ -132,6 +133,7 @@ class AuthenticatedClientMonitor:
             "map_change": 0,
             "invalid_map_change": 0,
             "character_moves": 0,
+            "movement_interrupted": 0,
             "actor_moved": 0,
             "actor_connected": 0,
             "actor_exists": 0,
@@ -329,6 +331,38 @@ class AuthenticatedClientMonitor:
                 }
                 self._world["x"], self._world["y"] = start
             self._parsed_counts["character_moves"] += 1
+            return
+
+        if opcode == 0x0088 and len(data) >= 10:
+            actor_id = int.from_bytes(data[2:6], "little")
+            x = int.from_bytes(data[6:8], "little")
+            y = int.from_bytes(data[8:10], "little")
+
+            self_ids = {
+                int(v)
+                for v in (
+                    self._world.get("self_account_id"),
+                    self._world.get("self_char_id"),
+                )
+                if v is not None
+            }
+            if actor_id in self_ids:
+                self._self_move = None
+                self._world["x"] = x
+                self._world["y"] = y
+            else:
+                actor = self._actors.get(actor_id)
+                if actor is not None:
+                    actor["x"] = x
+                    actor["y"] = y
+                    actor.pop("from_x", None)
+                    actor.pop("from_y", None)
+                    actor.pop("to_x", None)
+                    actor.pop("to_y", None)
+                    actor.pop("move_started_at", None)
+                    actor.pop("move_duration", None)
+
+            self._parsed_counts["movement_interrupted"] += 1
             return
 
         if opcode == 0x00B0 and len(data) >= 8:
