@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+import json
+import math
 import threading
 import time
 from ctypes import wintypes
+from pathlib import Path
 from typing import Any
 
 from core.pathing import (
@@ -62,7 +65,299 @@ class ActiveHuntController:
         self.direct_click_range = 4
         self.combat_confirm_timeout = 1.8
         self.monster_sprite_y_offset = -24
-        self.steer_interval = 0.12
+        self.steer_interval = 0.15
+        self.steer_lookahead_tiles = 4
+        self.steer_hysteresis_px = 12
+
+        self._calibration_path = Path(__file__).resolve().parents[1] / "screen_calibration.json"
+        self._calibration: dict[str, Any] | None = None
+        self._calibration_status = "not_calibrated"
+        self._calibration_message = "Run screen calibration before active hunting."
+        self._calibration_thread: threading.Thread | None = None
+        self._load_calibration()
+
+    def _load_calibration(self):
+        try:
+            data = json.loads(self._calibration_path.read_text(encoding="utf-8"))
+            coeffs = data.get("coefficients")
+            if (
+                isinstance(coeffs, dict)
+                and len(coeffs.get("screen_x", [])) == 3
+                and len(coeffs.get("screen_y", [])) == 3
+            ):
+                self._calibration = data
+                self._calibration_status = "ready"
+                self._calibration_message = (
+                    f"Calibration loaded (RMSE {data.get('rmse_px', '?')} px)."
+                )
+        except Exception:
+            self._calibration = None
+
+    def _save_calibration(self):
+        if self._calibration:
+            self._calibration_path.write_text(
+                json.dumps(self._calibration, indent=2),
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _solve_3x3(matrix: list[list[float]], vector: list[float]) -> list[float]:
+        a = [row[:] + [vector[i]] for i, row in enumerate(matrix)]
+        for col in range(3):
+            pivot = max(range(col, 3), key=lambda r: abs(a[r][col]))
+            if abs(a[pivot][col]) < 1e-9:
+                raise ValueError("Calibration samples are not geometrically independent.")
+            a[col], a[pivot] = a[pivot], a[col]
+            div = a[col][col]
+            a[col] = [v / div for v in a[col]]
+            for row in range(3):
+                if row == col:
+                    continue
+                factor = a[row][col]
+                a[row] = [
+                    a[row][c] - factor * a[col][c]
+                    for c in range(4)
+                ]
+        return [a[i][3] for i in range(3)]
+
+    @classmethod
+    def _least_squares_affine(
+        cls,
+        samples: list[dict[str, float]],
+        key: str,
+    ) -> list[float]:
+        # Fit value = c0 + c1*dx + c2*dy using normal equations.
+        ata = [[0.0] * 3 for _ in range(3)]
+        atb = [0.0] * 3
+        for sample in samples:
+            row = [1.0, sample["dx"], sample["dy"]]
+            value = sample[key]
+            for i in range(3):
+                atb[i] += row[i] * value
+                for j in range(3):
+                    ata[i][j] += row[i] * row[j]
+        return cls._solve_3x3(ata, atb)
+
+    def _client_geometry(self, hwnd: int) -> dict[str, int] | None:
+        rect = RECT()
+        if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+            return None
+        origin = POINT(0, 0)
+        if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+            return None
+        return {
+            "left": int(origin.x),
+            "top": int(origin.y),
+            "width": int(rect.right - rect.left),
+            "height": int(rect.bottom - rect.top),
+        }
+
+    def _calibration_valid_for_window(self, hwnd: int) -> bool:
+        if not self._calibration:
+            return False
+        geometry = self._client_geometry(hwnd)
+        if not geometry:
+            return False
+        saved = self._calibration.get("window") or {}
+        return (
+            abs(int(saved.get("width", -9999)) - geometry["width"]) <= 2
+            and abs(int(saved.get("height", -9999)) - geometry["height"]) <= 2
+        )
+
+    def _project_map_delta(
+        self,
+        hwnd: int,
+        dx: int,
+        dy: int,
+    ) -> tuple[int, int] | None:
+        geometry = self._client_geometry(hwnd)
+        if not geometry:
+            return None
+
+        if self._calibration_valid_for_window(hwnd):
+            coeffs = self._calibration["coefficients"]
+            cx = coeffs["screen_x"]
+            cy = coeffs["screen_y"]
+            local_x = cx[0] + cx[1] * dx + cx[2] * dy
+            local_y = cy[0] + cy[1] * dx + cy[2] * dy
+            return (
+                geometry["left"] + int(round(local_x)),
+                geometry["top"] + int(round(local_y)),
+            )
+
+        return None
+
+    def _wait_for_position_settle(
+        self,
+        start: tuple[int, int],
+        timeout: float = 5.0,
+    ) -> tuple[int, int]:
+        deadline = time.time() + timeout
+        previous = start
+        last_change = time.time()
+        moved = False
+        while time.time() < deadline:
+            time.sleep(0.10)
+            snapshot = authenticated_client_monitor.snapshot()
+            world = (snapshot.get("live_state") or {}).get("world") or {}
+            x, y = world.get("x"), world.get("y")
+            if x is None or y is None:
+                continue
+            current = (int(x), int(y))
+            if current != previous:
+                moved = True
+                previous = current
+                last_change = time.time()
+            if moved and time.time() - last_change >= 0.65:
+                return current
+        return previous
+
+    def _run_calibration(self):
+        self._calibration_status = "running"
+        self._calibration_message = "Calibrating screen/map transform..."
+        try:
+            hwnd = self._find_classic_window()
+            if not hwnd:
+                raise RuntimeError("Classic.exe window not found.")
+
+            geometry = self._client_geometry(hwnd)
+            if not geometry:
+                raise RuntimeError("Could not read Classic.exe client geometry.")
+
+            # Deliberately click screen-space directions; network X/Y tells us
+            # which map displacement each pixel direction actually represents.
+            cx = int(geometry["width"] * 0.50)
+            cy = int(geometry["height"] * 0.46)
+            offsets = [
+                (120, 0),
+                (-120, 0),
+                (0, 90),
+                (0, -90),
+                (95, 65),
+                (-95, -65),
+            ]
+            samples: list[dict[str, float]] = []
+
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.4)
+
+            for ox, oy in offsets:
+                snapshot = authenticated_client_monitor.snapshot()
+                world = (snapshot.get("live_state") or {}).get("world") or {}
+                sx, sy = world.get("x"), world.get("y")
+                if sx is None or sy is None:
+                    continue
+
+                start = (int(sx), int(sy))
+                local_x = cx + ox
+                local_y = cy + oy
+                screen_x = geometry["left"] + local_x
+                screen_y = geometry["top"] + local_y
+
+                self._click_screen(hwnd, screen_x, screen_y)
+                end = self._wait_for_position_settle(start)
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+
+                if dx == 0 and dy == 0:
+                    continue
+
+                samples.append({
+                    "dx": float(dx),
+                    "dy": float(dy),
+                    "screen_x": float(local_x),
+                    "screen_y": float(local_y),
+                })
+                time.sleep(0.25)
+
+            if len(samples) < 3:
+                raise RuntimeError(
+                    "Not enough movement samples. Stand in a large open area and calibrate again."
+                )
+
+            coeff_x = self._least_squares_affine(samples, "screen_x")
+            coeff_y = self._least_squares_affine(samples, "screen_y")
+
+            squared = 0.0
+            for sample in samples:
+                px = coeff_x[0] + coeff_x[1] * sample["dx"] + coeff_x[2] * sample["dy"]
+                py = coeff_y[0] + coeff_y[1] * sample["dx"] + coeff_y[2] * sample["dy"]
+                squared += (px - sample["screen_x"]) ** 2 + (py - sample["screen_y"]) ** 2
+            rmse = math.sqrt(squared / max(1, len(samples)))
+
+            if rmse > 45:
+                raise RuntimeError(
+                    f"Calibration was inconsistent (RMSE {rmse:.1f}px). "
+                    "Use a more open area and keep the game window unchanged."
+                )
+
+            self._calibration = {
+                "version": 1,
+                "window": {
+                    "width": geometry["width"],
+                    "height": geometry["height"],
+                },
+                "coefficients": {
+                    "screen_x": [round(v, 6) for v in coeff_x],
+                    "screen_y": [round(v, 6) for v in coeff_y],
+                },
+                "rmse_px": round(rmse, 2),
+                "samples": samples,
+                "created_at": time.time(),
+            }
+            self._save_calibration()
+            self._calibration_status = "ready"
+            self._calibration_message = (
+                f"Calibration ready: {len(samples)} samples, RMSE {rmse:.1f}px."
+            )
+            self._log(
+                "calibration_complete",
+                samples=len(samples),
+                rmse_px=round(rmse, 2),
+            )
+        except Exception as exc:
+            self._calibration_status = "error"
+            self._calibration_message = str(exc)
+            self._log("calibration_error", message=str(exc))
+
+    def start_calibration(self) -> dict[str, Any]:
+        with self._lock:
+            if self._running:
+                raise RuntimeError("Stop active hunt before calibrating.")
+            if self._calibration_status == "running":
+                return self.calibration_snapshot()
+            if not authenticated_client_monitor.snapshot().get("classic_pid"):
+                raise RuntimeError("Classic.exe is not detected.")
+            self._calibration_thread = threading.Thread(
+                target=self._run_calibration,
+                daemon=True,
+            )
+            self._calibration_thread.start()
+            return self.calibration_snapshot()
+
+    def clear_calibration(self) -> dict[str, Any]:
+        with self._lock:
+            self._calibration = None
+            self._calibration_status = "not_calibrated"
+            self._calibration_message = "Calibration cleared."
+            try:
+                self._calibration_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return self.calibration_snapshot()
+
+    def calibration_snapshot(self) -> dict[str, Any]:
+        calibration = self._calibration or {}
+        return {
+            "status": self._calibration_status,
+            "message": self._calibration_message,
+            "ready": self._calibration_status == "ready",
+            "window": calibration.get("window"),
+            "rmse_px": calibration.get("rmse_px"),
+            "sample_count": len(calibration.get("samples") or []),
+            "coefficients": calibration.get("coefficients"),
+        }
 
     def configure(self, payload: dict[str, Any]):
         with self._lock:
@@ -140,7 +435,19 @@ class ActiveHuntController:
         sy = -(dx + dy) * (self.tile_height / 2.0)
         return int(round(sx)), int(round(sy))
 
-    def _screen_offset_is_safe(self, dx: int, dy: int) -> bool:
+    def _screen_offset_is_safe(self, dx: int, dy: int, hwnd: int | None = None) -> bool:
+        if hwnd is not None and self._calibration_valid_for_window(hwnd):
+            geometry = self._client_geometry(hwnd)
+            point = self._project_map_delta(hwnd, dx, dy)
+            if geometry and point:
+                local_x = point[0] - geometry["left"]
+                local_y = point[1] - geometry["top"]
+                margin_x = 70
+                margin_y = 55
+                return (
+                    margin_x <= local_x <= geometry["width"] - margin_x
+                    and margin_y <= local_y <= geometry["height"] - margin_y
+                )
         off_x, off_y = self._map_delta_to_screen(dx, dy)
         return abs(off_x) <= self.max_screen_x and abs(off_y) <= self.max_screen_y
 
@@ -173,21 +480,15 @@ class ActiveHuntController:
         *,
         kind: str,
     ) -> bool:
-        center = self._client_center_screen(hwnd)
-        if not center:
-            return False
-
         dx = target_x - player_x
         dy = target_y - player_y
-        off_x, off_y = self._map_delta_to_screen(dx, dy)
-
-        # Never clamp a distant point to the screen edge; that changes the
-        # intended map tile. Refuse it and let the caller pick a nearer path cell.
-        if abs(off_x) > self.max_screen_x or abs(off_y) > self.max_screen_y:
+        point = self._project_map_delta(hwnd, dx, dy)
+        if point is None:
+            return False
+        if not self._screen_offset_is_safe(dx, dy, hwnd):
             return False
 
-        click_x = center[0] + off_x
-        click_y = center[1] + off_y
+        click_x, click_y = point
         if kind == "attack_click":
             click_y += self.monster_sprite_y_offset
         self._click_screen(hwnd, click_x, click_y)
@@ -209,15 +510,12 @@ class ActiveHuntController:
         target_x: int,
         target_y: int,
     ) -> tuple[int, int] | None:
-        center = self._client_center_screen(hwnd)
-        if not center:
-            return None
         dx = target_x - player_x
         dy = target_y - player_y
-        off_x, off_y = self._map_delta_to_screen(dx, dy)
-        if abs(off_x) > self.max_screen_x or abs(off_y) > self.max_screen_y:
+        point = self._project_map_delta(hwnd, dx, dy)
+        if point is None or not self._screen_offset_is_safe(dx, dy, hwnd):
             return None
-        return center[0] + off_x, center[1] + off_y
+        return point
 
     @staticmethod
     def _find_actor(snapshot: dict[str, Any], target_id: int) -> dict[str, Any] | None:
@@ -304,6 +602,7 @@ class ActiveHuntController:
     ):
         """Hold left mouse down and steer along the current clear A* corridor."""
         mouse_is_down = False
+        last_screen_point: tuple[int, int] | None = None
         try:
             while not self._stop.is_set():
                 snapshot = authenticated_client_monitor.snapshot()
@@ -334,7 +633,7 @@ class ActiveHuntController:
                 if (
                     distance <= self.direct_click_range
                     and clear_walk_line(grid, start, target_point)
-                    and self._screen_offset_is_safe(dx, dy)
+                    and self._screen_offset_is_safe(dx, dy, hwnd)
                 ):
                     return
 
@@ -352,9 +651,16 @@ class ActiveHuntController:
                 if not pathing.get("path_found") or len(path_preview) < 2:
                     return
 
-                move_point = self._furthest_visible_clear_path_point(
-                    grid, start, path_preview
-                )
+                # Stable short lookahead prevents A* from swinging the mouse
+                # between distant waypoints on every network update.
+                usable_end = max(1, len(path_preview) - 3)
+                index = min(self.steer_lookahead_tiles, usable_end)
+                item = path_preview[index]
+                move_point = (int(item["x"]), int(item["y"]))
+                if not clear_walk_line(grid, start, move_point):
+                    move_point = self._furthest_visible_clear_path_point(
+                        grid, start, path_preview[: index + 1]
+                    )
                 if move_point is None:
                     return
 
@@ -380,7 +686,13 @@ class ActiveHuntController:
                         map_to={"x": move_point[0], "y": move_point[1]},
                     )
                 else:
-                    user32.SetCursorPos(int(screen_point[0]), int(screen_point[1]))
+                    if (
+                        last_screen_point is None
+                        or abs(screen_point[0] - last_screen_point[0]) >= self.steer_hysteresis_px
+                        or abs(screen_point[1] - last_screen_point[1]) >= self.steer_hysteresis_px
+                    ):
+                        user32.SetCursorPos(int(screen_point[0]), int(screen_point[1]))
+                last_screen_point = screen_point
 
                 self._status = "walking"
                 self._message = (
@@ -600,6 +912,12 @@ class ActiveHuntController:
                 raise RuntimeError(
                     "Classic.exe is not detected. Launch SoulBound and enter the game first."
                 )
+            hwnd = self._find_classic_window()
+            if not hwnd or not self._calibration_valid_for_window(hwnd):
+                raise RuntimeError(
+                    "Screen calibration is required for this Classic.exe window size. "
+                    "Stand in an open area and click Calibrate screen first."
+                )
             self._stop.clear()
             self._engaged_target_id = None
             self._engaged_target_name = None
@@ -650,6 +968,7 @@ class ActiveHuntController:
                 },
                 "last_click": self._last_click,
                 "actions": self._actions[-20:],
+                "calibration": self.calibration_snapshot(),
                 "control_mode": (
                     "Windows mouse input to Classic.exe; authenticated network "
                     "session remains read-only."
