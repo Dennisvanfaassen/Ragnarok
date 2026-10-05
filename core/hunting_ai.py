@@ -8,6 +8,7 @@ from typing import Any
 
 from core.mouse_adapter import mouse_game_adapter
 from core.exploration import exploration_planner
+from core.hunt_routes import hunt_route_store
 from core.pathing import astar, build_pathing_state, clear_walk_line, nav_repository
 from core.state import app_state
 from core.targeting import build_targeting_state
@@ -71,6 +72,10 @@ class HuntingAI:
         self.wander_path: list[tuple[int, int]] = []
         self.wander_goal: tuple[int, int] | None = None
         self.wander_progress_index = 0
+        self.saved_route_map: str | None = None
+        self.saved_route_waypoint_index = 0
+        self.saved_route_direction = 1
+        self.saved_route_mode = "loop"
         self._attack_reposition_required = False
         self._attack_reposition_origin: tuple[int, int] | None = None
 
@@ -367,18 +372,128 @@ class HuntingAI:
             )
         return result
 
+    def _reset_saved_route_if_map_changed(self, map_name: str):
+        if self.saved_route_map != map_name:
+            self.saved_route_map = map_name
+            self.saved_route_waypoint_index = 0
+            self.saved_route_direction = 1
+            self.saved_route_mode = "loop"
+
+    def _advance_saved_route(self, count: int, mode: str):
+        if count <= 1:
+            self.saved_route_waypoint_index = 0
+            return
+
+        if mode == "pingpong":
+            nxt = self.saved_route_waypoint_index + self.saved_route_direction
+            if nxt >= count:
+                self.saved_route_direction = -1
+                nxt = count - 2
+            elif nxt < 0:
+                self.saved_route_direction = 1
+                nxt = 1
+            self.saved_route_waypoint_index = max(0, min(count - 1, nxt))
+            return
+
+        self.saved_route_waypoint_index = (
+            self.saved_route_waypoint_index + 1
+        ) % count
+
+    def _saved_route_target(
+        self,
+        map_name: str,
+        player: tuple[int, int],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        route = hunt_route_store.get(map_name)
+        points = route.get("waypoints") or []
+        if len(points) < 2:
+            return None, route
+
+        self._reset_saved_route_if_map_changed(map_name)
+        self.saved_route_mode = str(route.get("mode") or "loop")
+        self.saved_route_waypoint_index = max(
+            0,
+            min(self.saved_route_waypoint_index, len(points) - 1),
+        )
+
+        target = points[self.saved_route_waypoint_index]
+        target_pos = (int(target["x"]), int(target["y"]))
+
+        # Reaching a waypoint advances exactly one route step. Combat does not
+        # change this index, so hunting resumes where the patrol was interrupted.
+        if self._tile_distance(player, target_pos) <= 2:
+            self._advance_saved_route(len(points), self.saved_route_mode)
+            target = points[self.saved_route_waypoint_index]
+
+        return target, route
+
     def _choose_wander_path(self, snapshot: dict[str, Any]) -> bool:
         player = self._position(snapshot)
         map_name = self._world(snapshot).get("map")
         if player is None or not map_name:
             return False
+
+        map_name = str(map_name)
         try:
-            grid, _ = nav_repository.load(str(map_name))
+            grid, _ = nav_repository.load(map_name)
         except Exception:
             return False
 
+        # A user-defined hunting route has absolute priority over autonomous
+        # exploration. Each waypoint is a destination; A* supplies the safe
+        # cell path and the existing held-mouse executor walks it smoothly.
+        saved_target, saved_route = self._saved_route_target(
+            map_name,
+            player,
+        )
+        if saved_target is not None:
+            goal = (
+                int(saved_target["x"]),
+                int(saved_target["y"]),
+            )
+            path = astar(
+                grid,
+                player,
+                goal,
+                max_expansions=150000,
+            )
+            if path and len(path) >= 2:
+                self.wander_path = path
+                self.wander_goal = goal
+                self.wander_progress_index = 0
+                self._log(
+                    "saved_hunt_route",
+                    waypoint_index=self.saved_route_waypoint_index,
+                    waypoint_number=self.saved_route_waypoint_index + 1,
+                    mode=self.saved_route_mode,
+                    goal={"x": goal[0], "y": goal[1]},
+                    steps=len(path) - 1,
+                )
+                return True
+
+            # If we're already effectively on this waypoint, advance and retry
+            # immediately once rather than falling back to random exploration.
+            points = saved_route.get("waypoints") or []
+            if points and self._tile_distance(player, goal) <= 2:
+                self._advance_saved_route(len(points), self.saved_route_mode)
+                nxt = points[self.saved_route_waypoint_index]
+                goal = (int(nxt["x"]), int(nxt["y"]))
+                path = astar(
+                    grid,
+                    player,
+                    goal,
+                    max_expansions=150000,
+                )
+                if path and len(path) >= 2:
+                    self.wander_path = path
+                    self.wander_goal = goal
+                    self.wander_progress_index = 0
+                    return True
+
+            return False
+
         path = exploration_planner.choose_route(
-            str(map_name),
+            map_name,
             grid,
             player,
         )
@@ -1132,10 +1247,18 @@ class HuntingAI:
             self._stop.wait(0.08)
             return
 
-        self.message = (
-            f"Wandering smoothly toward {self.wander_goal[0]},{self.wander_goal[1]}"
-            + (" · narrow corridor" if narrow_corridor else "")
-        )
+        route = hunt_route_store.get(str(map_name))
+        if route.get("exists"):
+            self.message = (
+                f"Hunting route → point {self.saved_route_waypoint_index + 1} "
+                f"({self.wander_goal[0]},{self.wander_goal[1]})"
+                + (" · narrow corridor" if narrow_corridor else "")
+            )
+        else:
+            self.message = (
+                f"Wandering smoothly toward {self.wander_goal[0]},{self.wander_goal[1]}"
+                + (" · narrow corridor" if narrow_corridor else "")
+            )
         self._stop.wait(0.04 if narrow_corridor else 0.05)
 
     def _step_failed(self):
@@ -1287,6 +1410,18 @@ class HuntingAI:
                     "attack_precision": mouse_game_adapter.precision_snapshot(),
                     "wander_corridor_mode": "astar_clear_line_only",
                     "wander_progress_mode": "forward_only",
+                    "saved_hunt_route": {
+                        "map": self.saved_route_map,
+                        "waypoint_index": self.saved_route_waypoint_index,
+                        "waypoint_number": self.saved_route_waypoint_index + 1,
+                        "direction": self.saved_route_direction,
+                        "mode": self.saved_route_mode,
+                        "active": bool(
+                            hunt_route_store.get(
+                                str(self._world(authenticated_client_monitor.snapshot()).get("map") or "")
+                            ).get("exists")
+                        ),
+                    },
                     "exploration": exploration_planner.snapshot(),
                 },
                 "calibration": mouse_game_adapter.calibration_snapshot(),
