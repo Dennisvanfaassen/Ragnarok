@@ -257,11 +257,11 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </label>
       </div>
       <div class="row">
-        <label>Path lookahead (tiles)
-          <input id="moveLookahead" type="number" min="1" max="10" value="5">
+        <label>Movement behavior
+          <input value="Furthest clear point toward target" disabled>
         </label>
-        <label>Attack range (tiles)
-          <input id="attackRange" type="number" min="1" max="8" value="1">
+        <label>Combat behavior
+          <input value="Click once, then wait for target death" disabled>
         </label>
       </div>
       <div class="actions">
@@ -500,9 +500,7 @@ async function stopAuthenticatedClient(){
 async function startActiveHunt(){
   const body={
     tile_width:+document.getElementById('tileWidth').value,
-    tile_height:+document.getElementById('tileHeight').value,
-    lookahead:+document.getElementById('moveLookahead').value,
-    attack_range:+document.getElementById('attackRange').value
+    tile_height:+document.getElementById('tileHeight').value
   };
   const r=await fetch('/api/active-hunt/start',{
     method:'POST',
