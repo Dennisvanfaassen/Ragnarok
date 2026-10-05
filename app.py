@@ -445,6 +445,14 @@ async def stop_full_automation():
     return full_automation_controller.stop()
 
 
+@app.post("/api/full-automation/force-town-cycle")
+async def force_full_automation_town_cycle():
+    try:
+        return full_automation_controller.force_town_cycle()
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.get("/api/full-automation")
 async def full_automation_state():
     return full_automation_controller.snapshot()
