@@ -17,7 +17,10 @@ user32 = ctypes.windll.user32
 SW_RESTORE = 9
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
 KEYEVENTF_KEYUP = 0x0002
+VK_MENU = 0x12  # Alt
 
 
 class POINT(ctypes.Structure):
@@ -246,6 +249,31 @@ class MouseGameAdapter:
             "map_from": {"x": int(player[0]), "y": int(player[1])},
             "map_to": {"x": int(target[0]), "y": int(target[1])},
             "input_mode": "windows_mouse_click",
+        }
+
+    def alt_right_click_screen(self, x: int, y: int) -> dict[str, Any]:
+        hwnd = self._find_window()
+        if not hwnd:
+            return {"ok": False, "reason": "window_not_found"}
+
+        self.release_hold_move()
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetCursorPos(int(x), int(y))
+        time.sleep(0.020)
+
+        user32.keybd_event(VK_MENU, 0, 0, 0)
+        time.sleep(0.025)
+        user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+        time.sleep(0.035)
+        user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+        time.sleep(0.020)
+        user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+
+        return {
+            "ok": True,
+            "screen": {"x": int(x), "y": int(y)},
+            "input_mode": "windows_alt_right_click",
         }
 
     def press_hotkey(self, key: str) -> dict[str, Any]:
