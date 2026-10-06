@@ -34,6 +34,19 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .monster-title{font-weight:800;font-size:15px}.monster-meta{font-size:12px;color:var(--muted)}
 .drop-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.drop-chip{border:1px solid var(--line);background:#111825;border-radius:999px;padding:7px 9px;font-size:12px;display:flex;align-items:center;gap:6px}
 .drop-chip input{width:auto;margin:0}.section-note{padding:12px;border:1px solid var(--line);background:#0c1119;border-radius:11px;color:var(--muted);font-size:12px}
+.command-hero{display:grid;grid-template-columns:1.4fr .8fr;gap:16px;align-items:stretch}
+.hero-panel{background:linear-gradient(135deg,#181f31,#111722);border:1px solid #303a50;border-radius:18px;padding:22px}
+.hero-title{font-size:24px;font-weight:850;margin:0 0 7px}.hero-sub{color:var(--muted);font-size:13px;line-height:1.55}
+.quick-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.status-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+.status-tile{background:#0c1119;border:1px solid var(--line);border-radius:12px;padding:13px}
+.status-tile strong{display:block;font-size:18px;margin-top:5px}
+.summary-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.summary-row{display:flex;justify-content:space-between;gap:16px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13px}
+.summary-row:last-child{border-bottom:0}.summary-row span{color:var(--muted)}.summary-row strong{text-align:right}
+.nav-group-label{padding:16px 13px 5px!important;font-size:10px!important;text-transform:uppercase;letter-spacing:.12em;color:#616c81!important;cursor:default!important}
+.advanced-note{border-left:3px solid var(--accent);padding:10px 12px;background:#0d121b;color:var(--muted);font-size:12px;border-radius:8px}
+@media(max-width:900px){.command-hero{grid-template-columns:1fr}.status-strip,.summary-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.hunt-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.shell{grid-template-columns:1fr}.side{display:none}.card,.wide{grid-column:1/-1}.main{padding:18px}}
@@ -45,12 +58,13 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
   <div class="brand">RO <span>Control</span></div>
   <div class="nav">
     <div id="navDashboard" class="active" onclick="switchView('dashboard')">Dashboard</div>
-    <div id="navHunting" onclick="switchView('hunting')">Hunting</div>
-    <div id="navMap" onclick="switchView('map')">Map</div>
-    <div id="navStorage" onclick="switchView('storage')">Selling & Storage</div>
-    <div>Healing & Supplies</div>
-    <div>Server</div>
-    <div>Logs</div>
+    <div class="nav-group-label">Bot setup</div>
+    <div id="navHunting" onclick="switchView('hunting')">Hunting & Loot</div>
+    <div id="navSupplies" onclick="switchView('supplies')">Healing & Supplies</div>
+    <div id="navStorage" onclick="switchView('storage')">Inventory & Town</div>
+    <div id="navMap" onclick="switchView('map')">Map & Route</div>
+    <div class="nav-group-label">System</div>
+    <div id="navAdvanced" onclick="switchView('advanced')">Advanced & Diagnostics</div>
   </div>
 </aside>
 <main class="main">
@@ -59,370 +73,228 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     <div class="status"><span id="dot" class="dot"></span><span id="status">stopped</span></div>
   </div>
   <div id="dashboardView" class="grid">
-    <section class="card"><h2>Current action</h2><div id="action" class="metric">Idle</div><div id="message" class="muted">Ready</div></section>
-    <section class="card"><h2>Location</h2><div id="location" class="metric">—</div><div class="muted">Exact map/X/Y will come from network state</div></section>
-    <section class="card"><h2>Target</h2><div id="target" class="metric">—</div><div class="muted">Combat queue</div></section>
-
-    <section class="card wide">
-      <h2>Bot profile</h2>
-      <div class="row">
+    <section class="full command-hero">
+      <div class="hero-panel">
+        <div class="muted">RO Control</div>
+        <div class="hero-title">Bot command center</div>
+        <div class="hero-sub">One place to start the bot, see what it is doing, and jump directly to the settings that matter.</div>
+        <div class="quick-actions">
+          <button class="action" onclick="startFullAutomation()">Start full automation</button>
+          <button class="action danger" onclick="stopFullAutomation()">Stop automation</button>
+          <button class="action secondary" onclick="switchView('hunting')">Edit hunt</button>
+          <button class="action secondary" onclick="switchView('supplies')">Supplies</button>
+        </div>
+        <div class="status-strip">
+          <div class="status-tile"><div class="muted">Action</div><strong id="action">Idle</strong><div id="message" class="muted">Ready</div></div>
+          <div class="status-tile"><div class="muted">Location</div><strong id="location">—</strong><div class="muted">Live map position</div></div>
+          <div class="status-tile"><div class="muted">Target</div><strong id="target">—</strong><div class="muted">Current combat target</div></div>
+          <div class="status-tile"><div class="muted">Global hotkey</div><strong>]</strong><div id="hotkeyStatus" class="muted">checking…</div></div>
+        </div>
+      </div>
+      <div class="hero-panel">
+        <h2>Active profile</h2>
         <label>Profile name<input id="profileName" value="Default"></label>
         <label>Server<select id="server"><option value="soulbound">Soulbound Journey</option></select></label>
+        <div class="summary-row"><span>Hunting map</span><strong id="summaryHuntMap">Not configured</strong></div>
+        <div class="summary-row"><span>Monsters enabled</span><strong id="summaryMonsterCount">0</strong></div>
+        <div class="summary-row"><span>Healing</span><strong id="summaryHealing">—</strong></div>
+        <div class="summary-row"><span>ASPD consumable</span><strong id="summaryAspd">—</strong></div>
+        <div class="summary-row"><span>Town return</span><strong id="summaryTownReturn">—</strong></div>
+        <div class="quick-actions">
+          <button class="action" onclick="saveProfile()">Save profile</button>
+          <button class="action secondary" onclick="loadProfile()">Reload</button>
+        </div>
       </div>
-      <div class="muted" style="margin-bottom:12px">
-        Hunting, monster targeting, loot rules, healing and return settings are now managed in the Hunting tab.
+    </section>
+
+    <section class="card wide">
+      <h2>Live character</h2>
+      <div class="summary-grid">
+        <div>
+          <div class="summary-row"><span>Map</span><strong id="liveMap">—</strong></div>
+          <div class="summary-row"><span>Position</span><strong id="livePos">X: — · Y: —</strong></div>
+          <div class="summary-row"><span>HP</span><strong id="liveHp">HP —</strong></div>
+          <div class="summary-row"><span>SP</span><strong id="liveSp">SP —</strong></div>
+        </div>
+        <div>
+          <div class="summary-row"><span>Weight</span><strong id="dashLiveWeight">—</strong></div>
+          <div class="summary-row"><span>Nearby actors</span><strong id="dashLiveActors">0</strong></div>
+          <div class="summary-row"><span>Automation phase</span><strong id="dashAutomationPhase">idle</strong></div>
+          <div class="summary-row"><span>Saved town</span><strong id="dashSavedTown">—</strong></div>
+        </div>
       </div>
-      <div class="actions">
-        <button class="action" onclick="switchView('hunting')">Open Hunting setup</button>
-        <button class="action secondary" onclick="probe()">Test server</button>
-        <button class="action" onclick="startBot()">Start</button>
-        <button class="action danger" onclick="stopBot()">Stop</button>
-      </div>
+      <input id="liveWeight" value="—" disabled style="display:none">
+      <input id="liveActors" value="0" disabled style="display:none">
+      <input id="liveActorBreakdown" value="0 / 0 / 0" disabled style="display:none">
+      <input id="liveReturnTrigger" value="70%" disabled style="display:none">
     </section>
 
     <section class="card">
-      <h2>Connection</h2>
-      <div class="muted">Soulbound login server</div>
-      <div class="metric" style="font-size:18px">88.214.58.232:6900</div>
-      <div class="muted">Packet profile: kRO_2021-06-30</div>
-    </section>
-
-    <section class="card full">
-      <h2>Direct login test</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Tests whether Soulbound accepts a standalone Ragnarok login session.
-        Username/password are sent only for this request and are not saved.
-      </div>
-      <div class="row">
-        <label>Username
-          <input id="loginUser" autocomplete="off">
-        </label>
-        <label>Password
-          <input id="loginPass" type="password" autocomplete="off">
-        </label>
-      </div>
-      <div class="row">
-        <label>Client hash (optional for first test)
-          <input id="clientHash" placeholder="32 hex characters">
-        </label>
-        <label>Protocol
-          <input value="0x0064 / kRO_2021-06-30" disabled>
-        </label>
-      </div>
+      <h2>Automation</h2>
+      <label>Phase<input id="fullAutomationPhase" value="idle" disabled></label>
+      <label>Message<input id="fullAutomationMessage" value="Ready" disabled></label>
+      <label>Saved town<input id="fullAutomationTown" value="—" disabled></label>
+      <label>Live weight<input id="fullAutomationWeight" value="—" disabled></label>
       <div class="actions">
-        <button class="action" onclick="loginProbe()">Test direct login</button>
+        <button class="action secondary" onclick="forceTownCycle()">Test town cycle</button>
       </div>
     </section>
 
     <section class="card full">
-      <h2>Client diagnostics</h2>
-      <div class="row">
-        <label>Classic.exe path
-          <input id="exePath" placeholder="C:\\SoulBoundRO\\Soubound_Journey_Client\\Classic.exe">
-        </label>
-        <label>Protocol discovery
-          <input value="Local metadata + executable fingerprint" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action secondary" onclick="scanClient()">Scan client</button>
+      <h2>Setup checklist</h2>
+      <div class="summary-grid">
+        <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('hunting')"><strong>1. Hunting & loot</strong><br>Choose map, monsters, priorities and drops.</button>
+        <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('supplies')"><strong>2. Healing & supplies</strong><br>Food, HP threshold, ASPD potion and stock targets.</button>
+        <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('storage')"><strong>3. Inventory & town</strong><br>Keep, store, sell and restock rules.</button>
+        <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('map')"><strong>4. Map & route</strong><br>Automatic exploration or a custom patrol route.</button>
       </div>
     </section>
+  </div>
 
-    <section class="card full">
-      <h2>Handshake diagnostics</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Starts a local proxy on 127.0.0.1:16900 and forwards to Soulbound 88.214.58.232:6900.
-        It stores only packet direction, byte count, first 16-bit opcode, timestamp and SHA-256 — never raw payloads.
-      </div>
-      <div class="actions">
-        <button class="action secondary" onclick="startHandshake()">Start handshake proxy</button>
-        <button class="action secondary" onclick="refreshHandshake()">Refresh handshake</button>
-        <button class="action danger" onclick="stopHandshake()">Stop proxy</button>
-      </div>
-    </section>
+  <div id="suppliesView" class="view-hidden">
+    <div class="grid">
+      <section class="card full">
+        <div class="hunt-hero">
+          <div>
+            <h2 style="font-size:20px;margin-bottom:7px">Healing & Supplies</h2>
+            <div class="muted">Choose what the character consumes while hunting and how much RO Control should keep stocked.</div>
+          </div>
+          <div class="section-note">Native mode uses inventory items directly; no physical hotkey input is required.</div>
+        </div>
+      </section>
 
-    <section class="card full">
-      <h2>Authenticated Client Mode</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Launches SoulBound.exe from this dashboard, waits for Classic.exe, and live-monitors
-        the authenticated Ragnarok login/character/map traffic. Observer mode only.
-      </div>
-      <div class="row">
-        <label>SoulBound.exe path
-          <input id="patcherPath" placeholder="C:\\SoulBoundRO\\SoulBound.exe">
-        </label>
-        <label>Status
-          <input id="authClientStatus" value="stopped" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action" onclick="startAuthenticatedClient()">Launch SoulBound</button>
-        <button class="action secondary" onclick="refreshAuthenticatedClient()">Refresh status</button>
-        <button class="action danger" onclick="stopAuthenticatedClient()">Stop monitor</button>
-      </div>
-    </section>
+      <section class="card wide">
+        <h2>Healing food / item</h2>
+        <div class="row">
+          <label>Healing enabled
+            <select id="healEnabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select>
+          </label>
+          <label>Use below HP %
+            <input id="healPercent" type="number" min="1" max="99" value="50">
+          </label>
+        </div>
+        <div class="row">
+          <label>Food / healing item
+            <input id="healItem" value="Meat" placeholder="Meat">
+          </label>
+          <label>Fallback hotkey
+            <input id="healHotkey" value="1">
+          </label>
+        </div>
+        <div class="section-note">Example: Meat at 50% means the bot uses Meat whenever HP drops below 50%, respecting the healing cooldown.</div>
+      </section>
 
-    <section class="card full">
-      <h2>Live Game State</h2>
-      <div class="row">
-        <section class="card" style="grid-column:span 6">
-          <h2>Position</h2>
-          <div id="liveMap" class="metric" style="font-size:20px">—</div>
-          <div id="livePos" class="muted">X: — · Y: —</div>
-        </section>
-        <section class="card" style="grid-column:span 6">
-          <h2>Vitals</h2>
-          <div id="liveHp" class="metric" style="font-size:20px">HP —</div>
-          <div id="liveSp" class="muted">SP —</div>
-        </section>
-      </div>
-      <div class="row">
-        <label>Weight
-          <input id="liveWeight" value="—" disabled>
+      <section class="card">
+        <h2>ASPD potion</h2>
+        <label>Use ASPD consumable
+          <select id="aspdEnabled"><option value="false">Disabled</option><option value="true">Enabled</option></select>
         </label>
-        <label>Return trigger
-          <input id="liveReturnTrigger" value="70%" disabled>
-        </label>
-      </div>
-      <div class="row">
-        <label>Nearby actors
-          <input id="liveActors" value="0" disabled>
-        </label>
-        <label>Monsters / Players / Other
-          <input id="liveActorBreakdown" value="0 / 0 / 0" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action secondary" onclick="refreshAuthenticatedClient()">Refresh live state</button>
-      </div>
-    </section>
+        <label>Item name<input id="aspdItem" value="Awakening Potion"></label>
+        <div class="row">
+          <label>Item ID<input id="aspdNameId" type="number" min="1" value="656"></label>
+          <label>Reuse every minutes<input id="aspdReuseMinutes" type="number" min="1" step="0.5" value="30"></label>
+        </div>
+        <label>Restock target<input id="aspdRestockTarget" type="number" min="0" value="4"></label>
+      </section>
 
-    <section class="card full">
-      <h2>Targeting v1</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Uses your Hunt profile monster list and live actor positions to select the nearest valid target.
-        Read-only for now: no movement or attack packets are sent.
-      </div>
-      <div class="row">
-        <section class="card" style="grid-column:span 6">
-          <h2>Selected target</h2>
-          <div id="selectedTarget" class="metric" style="font-size:20px">—</div>
-          <div id="selectedTargetMeta" class="muted">No valid target yet</div>
-        </section>
-        <section class="card" style="grid-column:span 6">
-          <h2>Candidate monsters</h2>
-          <div id="candidateCount" class="metric" style="font-size:20px">0</div>
-          <div class="muted">Filtered using Bot profile → Monsters</div>
-        </section>
-      </div>
-      <div style="overflow:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead>
-            <tr>
-              <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Name</th>
-              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">ID</th>
-              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">X</th>
-              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">Y</th>
-              <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">Tiles</th>
-            </tr>
-          </thead>
-          <tbody id="targetRows">
-            <tr><td colspan="5" class="muted" style="padding:10px">No candidates yet</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+      <section class="card full">
+        <h2>Travel & emergency supplies</h2>
+        <div class="row">
+          <label>Target Butterfly Wings<input id="butterflyTarget" type="number" min="0" value="1"></label>
+          <label>Teleport item<input id="teleportItem" value="Fly Wing"></label>
+        </div>
+        <div class="row">
+          <label>Emergency HP below %<input id="emergencyHp" type="number" min="1" max="99" value="20"></label>
+          <label>Emergency action
+            <select id="emergencyAction"><option value="teleport" selected>Teleport away</option><option value="stop">Stop hunting</option><option value="none">None</option></select>
+          </label>
+        </div>
+        <input id="awakeningTarget" type="number" value="4" style="display:none">
+        <div class="actions">
+          <button class="action" onclick="saveProfile()">Save supplies</button>
+          <button class="action secondary" onclick="switchView('storage')">Configure restocking</button>
+        </div>
+      </section>
+    </div>
+  </div>
 
-    <section class="card full">
-      <h2>Pathing v1</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Calculates a walkable A* route from your live position to the selected target using the GAT navigation grid.
-        Read-only: no movement packets are sent yet.
-      </div>
-      <div class="row">
-        <section class="card" style="grid-column:span 6">
-          <h2>Route</h2>
-          <div id="pathStatus" class="metric" style="font-size:20px">Waiting</div>
-          <div id="pathMeta" class="muted">No route calculated yet</div>
-        </section>
-        <section class="card" style="grid-column:span 6">
-          <h2>Next waypoint</h2>
-          <div id="nextWaypoint" class="metric" style="font-size:20px">—</div>
-          <div id="pathMapMeta" class="muted">Map: —</div>
-        </section>
-      </div>
-      <div class="row">
-        <label>Start → Goal
-          <input id="pathEndpoints" value="—" disabled>
-        </label>
-        <label>Path / waypoints
-          <input id="pathCounts" value="—" disabled>
-        </label>
-      </div>
-    </section>
+  <div id="advancedView" class="view-hidden">
+    <div class="grid">
+      <section class="card full">
+        <h2>Advanced & Diagnostics</h2>
+        <div class="advanced-note">Protocol tools, client inspection and low-level tests live here. Normal players should not need this page for everyday bot configuration.</div>
+      </section>
 
-    <section class="card full">
-      <h2>Movement + Attack v1</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Uses the live path and normal mouse input to Classic.exe. The network session remains read-only.
-      </div>
-      <div class="row">
-        <label>Movement segment (tiles)
-          <input id="moveSegmentTiles" type="number" min="1" max="8" value="6">
-        </label>
-        <label>Attack range (tiles)
-          <input id="attackRange" type="number" min="1" max="8" value="1">
-        </label>
-      </div>
-      <div class="row">
-        <label>Monster sprite Y offset (px)
-          <input id="spriteYOffset" type="number" value="-24">
-        </label>
-        <label>Window mode
-          <input value="Supported — calibration is tied to this client size" disabled>
-        </label>
-      </div>
-      <div class="row">
-        <label>Screen calibration
-          <input id="calibrationStatus" value="not calibrated" disabled>
-        </label>
-        <label>Calibration quality
-          <input id="calibrationQuality" value="—" disabled>
-        </label>
-      </div>
-      <div class="actions" style="margin-bottom:12px">
-        <button class="action secondary" onclick="startCalibration()">Calibrate screen</button>
-        <button class="action secondary" onclick="refreshCalibration()">Refresh calibration</button>
-        <button class="action danger" onclick="clearCalibration()">Clear calibration</button>
-      </div>
-      <div class="muted" style="margin-bottom:12px">
-        Before calibrating: stand in a large open area and do not touch the mouse for about 30 seconds.
-        RO Control will make several controlled movement clicks and learn the real map-to-screen projection for this exact window size.
-      </div>
-      <div class="row">
-        <label>Movement behavior
-          <input value="OpenKore-style discrete route segments" disabled>
-        </label>
-        <label>Combat behavior
-          <input value="Target lock → confirm combat → wait for death" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action" onclick="startActiveHunt()">Start movement + attack</button>
-        <button class="action danger" onclick="stopActiveHunt()">Stop active hunt</button>
-      </div>
-      <div class="row" style="margin-top:12px">
-        <label>Status
-          <input id="activeHuntStatus" value="stopped" disabled>
-        </label>
-        <label>Last action
-          <input id="activeHuntMessage" value="Idle" disabled>
-        </label>
-      </div>
-      <div class="row">
-        <label>Global Full Automation toggle
-          <input id="hotkeyStatus" value="] — checking..." disabled>
-        </label>
-        <label>Hotkey behavior
-          <input value="] starts/stops Full Hunt Automation globally" disabled>
-        </label>
-      </div>
-    </section>
+      <section class="card full">
+        <h2>Authenticated client</h2>
+        <div class="row">
+          <label>SoulBound.exe path<input id="patcherPath" placeholder="C:\SoulBoundRO\SoulBound.exe"></label>
+          <label>Status<input id="authClientStatus" value="stopped" disabled></label>
+        </div>
+        <div class="actions"><button class="action" onclick="startAuthenticatedClient()">Launch SoulBound</button><button class="action secondary" onclick="refreshAuthenticatedClient()">Refresh</button><button class="action danger" onclick="stopAuthenticatedClient()">Stop monitor</button></div>
+      </section>
 
-    <section class="card full">
-      <h2>Full Hunt Automation</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Runs the complete profile loop: selected hunt map/monsters → loot all → heal with the configured hotkey → Butterfly Wing at the configured weight → nearest Kafra → storage → nearest Tool Dealer → restock → route back to the hunt map.
-      </div>
-      <div class="row">
-        <label>Automation phase
-          <input id="fullAutomationPhase" value="idle" disabled>
-        </label>
-        <label>Automation message
-          <input id="fullAutomationMessage" value="Ready" disabled>
-        </label>
-      </div>
-      <div class="row">
-        <label>Detected saved town
-          <input id="fullAutomationTown" value="—" disabled>
-        </label>
-        <label>Live weight
-          <input id="fullAutomationWeight" value="—" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action" onclick="startFullAutomation()">Start full automation</button>
-        <button class="action secondary" onclick="forceTownCycle()">Test town cycle now</button>
-        <button class="action danger" onclick="stopFullAutomation()">Stop full automation</button>
-        <button class="action secondary" onclick="previewHuntReturnRoute()">Preview route to hunt map</button>
-      </div>
-    </section>
+      <section class="card full">
+        <h2>Client / protocol diagnostics</h2>
+        <div class="row"><label>Classic.exe path<input id="exePath" placeholder="C:\SoulBoundRO\Classic.exe"></label><label>Packet profile<input value="kRO_2021-06-30" disabled></label></div>
+        <div class="actions"><button class="action secondary" onclick="scanClient()">Scan client</button><button class="action secondary" onclick="probe()">Test server</button><button class="action secondary" onclick="startHandshake()">Start handshake proxy</button><button class="action danger" onclick="stopHandshake()">Stop proxy</button></div>
+      </section>
 
-    <section class="card full">
-      <h2>Smart Navigation</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Hunting now preserves direction and explores low-coverage parts of the map. Town travel uses a portal graph and smooth held-mouse routing.
-      </div>
-      <div class="row">
-        <label>Exploration mode
-          <input value="Persistent heading + map coverage sweep" disabled>
-        </label>
-        <label>Town travel
-          <input id="townTravelStatus" value="idle" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action secondary" onclick="previewTownRoute()">Preview town route</button>
-        <button class="action" onclick="startTownTravel()">Go to town</button>
-        <button class="action danger" onclick="stopTownTravel()">Stop town travel</button>
-      </div>
-    </section>
+      <section class="card full">
+        <h2>Direct login test</h2>
+        <div class="row"><label>Username<input id="loginUser" autocomplete="off"></label><label>Password<input id="loginPass" type="password" autocomplete="off"></label></div>
+        <div class="row"><label>Client hash<input id="clientHash" placeholder="optional"></label><label>Protocol<input value="0x0064 / kRO_2021-06-30" disabled></label></div>
+        <div class="actions"><button class="action secondary" onclick="loginProbe()">Test direct login</button></div>
+      </section>
 
-    <section class="card full">
-      <h2>Wireshark capture analyzer</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Upload a short .pcap or .pcapng from a normal patcher → login → character-select session.
-        The analyzer only returns packet metadata plus non-secret protocol fields such as version/master_version.
-      </div>
-      <div class="row">
-        <label>Capture file
-          <input id="pcapFile" type="file" accept=".pcap,.pcapng">
-        </label>
-        <label>Recommended capture window
-          <input value="Start before patcher launch; stop after character select" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action secondary" onclick="analyzePcap()">Analyze capture</button>
-      </div>
-    </section>
+      <section class="card full">
+        <h2>Targeting / pathing inspector</h2>
+        <div class="row">
+          <label>Selected target<input id="selectedTarget" value="—" disabled></label>
+          <label>Candidate count<input id="candidateCount" value="0" disabled></label>
+        </div>
+        <div id="selectedTargetMeta" class="muted">No valid target yet</div>
+        <div class="row" style="margin-top:12px">
+          <label>Path state<input id="pathStatus" value="waiting" disabled></label>
+          <label>Next waypoint<input id="nextWaypoint" value="—" disabled></label>
+        </div>
+        <input id="pathMeta" value="No route calculated yet" disabled>
+        <input id="pathMapMeta" value="Map: —" disabled style="margin-top:8px">
+        <input id="pathEndpoints" value="—" disabled style="margin-top:8px">
+        <input id="pathCounts" value="—" disabled style="margin-top:8px">
+        <table style="display:none"><tbody id="targetRows"></tbody></table>
+      </section>
 
-    <section class="card full">
-      <h2>Hunting Diagnostic Recorder</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Record one hunting session so movement, targets, mouse steering, packet confirmations and key screenshots can be analyzed together.
-        No passwords or raw packet payloads are stored.
-      </div>
-      <div class="row">
-        <label>Recorder
-          <input id="diagStatus" value="idle" disabled>
-        </label>
-        <label>Captured
-          <input id="diagCounts" value="0 samples · 0 events · 0 screenshots" disabled>
-        </label>
-      </div>
-      <div class="actions">
-        <button class="action" onclick="startHuntDiagnostic()">Start diagnostic</button>
-        <button class="action danger" onclick="stopHuntDiagnostic()">Stop & build ZIP</button>
-        <button id="diagDownloadButton" class="action secondary" onclick="downloadHuntDiagnostic()" disabled>Download ZIP</button>
-      </div>
-      <div class="muted" style="margin-top:8px">
-        Recommended: start recording, run Hunting for 60–90 seconds on the problem map, include several monsters and route movement, then stop and download the ZIP.
-      </div>
-    </section>
+      <section class="card full">
+        <h2>Legacy movement calibration / active hunt test</h2>
+        <div class="row"><label>Movement segment<input id="moveSegmentTiles" type="number" value="6"></label><label>Attack range<input id="attackRange" type="number" value="1"></label></div>
+        <div class="row"><label>Sprite Y offset<input id="spriteYOffset" type="number" value="-24"></label><label>Calibration<input id="calibrationStatus" value="not calibrated" disabled></label></div>
+        <label>Calibration quality<input id="calibrationQuality" value="—" disabled></label>
+        <div class="actions"><button class="action secondary" onclick="startCalibration()">Calibrate</button><button class="action secondary" onclick="refreshCalibration()">Refresh</button><button class="action danger" onclick="clearCalibration()">Clear</button></div>
+        <div class="row" style="margin-top:12px"><label>Active hunt status<input id="activeHuntStatus" value="stopped" disabled></label><label>Message<input id="activeHuntMessage" value="Idle" disabled></label></div>
+        <div class="actions"><button class="action secondary" onclick="startActiveHunt()">Start test</button><button class="action danger" onclick="stopActiveHunt()">Stop test</button></div>
+      </section>
 
-    <section class="card full"><h2>Activity</h2><pre id="log">Dashboard ready.</pre></section>
+      <section class="card full">
+        <h2>World route diagnostics</h2>
+        <label>Town travel<input id="townTravelStatus" value="idle" disabled></label>
+        <div class="actions"><button class="action secondary" onclick="previewTownRoute()">Preview town route</button><button class="action secondary" onclick="previewHuntReturnRoute()">Preview hunt return</button><button class="action" onclick="startTownTravel()">Go to town</button><button class="action danger" onclick="stopTownTravel()">Stop</button></div>
+      </section>
+
+      <section class="card full">
+        <h2>Hunting diagnostic recorder</h2>
+        <div class="row"><label>Status<input id="diagStatus" value="idle" disabled></label><label>Captured<input id="diagCounts" value="0 samples · 0 events · 0 screenshots" disabled></label></div>
+        <div class="actions"><button class="action" onclick="startHuntDiagnostic()">Start diagnostic</button><button class="action danger" onclick="stopHuntDiagnostic()">Stop & build ZIP</button><button id="diagDownloadButton" class="action secondary" onclick="downloadHuntDiagnostic()" disabled>Download ZIP</button></div>
+      </section>
+
+      <section class="card full">
+        <h2>PCAP analyzer</h2>
+        <label>Capture file<input id="pcapFile" type="file" accept=".pcap,.pcapng"></label>
+        <div class="actions"><button class="action secondary" onclick="analyzePcap()">Analyze capture</button></div>
+      </section>
+
+      <section class="card full"><h2>Activity / raw output</h2><pre id="log">Dashboard ready.</pre></section>
+    </div>
   </div>
 
   <div id="huntingView" class="view-hidden">
@@ -485,22 +357,8 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             <input value="Butterfly Wing → saved point → nearest services" disabled>
           </label>
         </div>
+        <div class="section-note" style="margin-bottom:12px">Healing, emergency items and ASPD consumables are configured under <strong>Healing & Supplies</strong>.</div>
         <div class="row">
-          <label>Teleport item
-            <input id="teleportItem" value="Fly Wing" placeholder="Fly Wing">
-          </label>
-          <label>Emergency HP action
-            <select id="emergencyAction">
-              <option value="teleport" selected>Teleport away</option>
-              <option value="stop">Stop hunting immediately</option>
-              <option value="none">No emergency action</option>
-            </select>
-          </label>
-        </div>
-        <div class="row">
-          <label>Emergency HP below %
-            <input id="emergencyHp" type="number" min="1" max="99" value="20">
-          </label>
           <label>Navigation mode
             <select id="navigationMode">
               <option value="saved_or_explore" selected>Use saved route, otherwise explore</option>
@@ -615,31 +473,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div id="avoidZoneList" class="drop-grid" style="margin-top:12px"></div>
       </section>
 
-      <section class="card">
-        <h2>Healing</h2>
-        <label>Enabled
-          <select id="healEnabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select>
-        </label>
-        <div class="row">
-          <label>Hotkey<input id="healHotkey" value="1"></label>
-          <label>HP below %<input id="healPercent" type="number" min="1" max="99" value="50"></label>
-        </div>
-        <label>Healing item<input id="healItem" placeholder="Meat (native mode uses item directly)"></label>
-      </section>
+      
 
-      <section class="card full">
-        <h2>Supplies & automation</h2>
-        <div class="row">
-          <label>Target Awakening Potions<input id="awakeningTarget" type="number" min="0" value="4"></label>
-          <label>Target Butterfly Wings<input id="butterflyTarget" type="number" min="0" value="1"></label>
-        </div>
-        <div class="actions">
-          <button class="action" onclick="saveProfile()">Save hunting setup</button>
-          <button class="action" onclick="startFullAutomation()">Start full automation</button>
-          <button class="action secondary" onclick="forceTownCycle()">Test town cycle</button>
-          <button class="action danger" onclick="stopFullAutomation()">Stop automation</button>
-        </div>
-      </section>
+      
     </div>
   </div>
 
@@ -1606,14 +1442,18 @@ function switchView(view){
   const views={
     dashboard:document.getElementById('dashboardView'),
     hunting:document.getElementById('huntingView'),
+    supplies:document.getElementById('suppliesView'),
     storage:document.getElementById('storageView'),
-    map:document.getElementById('mapView')
+    map:document.getElementById('mapView'),
+    advanced:document.getElementById('advancedView')
   };
   const navs={
     dashboard:document.getElementById('navDashboard'),
     hunting:document.getElementById('navHunting'),
+    supplies:document.getElementById('navSupplies'),
     storage:document.getElementById('navStorage'),
-    map:document.getElementById('navMap')
+    map:document.getElementById('navMap'),
+    advanced:document.getElementById('navAdvanced')
   };
   Object.keys(views).forEach(function(key){
     if(views[key]) views[key].classList.toggle('view-hidden',key!==view);
