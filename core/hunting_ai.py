@@ -1507,9 +1507,16 @@ class HuntingAI:
 
         hunt = app_state.get_profile().hunt
         distance = self._tile_distance(player, self.target_pos)
+        opener_range = self._required_opening_range(fresh)
+        required_range = (
+            min(self.attack_range, opener_range)
+            if opener_range is not None
+            else self.attack_range
+        )
 
-        # Native execution must not skip normal Ragnarok approach logic.
-        if hunt.attack_wait_approach_finish and distance > self.attack_range:
+        # If an opening skill such as Bash is pending, approach to the skill's
+        # actual range before either the skill or the normal attack is sent.
+        if hunt.attack_wait_approach_finish and distance > required_range:
             return False
 
         if hunt.attack_check_los:
@@ -1680,7 +1687,11 @@ class HuntingAI:
             and grid is not None
             and (
                 not hunt.attack_wait_approach_finish
-                or distance <= self.attack_range
+                or distance <= (
+                    min(self.attack_range, self._required_opening_range(snapshot))
+                    if self._required_opening_range(snapshot) is not None
+                    else self.attack_range
+                )
             )
             and (
                 game_actions.native_attack_ready()
@@ -1703,10 +1714,21 @@ class HuntingAI:
                 )
                 return
 
-        if distance <= self.attack_range:
+        opener_range = self._required_opening_range(snapshot)
+        required_range = (
+            min(self.attack_range, opener_range)
+            if opener_range is not None
+            else self.attack_range
+        )
+
+        if distance <= required_range:
             self._set_state(
                 "ATTACK_READY",
-                f"{self.target_name} is in attack position",
+                (
+                    f"{self.target_name} is in opening-skill range"
+                    if opener_range is not None
+                    else f"{self.target_name} is in attack position"
+                ),
             )
             return
 
@@ -1907,20 +1929,16 @@ class HuntingAI:
 
         self._set_state("ROUTING", "Re-evaluating approach route")
 
-    def _try_opening_attack_skill(
+    def _eligible_opening_skill_rule(
         self,
         snapshot: dict[str, Any],
-    ) -> bool:
+    ):
         if self.target_id is None or self.target_name is None:
-            return False
+            return None
         if self._opening_skill_used_target_id == int(self.target_id):
-            return False
+            return None
 
         hunt = app_state.get_profile().hunt
-        rules = [rule for rule in hunt.attack_skills if rule.enabled]
-        if not rules:
-            return False
-
         world = self._world(snapshot)
         sp_percent = world.get("sp_percent")
         if sp_percent is None:
@@ -1932,10 +1950,7 @@ class HuntingAI:
         target_name = str(self.target_name or "").strip().lower()
         now = time.time()
 
-        for rule in rules:
-            if rule.first_attack_only and self._opening_skill_used_target_id == int(self.target_id):
-                continue
-
+        for rule in [row for row in hunt.attack_skills if row.enabled]:
             allowed_monsters = {
                 str(name).strip().lower()
                 for name in (rule.monsters or [])
@@ -1943,53 +1958,75 @@ class HuntingAI:
             }
             if allowed_monsters and target_name not in allowed_monsters:
                 continue
-
             if sp_percent is None or float(sp_percent) < float(rule.min_sp_percent):
                 continue
-
             cooldown = max(0.0, float(rule.cooldown_seconds))
             last_used = float(self._skill_last_used_at.get(int(rule.skill_id), 0.0))
             if cooldown and now - last_used < cooldown:
                 continue
+            return rule
 
-            result = native_action_bridge.use_skill_to_id(
-                int(rule.skill_id),
-                int(rule.level),
-                int(self.target_id),
-            )
-            self._last_skill_result = {
-                "rule": {
-                    "skill_name": rule.skill_name,
-                    "skill_id": rule.skill_id,
-                    "level": rule.level,
-                    "min_sp_percent": rule.min_sp_percent,
-                },
-                "result": result,
-            }
-            self._log(
-                "opening_skill_attempt",
-                target_id=self.target_id,
-                target_name=self.target_name,
-                skill_name=rule.skill_name,
-                skill_id=rule.skill_id,
-                level=rule.level,
-                sp_percent=sp_percent,
-                result=result,
-            )
+        return None
 
-            # Mark the opener for this target even if the server rejects it, so
-            # one bad skill rule cannot spam every AI tick.
-            self._opening_skill_used_target_id = int(self.target_id)
+    def _required_opening_range(
+        self,
+        snapshot: dict[str, Any],
+    ) -> int | None:
+        rule = self._eligible_opening_skill_rule(snapshot)
+        if rule is None:
+            return None
+        return max(1, int(getattr(rule, "range_tiles", 1) or 1))
 
-            if result.get("ok"):
-                self._skill_last_used_at[int(rule.skill_id)] = now
-                # Give the skill packet a short window before the normal attack
-                # command. This keeps Bash-as-opener behavior clean while the
-                # regular attack remains responsible for finishing the mob.
-                self._stop.wait(0.22)
-                return True
+    def _try_opening_attack_skill(
+        self,
+        snapshot: dict[str, Any],
+    ) -> bool:
+        rule = self._eligible_opening_skill_rule(snapshot)
+        if rule is None or self.target_id is None:
             return False
 
+        world = self._world(snapshot)
+        sp_percent = world.get("sp_percent")
+        if sp_percent is None:
+            sp = world.get("sp")
+            sp_max = world.get("sp_max")
+            if sp is not None and sp_max:
+                sp_percent = float(sp) * 100.0 / float(sp_max)
+
+        result = native_action_bridge.use_skill_to_id(
+            int(rule.skill_id),
+            int(rule.level),
+            int(self.target_id),
+        )
+        self._last_skill_result = {
+            "rule": {
+                "skill_name": rule.skill_name,
+                "skill_id": rule.skill_id,
+                "level": rule.level,
+                "min_sp_percent": rule.min_sp_percent,
+                "range_tiles": getattr(rule, "range_tiles", 1),
+                "post_skill_delay_seconds": getattr(rule, "post_skill_delay_seconds", 0.35),
+            },
+            "result": result,
+        }
+        self._log(
+            "opening_skill_attempt",
+            target_id=self.target_id,
+            target_name=self.target_name,
+            skill_name=rule.skill_name,
+            skill_id=rule.skill_id,
+            level=rule.level,
+            sp_percent=sp_percent,
+            result=result,
+        )
+
+        self._opening_skill_used_target_id = int(self.target_id)
+
+        if result.get("ok"):
+            self._skill_last_used_at[int(rule.skill_id)] = time.time()
+            delay = max(0.0, float(getattr(rule, "post_skill_delay_seconds", 0.35) or 0.0))
+            self._stop.wait(delay)
+            return True
         return False
 
     def _step_attack_ready(self, snapshot: dict[str, Any]):
@@ -2008,10 +2045,16 @@ class HuntingAI:
         hunt = app_state.get_profile().hunt
         native_only = bool(hunt.native_only_actions)
         distance = self._tile_distance(player, self.target_pos)
-        if hunt.attack_wait_approach_finish and distance > self.attack_range:
+        opener_range = self._required_opening_range(snapshot)
+        required_range = (
+            min(self.attack_range, opener_range)
+            if opener_range is not None
+            else self.attack_range
+        )
+        if hunt.attack_wait_approach_finish and distance > required_range:
             self._set_state(
                 "ROUTING",
-                f"{self.target_name} moved; finishing approach first",
+                f"{self.target_name} is too far for opening skill; approaching first",
             )
             return
 
@@ -2074,6 +2117,20 @@ class HuntingAI:
 
         player_render = self._render_position(fresh)
         target_render = self._target_render_position(fresh)
+
+        # Opening skills must land before the regular attack starts. This is
+        # especially important for melee skills such as Bash on moving mobs.
+        if self._required_opening_range(fresh) is not None:
+            self._try_opening_attack_skill(fresh)
+            fresh = authenticated_client_monitor.snapshot()
+            actor = self._refresh_locked_target(fresh)
+            player = self._position(fresh)
+            if actor is None:
+                self._set_state("TARGET_DEAD", f"{self.target_name} disappeared after opener")
+                return
+            if player is None or self.target_pos is None:
+                return
+
         self.attack_clicked_at = time.time()
 
         if game_actions.native_attack_ready():
