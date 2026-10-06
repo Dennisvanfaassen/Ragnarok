@@ -97,10 +97,14 @@ class HuntingAI:
         self._combat_seen = False
         self._attack_origin = None
         self._attack_backend = "mouse"
+        self._opening_skill_used_target_id = None
         self._last_heal_hotkey_at = 0.0
         self._last_heal_result: dict[str, Any] | None = None
         self._last_aspd_use_at = 0.0
         self._last_aspd_result: dict[str, Any] | None = None
+        self._opening_skill_used_target_id: int | None = None
+        self._skill_last_used_at: dict[int, float] = {}
+        self._last_skill_result: dict[str, Any] | None = None
         self._return_weight_reached = False
         self._last_teleport_at = 0.0
         self._last_teleport_reason: str | None = None
@@ -1365,6 +1369,8 @@ class HuntingAI:
         game_actions.release_hold_move()
         self._stop.wait(0.015)
 
+        self._try_opening_attack_skill(snapshot)
+
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
         player = self._position(fresh)
@@ -1767,6 +1773,91 @@ class HuntingAI:
             )
 
         self._set_state("ROUTING", "Re-evaluating approach route")
+
+    def _try_opening_attack_skill(
+        self,
+        snapshot: dict[str, Any],
+    ) -> bool:
+        if self.target_id is None or self.target_name is None:
+            return False
+        if self._opening_skill_used_target_id == int(self.target_id):
+            return False
+
+        hunt = app_state.get_profile().hunt
+        rules = [rule for rule in hunt.attack_skills if rule.enabled]
+        if not rules:
+            return False
+
+        world = self._world(snapshot)
+        sp_percent = world.get("sp_percent")
+        if sp_percent is None:
+            sp = world.get("sp")
+            sp_max = world.get("sp_max")
+            if sp is not None and sp_max:
+                sp_percent = float(sp) * 100.0 / float(sp_max)
+
+        target_name = str(self.target_name or "").strip().lower()
+        now = time.time()
+
+        for rule in rules:
+            if rule.first_attack_only and self._opening_skill_used_target_id == int(self.target_id):
+                continue
+
+            allowed_monsters = {
+                str(name).strip().lower()
+                for name in (rule.monsters or [])
+                if str(name).strip()
+            }
+            if allowed_monsters and target_name not in allowed_monsters:
+                continue
+
+            if sp_percent is None or float(sp_percent) < float(rule.min_sp_percent):
+                continue
+
+            cooldown = max(0.0, float(rule.cooldown_seconds))
+            last_used = float(self._skill_last_used_at.get(int(rule.skill_id), 0.0))
+            if cooldown and now - last_used < cooldown:
+                continue
+
+            result = native_action_bridge.use_skill_to_id(
+                int(rule.skill_id),
+                int(rule.level),
+                int(self.target_id),
+            )
+            self._last_skill_result = {
+                "rule": {
+                    "skill_name": rule.skill_name,
+                    "skill_id": rule.skill_id,
+                    "level": rule.level,
+                    "min_sp_percent": rule.min_sp_percent,
+                },
+                "result": result,
+            }
+            self._log(
+                "opening_skill_attempt",
+                target_id=self.target_id,
+                target_name=self.target_name,
+                skill_name=rule.skill_name,
+                skill_id=rule.skill_id,
+                level=rule.level,
+                sp_percent=sp_percent,
+                result=result,
+            )
+
+            # Mark the opener for this target even if the server rejects it, so
+            # one bad skill rule cannot spam every AI tick.
+            self._opening_skill_used_target_id = int(self.target_id)
+
+            if result.get("ok"):
+                self._skill_last_used_at[int(rule.skill_id)] = now
+                # Give the skill packet a short window before the normal attack
+                # command. This keeps Bash-as-opener behavior clean while the
+                # regular attack remains responsible for finishing the mob.
+                self._stop.wait(0.22)
+                return True
+            return False
+
+        return False
 
     def _step_attack_ready(self, snapshot: dict[str, Any]):
         if self._maybe_preempt_for_higher_priority_aggressor(snapshot):
@@ -3009,6 +3100,9 @@ class HuntingAI:
             self._liveness_recoveries = 0
             self._last_aspd_use_at = 0.0
             self._last_aspd_result = None
+            self._opening_skill_used_target_id = None
+            self._skill_last_used_at.clear()
+            self._last_skill_result = None
             self.loot_retry.clear()
             self.loot_ignored.clear()
             self.running = True
@@ -3119,6 +3213,20 @@ class HuntingAI:
                         "reuse_minutes": app_state.get_profile().aspd.reuse_minutes,
                         "last_used_at": self._last_aspd_use_at or None,
                         "last_result": self._last_aspd_result,
+                    },
+                    "skills": {
+                        "attack_rules": [
+                            {
+                                "skill_name": rule.skill_name,
+                                "skill_id": rule.skill_id,
+                                "level": rule.level,
+                                "min_sp_percent": rule.min_sp_percent,
+                                "first_attack_only": rule.first_attack_only,
+                                "monsters": rule.monsters,
+                            }
+                            for rule in app_state.get_profile().hunt.attack_skills
+                        ],
+                        "last_result": self._last_skill_result,
                     },
                     "town_return": {
                         "weight_percent": (
