@@ -135,6 +135,7 @@ class TownBuyRule(BaseModel):
 
 
 class TownSettings(BaseModel):
+    auto_town_cycle: bool = True
     # Blank means: Butterfly Wing to the character's saved respawn point,
     # then discover/use the nearest town services on the map we actually land on.
     storage_map: str = ""
