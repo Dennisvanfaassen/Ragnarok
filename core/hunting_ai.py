@@ -1376,7 +1376,10 @@ class HuntingAI:
             )
             return
 
-        self._set_state("WANDERING", "No target visible; wandering")
+        self._set_state("WANDERING", "No target visible; exploring")
+        # Do not spend a separate AI tick standing still between SEARCHING and
+        # WANDERING. Pick a route and send the first move immediately.
+        self._step_wandering(snapshot)
 
     def _attack_locked_immediately(
         self,
@@ -1990,11 +1993,33 @@ class HuntingAI:
         )
 
         if not result.get("ok"):
-            self._set_state(
-                "ROUTING",
-                f"Could not attack target: {result.get('reason')}",
-            )
-            return
+            # A learned map socket/bridge can occasionally miss one send during
+            # map traffic. Refresh the exact locked actor and retry once before
+            # abandoning the attack state.
+            if game_actions.native_attack_ready() and self.target_id is not None:
+                self._stop.wait(0.12)
+                retry_snapshot = authenticated_client_monitor.snapshot()
+                retry_actor = self._refresh_locked_target(retry_snapshot)
+                if retry_actor is not None:
+                    retry_result = game_actions.attack(
+                        actor_id=int(self.target_id),
+                        allow_mouse_fallback=False,
+                    )
+                    self._log(
+                        "native_attack_retry",
+                        target_id=self.target_id,
+                        target_name=self.target_name,
+                        first_result=result,
+                        result=retry_result,
+                    )
+                    result = retry_result
+
+            if not result.get("ok"):
+                self._set_state(
+                    "ROUTING",
+                    f"Could not attack target: {result.get('reason')}",
+                )
+                return
 
         self._attack_backend = str(result.get("backend") or "native")
         self._combat_committed_target_id = (
@@ -2171,6 +2196,21 @@ class HuntingAI:
 
         self._stop.wait(0.06)
 
+    def _reset_wander_navigation(self, *, release_move: bool = False) -> None:
+        if release_move:
+            game_actions.release_hold_move()
+        self.wander_path = []
+        self.wander_goal = None
+        self.wander_progress_index = 0
+        self.wander_line_points = []
+        self.wander_line_index = 0
+        self.wander_reconnect_target = None
+        self.wander_reconnect_route_index = None
+        self._native_wander_destination = None
+        self._native_wander_sent_at = 0.0
+        self._wander_last_position = None
+        self._wander_last_progress_at = time.time()
+
     def _step_target_dead(self):
         old_id = self.target_id
         old_name = self.target_name
@@ -2188,6 +2228,9 @@ class HuntingAI:
             })
             self.recent_kills = self.recent_kills[-10:]
         self._clear_target()
+        # Never inherit a stale pre-combat wander destination after a kill.
+        # Start the next exploration leg from the character's actual position.
+        self._reset_wander_navigation(release_move=True)
 
         snapshot = authenticated_client_monitor.snapshot()
         if self._acquire_aggressor(snapshot):
@@ -2224,7 +2267,8 @@ class HuntingAI:
         if not items:
             self.loot_retry.clear()
             self._loot_first_attempt_at.clear()
-            self._set_state("SEARCHING", "Loot complete")
+            self._reset_wander_navigation(release_move=True)
+            self._set_state("SEARCHING", "Loot complete; continuing hunt")
             return
 
         player = self._position(snapshot)
@@ -2995,15 +3039,7 @@ class HuntingAI:
             stationary_seconds=round(now - self._liveness_last_progress_at, 2),
             recovery=self._liveness_recoveries,
         )
-        game_actions.release_hold_move()
-        self.wander_path = []
-        self.wander_goal = None
-        self.wander_line_points = []
-        self.wander_line_index = 0
-        self.wander_reconnect_target = None
-        self.wander_reconnect_route_index = None
-        self._native_wander_destination = None
-        self._native_wander_sent_at = 0.0
+        self._reset_wander_navigation(release_move=True)
         self._liveness_last_progress_at = now
         self._set_state(
             "SEARCHING",
