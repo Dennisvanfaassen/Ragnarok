@@ -46,6 +46,14 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .summary-row:last-child{border-bottom:0}.summary-row span{color:var(--muted)}.summary-row strong{text-align:right}
 .nav-group-label{padding:16px 13px 5px!important;font-size:10px!important;text-transform:uppercase;letter-spacing:.12em;color:#616c81!important;cursor:default!important}
 .advanced-note{border-left:3px solid var(--accent);padding:10px 12px;background:#0d121b;color:var(--muted);font-size:12px;border-radius:8px}
+.bot-controlbar{position:sticky;top:0;z-index:30;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:-8px 0 20px;padding:12px 14px;background:#0c1119f2;border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(10px)}
+.bot-control-left,.bot-control-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bot-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 11px;border-radius:999px;border:1px solid var(--line);font-size:12px;font-weight:800;letter-spacing:.03em}
+.bot-badge::before{content:"";width:8px;height:8px;border-radius:50%;background:#6c7689}
+.bot-badge.running{border-color:#1f8d6e;background:#10271f;color:#8ff0cc}.bot-badge.running::before{background:#28d7a1;box-shadow:0 0 12px #28d7a1}
+.bot-badge.stopped{background:#171b24;color:#aab3c3}
+.bot-badge.error{border-color:#8b3f4e;background:#29141a;color:#ff9daf}.bot-badge.error::before{background:#ff607d}
+.bot-phase{font-size:12px;color:var(--muted)}
 @media(max-width:900px){.command-hero{grid-template-columns:1fr}.status-strip,.summary-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.hunt-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
@@ -72,6 +80,17 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     <div><h1>Ragnarok Bot</h1><div class="muted">OpenKore-style core with a modern control layer</div></div>
     <div class="status"><span id="dot" class="dot"></span><span id="status">stopped</span></div>
   </div>
+  <div class="bot-controlbar">
+    <div class="bot-control-left">
+      <span id="automationBadge" class="bot-badge stopped">BOT STOPPED</span>
+      <span id="automationPhaseText" class="bot-phase">Idle · ] uses the last saved settings</span>
+    </div>
+    <div class="bot-control-actions">
+      <button class="action secondary" onclick="saveProfile()">Save settings</button>
+      <button id="globalStartButton" class="action" onclick="startFullAutomation()">Start bot</button>
+      <button id="globalStopButton" class="action danger" onclick="stopFullAutomation()">Stop</button>
+    </div>
+  </div>
   <div id="dashboardView" class="grid">
     <section class="full command-hero">
       <div class="hero-panel">
@@ -79,10 +98,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div class="hero-title">Bot command center</div>
         <div class="hero-sub">One place to start the bot, see what it is doing, and jump directly to the settings that matter.</div>
         <div class="quick-actions">
-          <button class="action" onclick="startFullAutomation()">Start full automation</button>
-          <button class="action danger" onclick="stopFullAutomation()">Stop automation</button>
           <button class="action secondary" onclick="switchView('hunting')">Edit hunt</button>
           <button class="action secondary" onclick="switchView('supplies')">Supplies</button>
+          <button class="action secondary" onclick="switchView('storage')">Inventory & Town</button>
         </div>
         <div class="status-strip">
           <div class="status-tile"><div class="muted">Action</div><strong id="action">Idle</strong><div id="message" class="muted">Ready</div></div>
@@ -101,8 +119,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div class="summary-row"><span>ASPD consumable</span><strong id="summaryAspd">—</strong></div>
         <div class="summary-row"><span>Town return</span><strong id="summaryTownReturn">—</strong></div>
         <div class="quick-actions">
-          <button class="action" onclick="saveProfile()">Save profile</button>
-          <button class="action secondary" onclick="loadProfile()">Reload</button>
+          <button class="action secondary" onclick="loadProfile()">Reload saved settings</button>
         </div>
       </div>
     </section>
@@ -920,7 +937,7 @@ function currentMonsterRules(){
   });
 }
 
-async function saveProfile(){
+async function saveProfile(silent=false){
   const rules=currentMonsterRules();
   const selected=rules.filter(r=>r.enabled).map(r=>r.monster);
   document.getElementById('monsters').value=selected.join(', ');
@@ -1017,10 +1034,19 @@ async function saveProfile(){
   };
   const r=await fetch('/api/profile',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   const data=await r.json();
+  if(!r.ok){
+    if(!silent) out(data);
+    throw new Error((data&&data.detail)||'Could not save bot settings');
+  }
   document.getElementById('liveReturnTrigger').value=(data.town&&data.town.return_weight_percent!=null?data.town.return_weight_percent:70)+'%';
   renderDashboardProfileSummary(data);
   renderTownBuyRules();
-  out(data);
+  const phaseText=document.getElementById('automationPhaseText');
+  if(phaseText && !document.getElementById('automationBadge').classList.contains('running')){
+    phaseText.textContent='Settings saved · ] uses this saved profile';
+  }
+  if(!silent) out(data);
+  return data;
 }
 
 async function loadRoutableMaps(){
@@ -1530,6 +1556,12 @@ async function refreshActiveHuntQuiet(){
   }catch(e){}
 }
 async function startFullAutomation(){
+  try{
+    await saveProfile(true);
+  }catch(e){
+    out('Bot not started because settings could not be saved: '+e.message);
+    return;
+  }
   const r=await fetch('/api/full-automation/start',{method:'POST'});
   const data=await r.json();
   renderFullAutomation(data);
@@ -1558,6 +1590,20 @@ function renderFullAutomation(data){
   if(weight) weight.value=(data&&data.weight_percent)!=null
     ? data.weight_percent+'%'
     : '—';
+  const running=!!(data&&data.running);
+  const badge=document.getElementById('automationBadge');
+  const phaseText=document.getElementById('automationPhaseText');
+  if(badge){
+    badge.className='bot-badge '+(running?'running':((data&&data.last_error)?'error':'stopped'));
+    badge.textContent=running?'BOT RUNNING':((data&&data.last_error)?'BOT ERROR':'BOT STOPPED');
+  }
+  if(phaseText){
+    const phase=(data&&data.phase)||'idle';
+    const message=(data&&data.message)||'';
+    phaseText.textContent=running
+      ? phase.toUpperCase()+(message?' · '+message:'')
+      : ((data&&data.last_error)?String(data.last_error):'Idle · ] uses the last saved settings');
+  }
   const dashPhase=document.getElementById('dashAutomationPhase');
   if(dashPhase) dashPhase.textContent=(data&&data.phase)||'idle';
   const dashTown=document.getElementById('dashSavedTown');
@@ -1948,8 +1994,9 @@ async function refreshHotkeyQuiet(){
     const data=await r.json();
     const el=document.getElementById('hotkeyStatus');
     if(el){
-      el.value='] — '+(data.status||'unknown')+
-        (data.full_automation_running?' · FULL AUTOMATION ON':' · automation off');
+      const text='] — '+(data.status||'unknown')+
+        (data.full_automation_running?' · FULL AUTOMATION ON':' · uses saved settings');
+      if('value' in el) el.value=text; else el.textContent=text;
     }
   }catch(e){}
 }
