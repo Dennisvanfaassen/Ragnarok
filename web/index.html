@@ -87,6 +87,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </div>
     <div class="bot-control-actions">
       <button class="action secondary" onclick="saveProfile()">Save settings</button>
+      <button id="townCycleToggleButton" class="action secondary" onclick="toggleAutoTownCycle()">Town cycle: ON</button>
       <button id="globalStartButton" class="action" onclick="startFullAutomation()">Start bot</button>
       <button id="globalStopButton" class="action danger" onclick="stopFullAutomation()">Stop</button>
     </div>
@@ -550,6 +551,12 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <section class="card full">
         <h2>1. Town cycle trigger</h2>
         <div class="row">
+          <label>Automatic town cycle
+            <select id="autoTownCycle">
+              <option value="true" selected>Enabled</option>
+              <option value="false">Disabled — hunt only</option>
+            </select>
+          </label>
           <label>Return to town at weight %
             <input id="storageWeight" type="number" min="1" max="99" value="70" onchange="syncTownWeight(this.value)">
           </label>
@@ -1015,6 +1022,7 @@ async function saveProfile(silent=false){
       restock_target:aspdRestock
     },
     town:{
+      auto_town_cycle:document.getElementById('autoTownCycle').value==='true',
       storage_map:document.getElementById('storageMap').value.trim(),
       storage_npc:'',
       return_weight_percent:+document.getElementById('weight').value,
@@ -1073,7 +1081,12 @@ function renderDashboardProfileSummary(p){
   setText('summaryMonsterCount',String(enabled));
   setText('summaryHealing',healing.enabled===false?'Disabled':((healing.item||'Meat')+' < '+(healing.hp_below_percent??50)+'% HP'));
   setText('summaryAspd',aspd.enabled?((aspd.item||'Awakening Potion')+' / '+(aspd.reuse_minutes??30)+' min'):'Disabled');
-  setText('summaryTownReturn',(town.return_weight_percent??70)+'% weight');
+  setText(
+    'summaryTownReturn',
+    town.auto_town_cycle===false
+      ? 'Disabled · hunt only'
+      : ((town.return_weight_percent??70)+'% weight')
+  );
 }
 
 async function loadProfile(){
@@ -1118,6 +1131,8 @@ async function loadProfile(){
     const supplies=(p.town&&p.town.supplies)||{};
     document.getElementById('awakeningTarget').value=supplies.awakening_potions??4;
     document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
+    document.getElementById('autoTownCycle').value=(p.town&&p.town.auto_town_cycle===false)?'false':'true';
+    renderAutoTownCycleToggle(p.town&&p.town.auto_town_cycle!==false);
     document.getElementById('storageWeight').value=(p.town&&p.town.return_weight_percent)||70;
     document.getElementById('defaultItemAction').value=(p.town&&p.town.default_item_action)||'store';
     document.getElementById('returnOutOfMeat').value=(p.town&&p.town.return_when_out_of_meat===false)?'false':'true';
@@ -1555,6 +1570,31 @@ async function refreshActiveHuntQuiet(){
     if(data&&data.calibration) renderCalibration(data.calibration);
   }catch(e){}
 }
+function renderAutoTownCycleToggle(enabled){
+  const button=document.getElementById('townCycleToggleButton');
+  const select=document.getElementById('autoTownCycle');
+  if(select) select.value=enabled?'true':'false';
+  if(button){
+    button.textContent=enabled?'Town cycle: ON':'Town cycle: OFF · Hunt only';
+    button.classList.toggle('danger',!enabled);
+  }
+}
+async function toggleAutoTownCycle(){
+  const select=document.getElementById('autoTownCycle');
+  const enabled=select ? select.value==='true' : true;
+  if(select) select.value=enabled?'false':'true';
+  renderAutoTownCycleToggle(!enabled);
+  try{
+    await saveProfile(true);
+  }catch(e){
+    if(select) select.value=enabled?'true':'false';
+    renderAutoTownCycleToggle(enabled);
+    out('Could not change automatic town cycle: '+e.message);
+    return;
+  }
+  out('Automatic town cycle '+(!enabled?'enabled.':'disabled. Hunting will continue without automatic town returns.'));
+}
+
 async function startFullAutomation(){
   try{
     await saveProfile(true);
@@ -1608,6 +1648,9 @@ function renderFullAutomation(data){
   if(dashPhase) dashPhase.textContent=(data&&data.phase)||'idle';
   const dashTown=document.getElementById('dashSavedTown');
   if(dashTown) dashTown.textContent=(data&&data.saved_town_map)||'—';
+  if(data && typeof data.auto_town_cycle==='boolean'){
+    renderAutoTownCycleToggle(data.auto_town_cycle);
+  }
   const meat=document.getElementById('townMeatAmount');
   const fly=document.getElementById('townFlyWingAmount');
   if(meat) meat.value=(data&&data.meat_amount)!=null?data.meat_amount:'—';
