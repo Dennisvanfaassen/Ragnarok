@@ -2088,7 +2088,7 @@ class HuntingAI:
             hunt = app_state.get_profile().hunt
             low = max(0.0, float(hunt.loot_drop_delay_min))
             high = max(low, float(hunt.loot_drop_delay_max))
-            self._loot_not_before = time.time() + random.uniform(low, high)
+            self._loot_not_before = time.time() + ((low + high) / 2.0)
             self._set_state("LOOTING", "Combat clear; waiting for drops before looting")
             return
 
@@ -2202,7 +2202,7 @@ class HuntingAI:
                 hunt = app_state.get_profile().hunt
                 low = max(0.0, float(hunt.loot_between_items_min))
                 high = max(low, float(hunt.loot_between_items_max))
-                self._next_loot_at = time.time() + random.uniform(low, high)
+                self._next_loot_at = time.time() + ((low + high) / 2.0)
                 return
 
         retries = self.loot_retry.get(item_id, 0) + 1
