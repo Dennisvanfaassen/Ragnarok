@@ -812,9 +812,13 @@ class FullAutomationController:
                 threshold = max(1, min(99, int(profile.town.return_weight_percent)))
 
                 forced_cycle = self._force_cycle.is_set()
-                automatic_reason = self._automatic_town_trigger(
-                    weight_percent=weight_percent,
-                    threshold=threshold,
+                automatic_reason = (
+                    self._automatic_town_trigger(
+                        weight_percent=weight_percent,
+                        threshold=threshold,
+                    )
+                    if profile.town.auto_town_cycle
+                    else None
                 )
                 if forced_cycle or automatic_reason is not None:
                     self._force_cycle.clear()
@@ -964,6 +968,7 @@ class FullAutomationController:
                 "monsters": profile.hunt.monsters,
                 "loot_all": profile.hunt.loot_all,
                 "weight_percent": world.get("weight_percent"),
+                "auto_town_cycle": profile.town.auto_town_cycle,
                 "return_weight_percent": profile.town.return_weight_percent,
                 "return_when_out_of_meat": profile.town.return_when_out_of_meat,
                 "return_when_out_of_fly_wings": profile.town.return_when_out_of_fly_wings,
