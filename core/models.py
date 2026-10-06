@@ -75,7 +75,18 @@ class HuntSettings(BaseModel):
     loot_between_items_min: float = 0.18
     loot_between_items_max: float = 0.38
     unreachable_target_cooldown_seconds: float = 8.0
+    failed_los_cooldown_seconds: float = 12.0
     combat_no_progress_timeout: float = 1.6
+
+    # OpenKore-inspired guard rails. Native actions are still used for
+    # execution, but target selection/approach must pass navigation checks.
+    attack_check_los: bool = True
+    attack_wait_approach_finish: bool = True
+    attack_max_route_time: float = 4.0
+    attack_route_max_path_distance: int = 20
+    move_giveup_seconds: float = 2.5
+    loot_giveup_seconds: float = 1.8
+    hunting_liveness_timeout: float = 3.0
 
 
 class HealingSettings(BaseModel):
