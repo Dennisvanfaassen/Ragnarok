@@ -69,7 +69,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     <div class="nav-group-label">Bot setup</div>
     <div id="navHunting" onclick="switchView('hunting')">Hunting & Loot</div>
     <div id="navSupplies" onclick="switchView('supplies')">Healing & Supplies</div>
-    <div id="navStorage" onclick="switchView('storage')">Inventory & Town</div>
+    <div id="navStorage" onclick="switchView('storage')">Manual Town</div>
     <div id="navMap" onclick="switchView('map')">Map & Route</div>
     <div class="nav-group-label">System</div>
     <div id="navAdvanced" onclick="switchView('advanced')">Advanced & Diagnostics</div>
@@ -87,7 +87,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </div>
     <div class="bot-control-actions">
       <button class="action secondary" onclick="saveProfile()">Save settings</button>
-      <button id="townCycleToggleButton" class="action secondary" onclick="toggleAutoTownCycle()">Town cycle: ON</button>
+      <button id="townCycleToggleButton" class="action secondary" disabled>Town automation: OFF · manual</button>
       <button id="globalStartButton" class="action" onclick="startFullAutomation()">Start bot</button>
       <button id="globalStopButton" class="action danger" onclick="stopFullAutomation()">Stop</button>
     </div>
@@ -157,7 +157,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <label>Saved town<input id="fullAutomationTown" value="—" disabled></label>
       <label>Live weight<input id="fullAutomationWeight" value="—" disabled></label>
       <div class="actions">
-        <button class="action secondary" onclick="forceTownCycle()">Test town cycle</button>
+        <button class="action secondary" disabled>Town automation disabled</button>
       </div>
     </section>
 
@@ -166,7 +166,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <div class="summary-grid">
         <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('hunting')"><strong>1. Hunting & loot</strong><br>Choose map, monsters, priorities and drops.</button>
         <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('supplies')"><strong>2. Healing & supplies</strong><br>Food, HP threshold, ASPD potion and stock targets.</button>
-        <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('storage')"><strong>3. Inventory & town</strong><br>Keep, store, sell and restock rules.</button>
+        <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('storage')"><strong>3. Manual town</strong><br>Storage, selling and buying are handled manually.</button>
         <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('map')"><strong>4. Map & route</strong><br>Automatic exploration or a custom patrol route.</button>
       </div>
     </section>
@@ -573,10 +573,10 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <section class="card full">
         <div class="hunt-hero">
           <div>
-            <h2 style="font-size:20px;margin-bottom:7px">Selling & Storage</h2>
-            <div class="muted">Configure exactly what happens when Full Automation reaches the town-cycle weight threshold.</div>
+            <h2 style="font-size:20px;margin-bottom:7px">Manual Town</h2>
+            <div class="muted">Storage, selling and buying are intentionally manual. RO Control handles travel, hunting and looting only.</div>
           </div>
-          <div class="section-note">Town cycle: Butterfly Wing → Kafra storage → Tool Dealer selling → buy/restock → return to hunting map.</div>
+          <div class="section-note">Automatic town inventory actions are disabled to avoid SoulBound storage disconnects.</div>
         </div>
       </section>
 
@@ -585,8 +585,8 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div class="row">
           <label>Automatic town cycle
             <select id="autoTownCycle">
-              <option value="true" selected>Enabled</option>
-              <option value="false">Disabled — hunt only</option>
+              <option value="false" selected>Disabled — manual town only</option>
+              <option value="true">Disabled by application</option>
             </select>
           </label>
           <label>Return to town at weight %
@@ -666,9 +666,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <h2>4. Town cycle controls</h2>
         <div class="actions">
           <button class="action" onclick="saveProfile()">Save Selling & Storage settings</button>
-          <button class="action secondary" onclick="forceTownCycle()">Test town cycle now</button>
+          <button class="action secondary" disabled>Town automation disabled</button>
         </div>
-        <div class="section-note" style="margin-top:12px">Selling is a new native action and still needs its first live SoulBound validation. Use the test town cycle with low-value items first.</div>
+        <div class="section-note" style="margin-top:12px">Use this page only as an inventory reference. Store, sell and buy manually in the Ragnarok client.</div>
       </section>
     </div>
   </div>
@@ -1667,10 +1667,11 @@ async function refreshActiveHuntQuiet(){
 function renderAutoTownCycleToggle(enabled){
   const button=document.getElementById('townCycleToggleButton');
   const select=document.getElementById('autoTownCycle');
-  if(select) select.value=enabled?'true':'false';
+  if(select) select.value='false';
   if(button){
-    button.textContent=enabled?'Town cycle: ON':'Town cycle: OFF · Hunt only';
-    button.classList.toggle('danger',!enabled);
+    button.textContent='Town automation: OFF · manual';
+    button.classList.remove('danger');
+    button.disabled=true;
   }
 }
 async function toggleAutoTownCycle(){
