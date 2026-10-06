@@ -149,6 +149,31 @@ def _clean_text(raw: bytes) -> str:
     return raw.split(b"\x00", 1)[0].decode("latin-1", errors="replace").strip()
 
 
+def _clean_actor_name(data: bytes, offset: int) -> str:
+    """Decode actor names while tolerating the observed one-byte name shift.
+
+    SoulBound's 09FE/09FF traffic is mostly aligned at the expected offset, but
+    a small subset of packets places the first ASCII character one byte earlier.
+    Example observed in diagnostics: "Hydra" was parsed as "ydra". Prefer the
+    one-byte-earlier candidate only when it is a clean alphabetical prefix of
+    the normal candidate, so unrelated packet metadata is never treated as part
+    of the name.
+    """
+    normal = _clean_text(data[offset:]) if len(data) > offset else ""
+    previous = _clean_text(data[offset - 1:]) if offset > 0 and len(data) >= offset else ""
+
+    if (
+        previous
+        and normal
+        and len(previous) == len(normal) + 1
+        and previous[1:] == normal
+        and previous[0].isascii()
+        and previous[0].isalpha()
+    ):
+        return previous
+    return normal
+
+
 _MAP_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+(?:\.(?:gat|rsw))?$")
 
 
@@ -286,9 +311,13 @@ class AuthenticatedClientMonitor:
                     ),
                 })
             if len(data) > 90:
-                name = _clean_text(data[90:])
+                name = _clean_actor_name(data, 90)
                 if name:
-                    actor["name"] = name
+                    existing = str(actor.get("name") or "")
+                    # Never replace a complete name with a one-character-short
+                    # suffix from a later packet.
+                    if not (existing and existing.endswith(name) and len(existing) == len(name) + 1):
+                        actor["name"] = name
 
         # 09FE / 09FF use a 3-byte standing coordinate. For this protocol
         # family it begins at absolute offset 63.
@@ -303,9 +332,11 @@ class AuthenticatedClientMonitor:
                 actor.pop("move_started_at", None)
                 actor.pop("move_duration", None)
             if len(data) > 84:
-                name = _clean_text(data[84:])
+                name = _clean_actor_name(data, 84)
                 if name:
-                    actor["name"] = name
+                    existing = str(actor.get("name") or "")
+                    if not (existing and existing.endswith(name) and len(existing) == len(name) + 1):
+                        actor["name"] = name
 
         self._actors[actor_id] = actor
 
