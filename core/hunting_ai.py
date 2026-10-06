@@ -106,8 +106,13 @@ class HuntingAI:
         self._wander_last_progress_at = time.time()
         self._target_failure_count: dict[int, int] = {}
         self._target_cooldown_until: dict[int, float] = {}
+        self._target_locked_at: dict[int, float] = {}
         self._loot_not_before = 0.0
         self._next_loot_at = 0.0
+        self._loot_first_attempt_at: dict[int, float] = {}
+        self._liveness_last_position: tuple[int, int] | None = None
+        self._liveness_last_progress_at = time.time()
+        self._liveness_recoveries = 0
         self.state_since = time.time()
         self.actions: list[dict[str, Any]] = []
 
@@ -282,6 +287,7 @@ class HuntingAI:
         self.route_target_pos = None
         self.attack_retry = 0
         self._target_failure_count.setdefault(int(self.target_id), 0)
+        self._target_locked_at.setdefault(int(self.target_id), time.time())
         self._log(
             "target_locked",
             target_id=self.target_id,
@@ -461,7 +467,9 @@ class HuntingAI:
             1.0,
             float(app_state.get_profile().hunt.unreachable_target_cooldown_seconds),
         )
-        self._target_cooldown_until[int(actor_id)] = time.time() + seconds
+        actor_id = int(actor_id)
+        self._target_cooldown_until[actor_id] = time.time() + seconds
+        self._target_locked_at.pop(actor_id, None)
         self._log(
             "target_cooldown",
             target_id=int(actor_id),
@@ -556,31 +564,8 @@ class HuntingAI:
             new_priority=candidate_priority,
         )
 
-        # Native actor-ID attack makes pre-emption immediate and independent of
-        # sprite projection. If the bridge is temporarily unavailable, route to
-        # the new threat instead of clicking the screen.
-        if game_actions.native_attack_ready():
-            self.attack_clicked_at = time.time()
-            result = game_actions.attack(
-                actor_id=int(self.target_id),
-                allow_mouse_fallback=False,
-            )
-            self._log(
-                "priority_preempt_attack",
-                target_id=self.target_id,
-                target_name=self.target_name,
-                result=result,
-            )
-            if result.get("ok"):
-                self._attack_backend = "native"
-                self._combat_click_locked = True
-                self._combat_seen = False
-                self._set_state(
-                    "WAITING_FOR_DEATH",
-                    f"Priority switched to {self.target_name}",
-                )
-                return True
-
+        # A priority switch changes the target, but it does not bypass normal
+        # route/LOS checks. The new threat is approached first when necessary.
         self._set_state(
             "TARGET_SELECTED",
             f"Priority switched to {self.target_name}",
@@ -704,7 +689,10 @@ class HuntingAI:
         ROUTING/APPROACHING loop every ~150 ms. Commit to the current segment
         until we reach it, stop moving briefly, or hit the normal timeout.
         """
-        deadline = time.time() + self.move_settle_timeout
+        deadline = time.time() + max(
+            self.move_settle_timeout,
+            float(app_state.get_profile().hunt.move_giveup_seconds),
+        )
         last_pos = origin
         last_change = time.time()
         moved = False
@@ -1325,10 +1313,22 @@ class HuntingAI:
         if actor is None or player is None or self.target_pos is None:
             return False
 
-        native_only = bool(app_state.get_profile().hunt.native_only_actions)
+        hunt = app_state.get_profile().hunt
+        distance = self._tile_distance(player, self.target_pos)
 
-        # Native actor-ID combat does not need a clickable sprite or foreground
-        # window. This is the preferred hunting path.
+        # Native execution must not skip normal Ragnarok approach logic.
+        if hunt.attack_wait_approach_finish and distance > self.attack_range:
+            return False
+
+        if hunt.attack_check_los:
+            try:
+                grid, _ = nav_repository.load(str(self._world(fresh).get("map")))
+            except Exception:
+                return False
+            if not clear_walk_line(grid, player, self.target_pos):
+                return False
+
+        native_only = bool(hunt.native_only_actions)
         if game_actions.native_attack_ready():
             self.attack_clicked_at = time.time()
             result = game_actions.attack(
@@ -1410,6 +1410,9 @@ class HuntingAI:
         self._set_state("ROUTING", f"Calculating route to {self.target_name}")
 
     def _step_routing(self, snapshot: dict[str, Any]):
+        if self._maybe_preempt_for_higher_priority_aggressor(snapshot):
+            return
+
         actor = self._refresh_locked_target(snapshot)
         player = self._position(snapshot)
 
@@ -1418,6 +1421,19 @@ class HuntingAI:
             return
         if player is None or self.target_pos is None:
             self._stop.wait(0.10)
+            return
+
+        hunt = app_state.get_profile().hunt
+        target_id = int(self.target_id) if self.target_id is not None else -1
+        locked_at = float(self._target_locked_at.get(target_id, time.time()))
+        if time.time() - locked_at >= max(0.5, float(hunt.attack_max_route_time)):
+            failed_name = self.target_name
+            self._cooldown_target(self.target_id, "attack_route_time_exceeded")
+            self._clear_target()
+            self._set_state(
+                "SEARCHING",
+                f"Route timeout for {failed_name}; choosing another target",
+            )
             return
 
         distance = self._tile_distance(player, self.target_pos)
@@ -1465,9 +1481,13 @@ class HuntingAI:
             not self._attack_reposition_required
             and grid is not None
             and (
+                not hunt.attack_wait_approach_finish
+                or distance <= self.attack_range
+            )
+            and (
                 game_actions.native_attack_ready()
                 or (
-                    not app_state.get_profile().hunt.native_only_actions
+                    not hunt.native_only_actions
                     and self._render_position(snapshot) is not None
                     and self._target_render_position(snapshot) is not None
                     and game_actions.can_project(
@@ -1478,10 +1498,10 @@ class HuntingAI:
                 )
             )
         ):
-            if clear_walk_line(grid, player, self.target_pos):
+            if (not hunt.attack_check_los) or clear_walk_line(grid, player, self.target_pos):
                 self._set_state(
                     "ATTACK_READY",
-                    f"{self.target_name} is visible; attacking immediately",
+                    f"{self.target_name} is in a valid attack position",
                 )
                 return
 
@@ -1522,11 +1542,12 @@ class HuntingAI:
 
         if not pathing.get("path_found") or len(path_preview) < 2:
             if (
-                self.target_pos is not None
+                not hunt.attack_wait_approach_finish
+                and self.target_pos is not None
                 and (
                     game_actions.native_attack_ready()
                     or (
-                        not app_state.get_profile().hunt.native_only_actions
+                        not hunt.native_only_actions
                         and game_actions.can_project(
                             player,
                             self.target_pos,
@@ -1569,6 +1590,25 @@ class HuntingAI:
             self._set_state(
                 "FAILED",
                 pathing.get("message") or "Could not route to target",
+            )
+            return
+
+        max_path = max(1, int(hunt.attack_route_max_path_distance))
+        path_steps = int(pathing.get("path_steps") or max(0, len(path_preview) - 1))
+        if path_steps > max_path:
+            failed_name = self.target_name
+            self._log(
+                "route_too_long",
+                target_id=self.target_id,
+                target_name=self.target_name,
+                path_steps=path_steps,
+                max_path_steps=max_path,
+            )
+            self._cooldown_target(self.target_id, "attack_route_too_long")
+            self._clear_target()
+            self._set_state(
+                "SEARCHING",
+                f"Skipping distant/unreachable {failed_name}",
             )
             return
 
@@ -1627,7 +1667,7 @@ class HuntingAI:
         if not result.get("ok"):
             self._set_state(
                 "FAILED",
-                f"Mouse adapter could not execute route segment: {result.get('reason')}",
+                f"Could not execute route segment: {result.get('reason')}",
             )
             return
 
@@ -1671,6 +1711,9 @@ class HuntingAI:
         self._set_state("ROUTING", "Re-evaluating approach route")
 
     def _step_attack_ready(self, snapshot: dict[str, Any]):
+        if self._maybe_preempt_for_higher_priority_aggressor(snapshot):
+            return
+
         actor = self._refresh_locked_target(snapshot)
         player = self._position(snapshot)
         if actor is None:
@@ -1680,7 +1723,39 @@ class HuntingAI:
             self._stop.wait(0.10)
             return
 
-        native_only = bool(app_state.get_profile().hunt.native_only_actions)
+        hunt = app_state.get_profile().hunt
+        native_only = bool(hunt.native_only_actions)
+        distance = self._tile_distance(player, self.target_pos)
+        if hunt.attack_wait_approach_finish and distance > self.attack_range:
+            self._set_state(
+                "ROUTING",
+                f"{self.target_name} moved; finishing approach first",
+            )
+            return
+
+        if hunt.attack_check_los:
+            try:
+                grid, _ = nav_repository.load(str(self._world(snapshot).get("map")))
+            except Exception:
+                grid = None
+            if grid is None or not clear_walk_line(grid, player, self.target_pos):
+                failed_name = self.target_name
+                cooldown = max(1.0, float(hunt.failed_los_cooldown_seconds))
+                if self.target_id is not None:
+                    self._target_cooldown_until[int(self.target_id)] = time.time() + cooldown
+                self._log(
+                    "attack_failed_los",
+                    target_id=self.target_id,
+                    target_name=self.target_name,
+                    cooldown_seconds=cooldown,
+                )
+                self._clear_target()
+                self._set_state(
+                    "SEARCHING",
+                    f"No valid line/path to {failed_name}; choosing another target",
+                )
+                return
+
         player_render = self._render_position(snapshot)
         target_render = self._target_render_position(snapshot)
 
@@ -1979,6 +2054,7 @@ class HuntingAI:
         items = self._loot_candidates(snapshot)
         if not items:
             self.loot_retry.clear()
+            self._loot_first_attempt_at.clear()
             self._set_state("SEARCHING", "Loot complete")
             return
 
@@ -1990,6 +2066,24 @@ class HuntingAI:
         item = items[0]
         item_id = int(item["id"])
         item_pos = (int(item["x"]), int(item["y"]))
+        self._loot_first_attempt_at.setdefault(item_id, time.time())
+        if (
+            time.time() - self._loot_first_attempt_at[item_id]
+            >= max(0.5, float(app_state.get_profile().hunt.loot_giveup_seconds))
+        ):
+            self.loot_ignored.add(item_id)
+            self.loot_retry.pop(item_id, None)
+            self._loot_first_attempt_at.pop(item_id, None)
+            self._log(
+                "loot_giveup_timeout",
+                item_id=item_id,
+                item_name_id=item.get("name_id"),
+            )
+            self._set_state(
+                "SEARCHING",
+                "Loot timeout reached; continuing hunt",
+            )
+            return
         player_render = self._render_position(snapshot) or (
             float(player[0]),
             float(player[1]),
@@ -2048,6 +2142,7 @@ class HuntingAI:
             }
             if item_id not in ids:
                 self.loot_retry.pop(item_id, None)
+                self._loot_first_attempt_at.pop(item_id, None)
                 hunt = app_state.get_profile().hunt
                 low = max(0.0, float(hunt.loot_between_items_min))
                 high = max(low, float(hunt.loot_between_items_max))
@@ -2637,6 +2732,55 @@ class HuntingAI:
         self._clear_target()
         self._set_state("SEARCHING", "Target gone; selecting another target")
 
+    def _maybe_recover_hunting_liveness(
+        self,
+        snapshot: dict[str, Any],
+    ) -> bool:
+        player = self._position(snapshot)
+        if player is None:
+            return False
+
+        now = time.time()
+        if self._liveness_last_position != player:
+            self._liveness_last_position = player
+            self._liveness_last_progress_at = now
+            self._liveness_recoveries = 0
+            return False
+
+        if self.state not in {"SEARCHING", "WANDERING"}:
+            return False
+
+        timeout = max(
+            1.0,
+            float(app_state.get_profile().hunt.hunting_liveness_timeout),
+        )
+        if now - self._liveness_last_progress_at < timeout:
+            return False
+
+        self._liveness_recoveries += 1
+        self._log(
+            "hunting_liveness_recovery",
+            state=self.state,
+            player={"x": player[0], "y": player[1]},
+            stationary_seconds=round(now - self._liveness_last_progress_at, 2),
+            recovery=self._liveness_recoveries,
+        )
+        game_actions.release_hold_move()
+        self.wander_path = []
+        self.wander_goal = None
+        self.wander_line_points = []
+        self.wander_line_index = 0
+        self.wander_reconnect_target = None
+        self.wander_reconnect_route_index = None
+        self._native_wander_destination = None
+        self._native_wander_sent_at = 0.0
+        self._liveness_last_progress_at = now
+        self._set_state(
+            "SEARCHING",
+            "Idle watchdog reset navigation; selecting a fresh route",
+        )
+        return True
+
     def _loop(self, run_id: int):
         self._set_state("SEARCHING", "Searching for monster")
 
@@ -2646,6 +2790,9 @@ class HuntingAI:
             if not snapshot.get("classic_pid"):
                 self._set_state("IDLE", "Waiting for Classic.exe")
                 self._stop.wait(0.10)
+                continue
+
+            if self._maybe_recover_hunting_liveness(snapshot):
                 continue
 
             # Emergency behavior and monster-specific teleport rules have
@@ -2733,8 +2880,13 @@ class HuntingAI:
             self._wander_last_progress_at = time.time()
             self._target_failure_count.clear()
             self._target_cooldown_until.clear()
+            self._target_locked_at.clear()
             self._loot_not_before = 0.0
             self._next_loot_at = 0.0
+            self._loot_first_attempt_at.clear()
+            self._liveness_last_position = self._position(authenticated_client_monitor.snapshot())
+            self._liveness_last_progress_at = time.time()
+            self._liveness_recoveries = 0
             self.loot_retry.clear()
             self.loot_ignored.clear()
             self.running = True
