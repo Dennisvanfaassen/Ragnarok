@@ -308,19 +308,20 @@ class FullAutomationController:
 
         target = (int(actor["x"]), int(actor["y"]))
 
-        # SoulBound is sensitive to Kafra dialogue/storage packets arriving too
-        # quickly. Use ordinary Windows input for the dialogue flow instead of
-        # firing menu packets back-to-back.
-        click_result = game_actions.click_actor(player, target)
-        self._log("kafra_physical_input", step="click_kafra", result=click_result)
-        if not click_result.get("ok"):
-            # Keep one safe fallback for setups where screen calibration is not
-            # available, but retain physical keyboard navigation afterwards.
-            click_result = native_action_bridge.talk_npc(actor_id, 1)
-            self._log("kafra_physical_input", step="fallback_native_talk", result=click_result)
-            if not click_result.get("ok"):
-                self.last_error = f"Could not open Kafra dialogue: {click_result.get('reason')}"
-                return False
+        # A Windows click being sent does not prove Ragnarok actually opened
+        # the NPC dialogue. Use the verified NPC-talk action for this first
+        # interaction only, then use real keyboard input for every dialogue
+        # step so the server sees human-paced menu progression.
+        talk_result = native_action_bridge.talk_npc(actor_id, 1)
+        self._log(
+            "kafra_interaction",
+            step="talk_kafra",
+            target={"x": target[0], "y": target[1]},
+            result=talk_result,
+        )
+        if not talk_result.get("ok"):
+            self.last_error = f"Could not start Kafra dialogue: {talk_result.get('reason')}"
+            return False
 
         self._stop.wait(0.50)
 
