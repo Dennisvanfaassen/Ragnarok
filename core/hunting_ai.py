@@ -2026,6 +2026,7 @@ class HuntingAI:
             self.attack_clicked_at,
         ):
             self._combat_click_locked = True
+            self._combat_committed_target_id = int(self.target_id)
             game_actions.note_attack_registered(
                 self.attack_retry,
                 target_key=self.target_name,
@@ -2034,6 +2035,7 @@ class HuntingAI:
                 "client_attack_registered",
                 target_id=self.target_id,
                 target_name=self.target_name,
+                combat_lock=True,
             )
             self._set_state(
                 "WAITING_FOR_DEATH",
