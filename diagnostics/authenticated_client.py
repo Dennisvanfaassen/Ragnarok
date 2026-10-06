@@ -208,6 +208,10 @@ class AuthenticatedClientMonitor:
             "last_client_action": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
+        # Session-wide monster encounter history. Unlike _actors this is not
+        # pruned when a monster leaves sight, so we can diagnose skipped mobs
+        # and compare runtime actor IDs/names seen while walking a map.
+        self._monster_encounters: dict[int, dict[str, Any]] = {}
         self._self_move: dict[str, Any] | None = None
         self._floor_items: dict[int, dict[str, Any]] = {}
         self._aggressors: dict[int, float] = {}
@@ -304,6 +308,28 @@ class AuthenticatedClientMonitor:
                     actor["name"] = name
 
         self._actors[actor_id] = actor
+
+        if actor.get("kind") == "monster":
+            encounter = self._monster_encounters.get(actor_id, {})
+            first_seen = float(encounter.get("first_seen") or now)
+            packets = set(encounter.get("packets") or [])
+            packets.add(f"0x{opcode:04X}")
+            encounter.update({
+                "actor_id": actor_id,
+                "char_id": actor.get("char_id"),
+                "object_type": actor.get("object_type"),
+                "kind": "monster",
+                "name": actor.get("name") or encounter.get("name") or "",
+                "map": self._world.get("map"),
+                "first_seen": first_seen,
+                "last_seen": now,
+                "last_x": actor.get("x"),
+                "last_y": actor.get("y"),
+                "packets": sorted(packets),
+                "seen_updates": int(encounter.get("seen_updates") or 0) + 1,
+            })
+            self._monster_encounters[actor_id] = encounter
+
         key = {
             0x09FD: "actor_moved",
             0x09FE: "actor_connected",
@@ -1171,6 +1197,58 @@ class AuthenticatedClientMonitor:
             },
             "source": "authenticated Classic.exe item-list packets + OpenKore item names",
         }
+
+    def monster_encounter_history_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            rows = [dict(row) for row in self._monster_encounters.values()]
+
+        rows.sort(
+            key=lambda row: (
+                str(row.get("name") or "").casefold(),
+                int(row.get("actor_id") or 0),
+            )
+        )
+
+        by_name: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            name = str(row.get("name") or "").strip() or "<unknown>"
+            key = name.casefold()
+            bucket = by_name.setdefault(
+                key,
+                {
+                    "name": name,
+                    "actor_ids": [],
+                    "char_ids": [],
+                    "count": 0,
+                    "unknown_name_count": 0,
+                    "maps": [],
+                },
+            )
+            bucket["actor_ids"].append(row.get("actor_id"))
+            if row.get("char_id") is not None and row.get("char_id") not in bucket["char_ids"]:
+                bucket["char_ids"].append(row.get("char_id"))
+            bucket["count"] += 1
+            if not str(row.get("name") or "").strip():
+                bucket["unknown_name_count"] += 1
+            map_name = row.get("map")
+            if map_name and map_name not in bucket["maps"]:
+                bucket["maps"].append(map_name)
+
+        return {
+            "count": len(rows),
+            "encounters": rows,
+            "by_name": sorted(by_name.values(), key=lambda row: str(row["name"]).casefold()),
+            "note": (
+                "actor_id is the runtime ID of one spawned monster and normally differs "
+                "between individual spawns. Matching in RO Control is based on monster name, "
+                "not one fixed actor_id."
+            ),
+        }
+
+    def clear_monster_encounter_history(self) -> dict[str, Any]:
+        with self._lock:
+            self._monster_encounters.clear()
+        return self.monster_encounter_history_snapshot()
 
     def client_action_trace_snapshot(self) -> dict[str, Any]:
         with self._lock:
