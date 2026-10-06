@@ -99,6 +99,8 @@ class HuntingAI:
         self._attack_backend = "mouse"
         self._last_heal_hotkey_at = 0.0
         self._last_heal_result: dict[str, Any] | None = None
+        self._last_aspd_use_at = 0.0
+        self._last_aspd_result: dict[str, Any] | None = None
         self._return_weight_reached = False
         self._last_teleport_at = 0.0
         self._last_teleport_reason: str | None = None
@@ -2719,6 +2721,67 @@ class HuntingAI:
         )
         return bool(result.get("ok"))
 
+    def _maybe_use_aspd_potion(self, snapshot: dict[str, Any]) -> bool:
+        profile = app_state.get_profile()
+        settings = profile.aspd
+        if not settings.enabled:
+            return False
+
+        now = time.time()
+        reuse_seconds = max(30.0, float(settings.reuse_minutes) * 60.0)
+        if self._last_aspd_use_at and now - self._last_aspd_use_at < reuse_seconds:
+            return False
+
+        world = self._world(snapshot)
+        target_id = world.get("self_account_id") or world.get("self_char_id")
+        if target_id is None:
+            return False
+
+        wanted_name = str(settings.item or "").strip().casefold()
+        wanted_id = int(settings.name_id) if settings.name_id is not None else None
+        items = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+        item = next(
+            (
+                row for row in items
+                if (
+                    wanted_id is not None
+                    and int(row.get("name_id") or -1) == wanted_id
+                )
+                or (
+                    wanted_name
+                    and str(row.get("name") or "").strip().casefold() == wanted_name
+                )
+            ),
+            None,
+        )
+        if item is None:
+            self._last_aspd_result = {
+                "ok": False,
+                "reason": "aspd_item_not_found",
+                "item": settings.item,
+                "name_id": settings.name_id,
+            }
+            return False
+
+        result = native_action_bridge.item_use(
+            int(item["index"]),
+            int(target_id),
+        )
+        result["backend"] = "native"
+        result["input_mode"] = "inventory_index"
+        self._last_aspd_result = dict(result)
+        self._log(
+            "aspd_consumable",
+            item=item.get("name") or settings.item,
+            name_id=item.get("name_id"),
+            reuse_minutes=settings.reuse_minutes,
+            result=result,
+        )
+        if result.get("ok"):
+            self._last_aspd_use_at = now
+            return True
+        return False
+
     def _update_return_weight(self, snapshot: dict[str, Any]):
         profile = app_state.get_profile()
         world = self._world(snapshot)
@@ -2862,6 +2925,7 @@ class HuntingAI:
             # combat/path state. The configured hotkey is only pressed when the
             # authenticated client's live HP falls below the profile threshold.
             self._maybe_heal(snapshot)
+            self._maybe_use_aspd_potion(snapshot)
             self._update_return_weight(snapshot)
 
             if self.state in {"IDLE", "SEARCHING"}:
@@ -2943,6 +3007,8 @@ class HuntingAI:
             self._liveness_last_position = self._position(authenticated_client_monitor.snapshot())
             self._liveness_last_progress_at = time.time()
             self._liveness_recoveries = 0
+            self._last_aspd_use_at = 0.0
+            self._last_aspd_result = None
             self.loot_retry.clear()
             self.loot_ignored.clear()
             self.running = True
@@ -3045,6 +3111,14 @@ class HuntingAI:
                         "hotkey": app_state.get_profile().healing.hotkey,
                         "hp_below_percent": app_state.get_profile().healing.hp_below_percent,
                         "last_result": self._last_heal_result,
+                    },
+                    "aspd": {
+                        "enabled": app_state.get_profile().aspd.enabled,
+                        "item": app_state.get_profile().aspd.item,
+                        "name_id": app_state.get_profile().aspd.name_id,
+                        "reuse_minutes": app_state.get_profile().aspd.reuse_minutes,
+                        "last_used_at": self._last_aspd_use_at or None,
+                        "last_result": self._last_aspd_result,
                     },
                     "town_return": {
                         "weight_percent": (
