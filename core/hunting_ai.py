@@ -676,9 +676,17 @@ class HuntingAI:
                         )
                         continue
                     if len(path) - 1 > max_path:
-                        self._cooldown_target(
-                            int(actor.get("id") or -1),
-                            "target_precheck_route_too_long",
+                        # "Max attack route" is a chase-distance limit, not a
+                        # blacklist. Do not cooldown a valid configured monster
+                        # merely because it is currently too far away; the bot
+                        # may walk much closer a moment later and should then
+                        # consider the same Hydra/Cornutus immediately.
+                        self._log(
+                            "target_deferred_too_far",
+                            target_id=actor.get("id"),
+                            target_name=actor.get("name"),
+                            path_steps=len(path) - 1,
+                            max_path_steps=max_path,
                         )
                         continue
                     if self._path_crosses_avoid_zone(map_name, path):
@@ -1767,11 +1775,10 @@ class HuntingAI:
                 path_steps=path_steps,
                 max_path_steps=max_path,
             )
-            self._cooldown_target(self.target_id, "attack_route_too_long")
             self._clear_target()
             self._set_state(
                 "SEARCHING",
-                f"Skipping distant/unreachable {failed_name}",
+                f"{failed_name} is outside chase distance; keep hunting until closer",
             )
             return
 
