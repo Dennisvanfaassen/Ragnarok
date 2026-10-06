@@ -240,6 +240,12 @@ class GameActionAdapter:
             result.setdefault("backend", "windows_input")
         return result
 
+    def alt_right_click_screen(self, x: int, y: int) -> dict[str, Any]:
+        result = self._backend.alt_right_click_screen(int(x), int(y))
+        if isinstance(result, dict):
+            result.setdefault("backend", "windows_input")
+        return result
+
     def press_hotkey(self, key: str) -> dict[str, Any]:
         result = self._backend.press_hotkey(key)
         if isinstance(result, dict):
