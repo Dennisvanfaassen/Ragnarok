@@ -57,6 +57,10 @@ class AttackSkillRule(BaseModel):
     min_sp_percent: int = 50
     first_attack_only: bool = True
     cooldown_seconds: float = 0.0
+    # Targeted melee openers such as Bash must be executed from melee range
+    # before the normal attack command is allowed to start.
+    range_tiles: int = 1
+    post_skill_delay_seconds: float = 0.35
     monsters: list[str] = Field(default_factory=list)
 
 
