@@ -2347,6 +2347,70 @@ class HuntingAI:
 
         self._set_state("SEARCHING", "Selecting next monster")
 
+    def _approach_loot_item(
+        self,
+        item_id: int,
+        item_pos: tuple[int, int],
+        *,
+        pickup_distance: int = 2,
+        timeout: float = 6.0,
+    ) -> bool:
+        deadline = time.time() + timeout
+        last_move_at = 0.0
+
+        while not self._stop.is_set() and time.time() < deadline:
+            snapshot = authenticated_client_monitor.snapshot()
+            live = snapshot.get("live_state") or {}
+            floor_items = live.get("floor_items") or []
+            if not any(int(row.get("id") or -1) == int(item_id) for row in floor_items):
+                return True
+
+            if (
+                app_state.get_profile().hunt.threat_first_combat
+                and self._acquire_aggressor(snapshot)
+            ):
+                self._set_state(
+                    "TARGET_SELECTED",
+                    f"Interrupted loot approach for aggressor {self.target_name}",
+                )
+                return False
+
+            player = self._position(snapshot)
+            if player is None:
+                self._stop.wait(0.05)
+                continue
+
+            if self._tile_distance(player, item_pos) <= pickup_distance:
+                game_actions.release_hold_move()
+                return True
+
+            now = time.time()
+            if now - last_move_at >= 0.55:
+                result = game_actions.move(
+                    player,
+                    item_pos,
+                    allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
+                )
+                self._log(
+                    "loot_approach_move",
+                    item_id=item_id,
+                    from_pos={"x": player[0], "y": player[1]},
+                    destination={"x": item_pos[0], "y": item_pos[1]},
+                    result=result,
+                )
+                if not result.get("ok"):
+                    return False
+                last_move_at = now
+
+            self.message = (
+                f"Walking to loot at {item_pos[0]},{item_pos[1]} "
+                f"({self._tile_distance(player, item_pos)} tiles away)"
+            )
+            self._stop.wait(0.08)
+
+        game_actions.release_hold_move()
+        return False
+
     def _step_looting(self, snapshot: dict[str, Any]):
         now = time.time()
         if now < self._loot_not_before or now < self._next_loot_at:
@@ -2379,6 +2443,43 @@ class HuntingAI:
         item = items[0]
         item_id = int(item["id"])
         item_pos = (int(item["x"]), int(item["y"]))
+
+        # Native pickup only succeeds inside Ragnarok's pickup range. If the
+        # drop is farther away, walk close to it first instead of repeatedly
+        # sending pickup and getting "You cannot get the item".
+        if self._tile_distance(player, item_pos) > 2:
+            if not self._approach_loot_item(item_id, item_pos):
+                if self.state != "LOOTING":
+                    return
+                self.loot_ignored.add(item_id)
+                self._log(
+                    "loot_approach_failed",
+                    item_id=item_id,
+                    item_name_id=item.get("name_id"),
+                    x=item_pos[0],
+                    y=item_pos[1],
+                )
+                self._set_state(
+                    "SEARCHING",
+                    "Could not approach loot; continuing hunt",
+                )
+                return
+
+            fresh = authenticated_client_monitor.snapshot()
+            fresh_items = {
+                int(row.get("id") or -1): row
+                for row in ((fresh.get("live_state") or {}).get("floor_items") or [])
+            }
+            if item_id not in fresh_items:
+                self.loot_retry.pop(item_id, None)
+                self._loot_first_attempt_at.pop(item_id, None)
+                return
+            player = self._position(fresh)
+            if player is None:
+                return
+
+        # Start the pickup timeout only after we are actually within pickup
+        # range; walking time must not count as a failed pickup attempt.
         self._loot_first_attempt_at.setdefault(item_id, time.time())
         if (
             time.time() - self._loot_first_attempt_at[item_id]
