@@ -181,6 +181,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             <input id="healHotkey" value="1">
           </label>
         </div>
+        <label>Restock target
+          <input id="healRestockTarget" type="number" min="0" value="50">
+        </label>
         <div class="section-note">Example: Meat at 50% means the bot uses Meat whenever HP drops below 50%, respecting the healing cooldown.</div>
       </section>
 
@@ -202,6 +205,10 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div class="row">
           <label>Target Butterfly Wings<input id="butterflyTarget" type="number" min="0" value="1"></label>
           <label>Teleport item<input id="teleportItem" value="Fly Wing"></label>
+        </div>
+        <div class="row">
+          <label>Target Fly Wings<input id="flyWingTarget" type="number" min="0" value="50"></label>
+          <label>Return when out of Fly Wings<input value="Configured under Inventory & Town" disabled></label>
         </div>
         <div class="row">
           <label>Emergency HP below %<input id="emergencyHp" type="number" min="1" max="99" value="20"></label>
@@ -830,6 +837,22 @@ async function saveProfile(){
   const aspdItem=document.getElementById('aspdItem').value.trim()||'Awakening Potion';
   const aspdId=+document.getElementById('aspdNameId').value||null;
   const aspdRestock=Math.max(0,+document.getElementById('aspdRestockTarget').value||0);
+  const healItemName=document.getElementById('healItem').value.trim()||'Meat';
+  const healRestock=Math.max(0,+document.getElementById('healRestockTarget').value||0);
+  const flyItemName=document.getElementById('teleportItem').value.trim()||'Fly Wing';
+  const flyRestock=Math.max(0,+document.getElementById('flyWingTarget').value||0);
+  const upsertBuyRule=function(name,nameId,target){
+    if(!name || target<=0) return;
+    const key=String(name).trim().toLowerCase();
+    const existing=townBuyRules.findIndex(function(r){
+      return (nameId && +r.name_id===+nameId) ||
+        String(r.item_name||'').trim().toLowerCase()===key;
+    });
+    const row={item_name:name,name_id:nameId||null,target_quantity:target};
+    if(existing>=0) townBuyRules[existing]=row; else townBuyRules.push(row);
+  };
+  upsertBuyRule(healItemName,healItemName.toLowerCase()==='meat'?517:null,healRestock);
+  upsertBuyRule(flyItemName,flyItemName.toLowerCase()==='fly wing'?601:null,flyRestock);
   if(aspdEnabled && aspdRestock>0){
     const existing=townBuyRules.findIndex(function(r){
       return (aspdId && +r.name_id===aspdId) ||
@@ -981,6 +1004,16 @@ async function loadProfile(){
     document.getElementById('returnOutOfFlyWings').value=(p.town&&p.town.return_when_out_of_fly_wings===false)?'false':'true';
     townItemRules=((p.town&&p.town.item_rules)||[]).map(function(row){return {...row};});
     townBuyRules=((p.town&&p.town.buy_rules)||[]).map(function(row){return {...row};});
+    const findBuyTarget=function(name,nameId,fallback){
+      const key=String(name||'').trim().toLowerCase();
+      const rule=townBuyRules.find(function(r){
+        return (nameId && +r.name_id===+nameId) ||
+          (key && String(r.item_name||'').trim().toLowerCase()===key);
+      });
+      return rule?+rule.target_quantity:fallback;
+    };
+    document.getElementById('healRestockTarget').value=findBuyTarget((p.healing&&p.healing.item)||'Meat',517,50);
+    document.getElementById('flyWingTarget').value=findBuyTarget((p.hunt&&p.hunt.teleport_item)||'Fly Wing',601,50);
     renderTownRuleSummary();
     renderTownBuyRules();
     document.getElementById('liveReturnTrigger').value=((p.town&&p.town.return_weight_percent)||70)+'%';
