@@ -346,8 +346,40 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </div>
       </section>
 
+      <section class="card full">
+        <h2>3. Attack skills</h2>
+        <div class="muted" style="margin-bottom:12px">
+          Add targeted combat skills to use as an opener before normal attacks. Example: Bash when SP is at least 50%.
+        </div>
+        <div class="row">
+          <label>Skill name<input id="skillName" value="Bash" placeholder="Bash"></label>
+          <label>Skill ID<input id="skillId" type="number" min="1" value="5"></label>
+        </div>
+        <div class="row">
+          <label>Skill level<input id="skillLevel" type="number" min="1" max="10" value="1"></label>
+          <label>Minimum SP %<input id="skillMinSp" type="number" min="0" max="100" value="50"></label>
+        </div>
+        <div class="row">
+          <label>When to use
+            <select id="skillFirstAttack">
+              <option value="true" selected>First attack on each monster</option>
+              <option value="false">Whenever rule is eligible</option>
+            </select>
+          </label>
+          <label>Cooldown seconds<input id="skillCooldown" type="number" min="0" step="0.1" value="0"></label>
+        </div>
+        <label>Only on monsters (optional, comma separated)
+          <input id="skillMonsters" placeholder="Obeaune, Cornutus">
+        </label>
+        <div class="actions">
+          <button class="action secondary" onclick="addAttackSkillRule()">Add skill rule</button>
+          <button class="action secondary" onclick="addBashPreset()">Add Bash preset</button>
+        </div>
+        <div id="attackSkillRuleList" class="drop-grid" style="margin-top:12px"></div>
+      </section>
+
       <section class="card wide">
-        <h2>3. Hunting behavior</h2>
+        <h2>4. Hunting behavior</h2>
         <div class="row">
           <label>Return to town at weight %
             <input id="weight" type="number" min="1" max="99" value="70">
@@ -457,7 +489,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </section>
 
       <section class="card full">
-        <h2>4. Avoid areas</h2>
+        <h2>5. Avoid areas</h2>
         <div class="muted" style="margin-bottom:12px">
           Add rectangles the bot must not enter while hunting. Targets inside these zones are ignored and routes crossing them are rejected.
         </div>
@@ -652,6 +684,7 @@ async function refresh(){
 }
 let huntCatalogData={map:'',monsters:[]};
 let huntMonsterRules={};
+let huntAttackSkills=[];
 let huntAvoidZones=[];
 let townItemRules=[];
 let townBuyRules=[];
@@ -813,6 +846,64 @@ function renderTownBuyRules(){
   }).join('');
 }
 
+function renderAttackSkillRules(){
+  const box=document.getElementById('attackSkillRuleList');
+  if(!box) return;
+  if(!huntAttackSkills.length){
+    box.innerHTML='<span class="muted">No attack skills configured. Normal attacks only.</span>';
+    return;
+  }
+  box.innerHTML=huntAttackSkills.map(function(rule,i){
+    const monsters=(rule.monsters||[]).length?' · '+rule.monsters.join(', '):' · all monsters';
+    return '<span class="drop-chip">'+
+      escapeHtml(rule.skill_name||('Skill #'+rule.skill_id))+
+      ' Lv.'+escapeHtml(String(rule.level||1))+
+      ' · SP ≥ '+escapeHtml(String(rule.min_sp_percent??0))+'%'+
+      (rule.first_attack_only!==false?' · opener':'')+
+      monsters+
+      ' <button class="action danger" style="padding:3px 7px" onclick="removeAttackSkillRule('+i+')">×</button></span>';
+  }).join('');
+}
+function addAttackSkillRule(){
+  const name=document.getElementById('skillName').value.trim();
+  const id=+document.getElementById('skillId').value;
+  const level=Math.max(1,+document.getElementById('skillLevel').value||1);
+  const minSp=Math.max(0,Math.min(100,+document.getElementById('skillMinSp').value||0));
+  if(!name||!id){out('Enter a skill name and numeric skill ID.');return}
+  const monsters=document.getElementById('skillMonsters').value.split(',').map(s=>s.trim()).filter(Boolean);
+  huntAttackSkills.push({
+    enabled:true,
+    skill_name:name,
+    skill_id:id,
+    level:level,
+    min_sp_percent:minSp,
+    first_attack_only:document.getElementById('skillFirstAttack').value==='true',
+    cooldown_seconds:Math.max(0,+document.getElementById('skillCooldown').value||0),
+    monsters:monsters
+  });
+  renderAttackSkillRules();
+}
+function addBashPreset(){
+  const exists=huntAttackSkills.some(r=>+r.skill_id===5);
+  if(!exists){
+    huntAttackSkills.push({
+      enabled:true,
+      skill_name:'Bash',
+      skill_id:5,
+      level:1,
+      min_sp_percent:50,
+      first_attack_only:true,
+      cooldown_seconds:0,
+      monsters:[]
+    });
+  }
+  renderAttackSkillRules();
+}
+function removeAttackSkillRule(i){
+  huntAttackSkills.splice(i,1);
+  renderAttackSkillRules();
+}
+
 function currentMonsterRules(){
   return Object.values(huntMonsterRules).map(function(rule){
     return {
@@ -870,6 +961,7 @@ async function saveProfile(){
       loot_all:true,
       loot_radius:+document.getElementById('huntLootRadius').value||12,
       monster_rules:rules,
+      attack_skills:huntAttackSkills,
       teleport_item:document.getElementById('teleportItem').value.trim()||'Fly Wing',
       emergency_hp_percent:+document.getElementById('emergencyHp').value,
       emergency_action:document.getElementById('emergencyAction').value,
@@ -981,6 +1073,8 @@ async function loadProfile(){
         exclude_items:new Set(rule.exclude_items||[])
       };
     });
+    huntAttackSkills=((p.hunt&&p.hunt.attack_skills)||[]).map(function(rule){return {...rule,monsters:[...(rule.monsters||[])]};});
+    renderAttackSkillRules();
     huntAvoidZones=((p.hunt&&p.hunt.avoid_zones)||[]).map(function(z){return {...z};});
     renderAvoidZones();
     document.getElementById('weight').value=(p.town&&p.town.return_weight_percent)||70;
