@@ -611,6 +611,62 @@ class HuntingAI:
             return False
 
         candidates.sort(key=lambda row: (row[0], row[1], int(row[2].get("id") or 0)))
+
+        # Before locking a passive target, reject candidates that clearly have
+        # no reasonable route. This is cheaper than entering the full combat
+        # state machine and later discovering the same blocked monster.
+        if player is not None:
+            map_name = str(self._world(snapshot).get("map") or "")
+            try:
+                grid, _ = nav_repository.load(map_name)
+            except Exception:
+                grid = None
+
+            if grid is not None:
+                max_path = max(1, int(profile.hunt.attack_route_max_path_distance))
+                for _priority, _distance, actor in candidates:
+                    ax, ay = actor.get("x"), actor.get("y")
+                    if ax is None or ay is None:
+                        continue
+                    target = (int(ax), int(ay))
+
+                    if self._tile_distance(player, target) <= self.attack_range:
+                        if (
+                            not profile.hunt.attack_check_los
+                            or clear_walk_line(grid, player, target)
+                        ):
+                            return self._lock_actor(actor, "normal_target_route_checked")
+                        continue
+
+                    path = astar(
+                        grid,
+                        player,
+                        target,
+                        max_expansions=60000,
+                        clearance_weight=0.65,
+                    )
+                    if not path:
+                        self._cooldown_target(
+                            int(actor.get("id") or -1),
+                            "target_precheck_no_route",
+                        )
+                        continue
+                    if len(path) - 1 > max_path:
+                        self._cooldown_target(
+                            int(actor.get("id") or -1),
+                            "target_precheck_route_too_long",
+                        )
+                        continue
+                    if self._path_crosses_avoid_zone(map_name, path):
+                        self._cooldown_target(
+                            int(actor.get("id") or -1),
+                            "target_precheck_avoid_zone",
+                        )
+                        continue
+                    return self._lock_actor(actor, "normal_target_route_checked")
+
+                return False
+
         return self._lock_actor(candidates[0][2], "normal_target")
 
     @staticmethod
@@ -1470,8 +1526,8 @@ class HuntingAI:
                     },
                 )
 
-        # Player-like behavior: if the monster is already visible/clickable,
-        # attack immediately and let Ragnarok perform the final approach.
+        # Fast path: only attack directly when the configured approach and LOS
+        # rules say the target is already in a valid attack position.
         try:
             grid, _ = nav_repository.load(str(self._world(snapshot).get("map")))
         except Exception:
