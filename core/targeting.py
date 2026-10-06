@@ -13,7 +13,7 @@ def build_targeting_state(
     live_snapshot: dict[str, Any],
     wanted_monsters: list[str],
     *,
-    stale_after_seconds: float = 12.0,
+    stale_after_seconds: float | None = None,
 ) -> dict[str, Any]:
     live = live_snapshot.get("live_state") or {}
     world = live.get("world") or {}
@@ -35,7 +35,16 @@ def build_targeting_state(
         actor_y = actor.get("y")
         last_seen = float(actor.get("last_seen") or 0)
 
-        if now - last_seen > stale_after_seconds:
+        # The authenticated monitor owns actor lifetime: 0x0080 removes an
+        # actor and map changes clear the actor table. Do not expire a monster
+        # just because it has not moved recently. Stationary monsters such as
+        # Hydra may legitimately emit no new actor packet for well over 12s
+        # while still standing visibly on screen.
+        if (
+            stale_after_seconds is not None
+            and stale_after_seconds > 0
+            and now - last_seen > stale_after_seconds
+        ):
             continue
         # Hunting is whitelist-based. An empty saved monster list means
         # "attack nothing", never "attack everything".
