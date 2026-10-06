@@ -540,6 +540,52 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div class="section-note" style="margin-bottom:12px">
           Priority uses lower numbers first: 1 outranks 10, and 10 outranks 100. With pre-emption enabled, a priority-1 aggressor can interrupt a lower-priority target.
         </div>
+        <div class="row">
+          <label>Attack route timeout (sec)
+            <input id="attackMaxRouteTime" type="number" min="1" max="15" step="0.5" value="4">
+          </label>
+          <label>Maximum attack route (tiles)
+            <input id="attackRouteMaxPathDistance" type="number" min="3" max="100" value="20">
+          </label>
+        </div>
+        <div class="row">
+          <label>Line/path check before attack
+            <select id="attackCheckLos">
+              <option value="true" selected>Required</option>
+              <option value="false">Disabled</option>
+            </select>
+          </label>
+          <label>Finish approach before attacking
+            <select id="attackWaitApproach">
+              <option value="true" selected>Yes</option>
+              <option value="false">Allow long-range/native attack request</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Unreachable target cooldown (sec)
+            <input id="unreachableCooldown" type="number" min="1" max="60" step="0.5" value="8">
+          </label>
+          <label>Failed LOS cooldown (sec)
+            <input id="failedLosCooldown" type="number" min="1" max="60" step="0.5" value="12">
+          </label>
+        </div>
+        <div class="row">
+          <label>Movement give-up (sec)
+            <input id="moveGiveupSeconds" type="number" min="1" max="10" step="0.25" value="2.5">
+          </label>
+          <label>Idle watchdog (sec)
+            <input id="huntingLivenessTimeout" type="number" min="1" max="15" step="0.5" value="3">
+          </label>
+        </div>
+        <div class="row">
+          <label>Loot give-up (sec)
+            <input id="lootGiveupSeconds" type="number" min="0.5" max="10" step="0.1" value="1.8">
+          </label>
+          <label>Combat no-progress timeout (sec)
+            <input id="combatNoProgressTimeout" type="number" min="0.8" max="10" step="0.1" value="1.6">
+          </label>
+        </div>
         <div class="actions">
           <button class="action secondary" onclick="switchView('map')">Edit hunting route on Map</button>
         </div>
@@ -962,7 +1008,17 @@ async function saveProfile(){
       threat_first_combat:document.getElementById('threatFirstCombat').value==='true',
       preempt_for_higher_priority_aggressor:document.getElementById('priorityPreempt').value==='true',
       loot_after_aggressors:true,
-      exploration_frontier_bias:document.getElementById('frontierBias').value==='true'
+      exploration_frontier_bias:document.getElementById('frontierBias').value==='true',
+      attack_check_los:document.getElementById('attackCheckLos').value==='true',
+      attack_wait_approach_finish:document.getElementById('attackWaitApproach').value==='true',
+      attack_max_route_time:+document.getElementById('attackMaxRouteTime').value||4,
+      attack_route_max_path_distance:+document.getElementById('attackRouteMaxPathDistance').value||20,
+      unreachable_target_cooldown_seconds:+document.getElementById('unreachableCooldown').value||8,
+      failed_los_cooldown_seconds:+document.getElementById('failedLosCooldown').value||12,
+      move_giveup_seconds:+document.getElementById('moveGiveupSeconds').value||2.5,
+      loot_giveup_seconds:+document.getElementById('lootGiveupSeconds').value||1.8,
+      combat_no_progress_timeout:+document.getElementById('combatNoProgressTimeout').value||1.6,
+      hunting_liveness_timeout:+document.getElementById('huntingLivenessTimeout').value||3
     },
     healing:{
       enabled:document.getElementById('healEnabled').value==='true',
@@ -1060,6 +1116,16 @@ async function loadProfile(){
     document.getElementById('threatFirstCombat').value=(p.hunt&&p.hunt.threat_first_combat===false)?'false':'true';
     document.getElementById('priorityPreempt').value=(p.hunt&&p.hunt.preempt_for_higher_priority_aggressor===false)?'false':'true';
     document.getElementById('frontierBias').value=(p.hunt&&p.hunt.exploration_frontier_bias===false)?'false':'true';
+    document.getElementById('attackCheckLos').value=(p.hunt&&p.hunt.attack_check_los===false)?'false':'true';
+    document.getElementById('attackWaitApproach').value=(p.hunt&&p.hunt.attack_wait_approach_finish===false)?'false':'true';
+    document.getElementById('attackMaxRouteTime').value=(p.hunt&&p.hunt.attack_max_route_time)??4;
+    document.getElementById('attackRouteMaxPathDistance').value=(p.hunt&&p.hunt.attack_route_max_path_distance)??20;
+    document.getElementById('unreachableCooldown').value=(p.hunt&&p.hunt.unreachable_target_cooldown_seconds)??8;
+    document.getElementById('failedLosCooldown').value=(p.hunt&&p.hunt.failed_los_cooldown_seconds)??12;
+    document.getElementById('moveGiveupSeconds').value=(p.hunt&&p.hunt.move_giveup_seconds)??2.5;
+    document.getElementById('lootGiveupSeconds').value=(p.hunt&&p.hunt.loot_giveup_seconds)??1.8;
+    document.getElementById('combatNoProgressTimeout').value=(p.hunt&&p.hunt.combat_no_progress_timeout)??1.6;
+    document.getElementById('huntingLivenessTimeout').value=(p.hunt&&p.hunt.hunting_liveness_timeout)??3;
     if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
 }
