@@ -826,6 +826,18 @@ async function saveProfile(){
   const rules=currentMonsterRules();
   const selected=rules.filter(r=>r.enabled).map(r=>r.monster);
   document.getElementById('monsters').value=selected.join(', ');
+  const aspdEnabled=document.getElementById('aspdEnabled').value==='true';
+  const aspdItem=document.getElementById('aspdItem').value.trim()||'Awakening Potion';
+  const aspdId=+document.getElementById('aspdNameId').value||null;
+  const aspdRestock=Math.max(0,+document.getElementById('aspdRestockTarget').value||0);
+  if(aspdEnabled && aspdRestock>0){
+    const existing=townBuyRules.findIndex(function(r){
+      return (aspdId && +r.name_id===aspdId) ||
+        String(r.item_name||'').trim().toLowerCase()===aspdItem.toLowerCase();
+    });
+    const row={item_name:aspdItem,name_id:aspdId,target_quantity:aspdRestock};
+    if(existing>=0) townBuyRules[existing]=row; else townBuyRules.push(row);
+  }
   const body={
     name:document.getElementById('profileName').value,
     server_profile:document.getElementById('server').value,
@@ -863,6 +875,13 @@ async function saveProfile(){
       hotkey:document.getElementById('healHotkey').value.trim()||'1',
       cooldown_seconds:0.9
     },
+    aspd:{
+      enabled:aspdEnabled,
+      item:aspdItem,
+      name_id:aspdId,
+      reuse_minutes:+document.getElementById('aspdReuseMinutes').value||30,
+      restock_target:aspdRestock
+    },
     town:{
       storage_map:document.getElementById('storageMap').value.trim(),
       storage_npc:'',
@@ -884,6 +903,8 @@ async function saveProfile(){
   const r=await fetch('/api/profile',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   const data=await r.json();
   document.getElementById('liveReturnTrigger').value=(data.town&&data.town.return_weight_percent!=null?data.town.return_weight_percent:70)+'%';
+  renderDashboardProfileSummary(data);
+  renderTownBuyRules();
   out(data);
 }
 
@@ -898,6 +919,20 @@ async function loadRoutableMaps(){
       }).join('');
     }
   }catch(e){}
+}
+
+function renderDashboardProfileSummary(p){
+  const hunt=(p&&p.hunt)||{};
+  const healing=(p&&p.healing)||{};
+  const aspd=(p&&p.aspd)||{};
+  const town=(p&&p.town)||{};
+  const setText=function(id,value){const el=document.getElementById(id);if(el)el.textContent=value};
+  setText('summaryHuntMap',hunt.map||'Not configured');
+  const enabled=((hunt.monster_rules)||[]).filter(r=>r.enabled!==false).length || ((hunt.monsters)||[]).length;
+  setText('summaryMonsterCount',String(enabled));
+  setText('summaryHealing',healing.enabled===false?'Disabled':((healing.item||'Meat')+' < '+(healing.hp_below_percent??50)+'% HP'));
+  setText('summaryAspd',aspd.enabled?((aspd.item||'Awakening Potion')+' / '+(aspd.reuse_minutes??30)+' min'):'Disabled');
+  setText('summaryTownReturn',(town.return_weight_percent??70)+'% weight');
 }
 
 async function loadProfile(){
@@ -931,6 +966,12 @@ async function loadProfile(){
     document.getElementById('healItem').value=(p.healing&&p.healing.item)||'';
     document.getElementById('healPercent').value=(p.healing&&p.healing.hp_below_percent)||50;
     document.getElementById('healHotkey').value=(p.healing&&p.healing.hotkey)||'1';
+    const aspd=p.aspd||{};
+    document.getElementById('aspdEnabled').value=aspd.enabled===true?'true':'false';
+    document.getElementById('aspdItem').value=aspd.item||'Awakening Potion';
+    document.getElementById('aspdNameId').value=aspd.name_id??656;
+    document.getElementById('aspdReuseMinutes').value=aspd.reuse_minutes??30;
+    document.getElementById('aspdRestockTarget').value=aspd.restock_target??4;
     const supplies=(p.town&&p.town.supplies)||{};
     document.getElementById('awakeningTarget').value=supplies.awakening_potions??4;
     document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
@@ -962,6 +1003,7 @@ async function loadProfile(){
     document.getElementById('lootGiveupSeconds').value=(p.hunt&&p.hunt.loot_giveup_seconds)??1.8;
     document.getElementById('combatNoProgressTimeout').value=(p.hunt&&p.hunt.combat_no_progress_timeout)??1.6;
     document.getElementById('huntingLivenessTimeout').value=(p.hunt&&p.hunt.hunting_liveness_timeout)??3;
+    renderDashboardProfileSummary(p);
     if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
 }
@@ -1186,8 +1228,12 @@ function renderLiveState(data){
   if(weightEl) weightEl.value=world.weight_percent!=null
     ? ((world.weight??'—')+' / '+(world.weight_max??'—')+' ('+world.weight_percent+'%)')
     : '—';
+  const dashWeight=document.getElementById('dashLiveWeight');
+  if(dashWeight) dashWeight.textContent=world.weight_percent!=null?world.weight_percent+'%':'—';
   const actorsEl=document.getElementById('liveActors');
   if(actorsEl) actorsEl.value=counts.total??0;
+  const dashActors=document.getElementById('dashLiveActors');
+  if(dashActors) dashActors.textContent=counts.total??0;
   const breakdown=document.getElementById('liveActorBreakdown');
   if(breakdown) breakdown.value=(counts.monsters??0)+' / '+(counts.players??0)+' / '+(counts.other??0);
 }
@@ -1385,6 +1431,10 @@ function renderFullAutomation(data){
   if(weight) weight.value=(data&&data.weight_percent)!=null
     ? data.weight_percent+'%'
     : '—';
+  const dashPhase=document.getElementById('dashAutomationPhase');
+  if(dashPhase) dashPhase.textContent=(data&&data.phase)||'idle';
+  const dashTown=document.getElementById('dashSavedTown');
+  if(dashTown) dashTown.textContent=(data&&data.saved_town_map)||'—';
   const meat=document.getElementById('townMeatAmount');
   const fly=document.getElementById('townFlyWingAmount');
   if(meat) meat.value=(data&&data.meat_amount)!=null?data.meat_amount:'—';
