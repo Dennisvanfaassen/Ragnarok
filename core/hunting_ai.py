@@ -316,9 +316,18 @@ class HuntingAI:
         return None
 
     def _monster_behavior(self, name: str | None) -> str:
+        normalized = str(name or "").strip().lower()
         rule = self._monster_rule(name)
         if rule is None:
-            return "attack"
+            # Never attack random monsters simply because they became aggressive.
+            # A monster must be part of the saved Hunt profile. Keep legacy
+            # profiles working by treating names in hunt.monsters as "attack".
+            selected = {
+                str(monster or "").strip().lower()
+                for monster in app_state.get_profile().hunt.monsters
+                if str(monster or "").strip()
+            }
+            return "attack" if normalized and normalized in selected else "ignore"
         if not rule.enabled:
             return "ignore"
         return str(rule.behavior or "attack").strip().lower()
@@ -1370,8 +1379,6 @@ class HuntingAI:
         game_actions.release_hold_move()
         self._stop.wait(0.015)
 
-        self._try_opening_attack_skill(snapshot)
-
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
         player = self._position(fresh)
@@ -1392,6 +1399,9 @@ class HuntingAI:
                 return False
             if not clear_walk_line(grid, player, self.target_pos):
                 return False
+
+        # Skill openers are evaluated only after range/route/LOS checks.
+        self._try_opening_attack_skill(fresh)
 
         native_only = bool(hunt.native_only_actions)
         if game_actions.native_attack_ready():
@@ -2087,9 +2097,9 @@ class HuntingAI:
 
 
     def _step_waiting_for_death(self, snapshot: dict[str, Any]):
-        if self._maybe_preempt_for_higher_priority_aggressor(snapshot):
-            return
-
+        # Once the first attack has been sent, this target owns the combat lock
+        # until it disappears/dies. New monsters are queued for the next
+        # decision instead of causing mid-kill target switches.
         if self._refresh_locked_target(snapshot) is None:
             self._set_state("TARGET_DEAD", f"{self.target_name} defeated")
             return
