@@ -49,12 +49,24 @@ class AvoidZone(BaseModel):
     label: str = ""
 
 
+class AttackSkillRule(BaseModel):
+    enabled: bool = True
+    skill_name: str = "Bash"
+    skill_id: int = 5
+    level: int = 1
+    min_sp_percent: int = 50
+    first_attack_only: bool = True
+    cooldown_seconds: float = 0.0
+    monsters: list[str] = Field(default_factory=list)
+
+
 class HuntSettings(BaseModel):
     map: str = ""
     monsters: list[str] = Field(default_factory=list)
     loot_all: bool = True
     loot_radius: int = 12
     monster_rules: list[MonsterLootRule] = Field(default_factory=list)
+    attack_skills: list[AttackSkillRule] = Field(default_factory=list)
     teleport_item: str = "Fly Wing"
     emergency_hp_percent: int = 20
     emergency_action: str = "teleport"  # teleport | stop | none
