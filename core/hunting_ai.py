@@ -1027,7 +1027,81 @@ class HuntingAI:
             candidates.append(path)
 
         if not candidates:
-            return None
+            # Random sampling can be unlucky on corridor-heavy dungeon maps.
+            # Fall back to a deterministic radial scan so an otherwise healthy
+            # hunter never spends seconds bouncing SEARCHING <-> WANDERING.
+            radial_goals: list[tuple[int, int]] = []
+            for distance in (12, 18, 26, 34):
+                for step in range(16):
+                    angle = (math.tau * step) / 16.0
+                    gx = int(round(player[0] + math.cos(angle) * distance))
+                    gy = int(round(player[1] + math.sin(angle) * distance))
+
+                    goal = None
+                    for radius in range(0, 9):
+                        best = None
+                        best_error = 999999.0
+                        for ox in range(-radius, radius + 1):
+                            for oy in range(-radius, radius + 1):
+                                if radius and max(abs(ox), abs(oy)) != radius:
+                                    continue
+                                x, y = gx + ox, gy + oy
+                                if not grid.walkable(x, y):
+                                    continue
+                                if self._in_avoid_zone(map_name, x, y):
+                                    continue
+                                error = math.hypot(x - gx, y - gy)
+                                if error < best_error:
+                                    best = (x, y)
+                                    best_error = error
+                        if best is not None:
+                            goal = best
+                            break
+
+                    if goal is not None and goal not in radial_goals:
+                        radial_goals.append(goal)
+
+            best_path = None
+            best_score = None
+            for goal in radial_goals:
+                path = astar(
+                    grid,
+                    player,
+                    goal,
+                    max_expansions=120000,
+                    clearance_weight=0.85,
+                )
+                if not path or len(path) < 4:
+                    continue
+                if self._path_crosses_avoid_zone(map_name, path):
+                    continue
+
+                recently_used = any(
+                    max(
+                        abs(goal[0] - int(r.get("x") or 0)),
+                        abs(goal[1] - int(r.get("y") or 0)),
+                    ) < 8
+                    for r in recent
+                )
+                score = (
+                    0 if recently_used else 1,
+                    self._tile_distance(player, goal),
+                    len(path),
+                )
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_path = path
+
+            if best_path is None:
+                return None
+
+            self._log(
+                "wander_deterministic_fallback",
+                map=map_name,
+                goal={"x": best_path[-1][0], "y": best_path[-1][1]},
+                steps=len(best_path) - 1,
+            )
+            return best_path
 
         candidates.sort(
             key=lambda path: (
