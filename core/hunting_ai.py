@@ -282,6 +282,7 @@ class HuntingAI:
         self._attack_reposition_origin = None
         self._attack_route_anchor = None
         self._attack_backend = "mouse"
+        self._opening_skill_used_target_id = None
 
     def _lock_actor(self, actor: dict[str, Any], reason: str) -> bool:
         x, y = actor.get("x"), actor.get("y")
