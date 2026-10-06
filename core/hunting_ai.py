@@ -850,6 +850,22 @@ class HuntingAI:
         point = path_preview[index]
         return int(point["x"]), int(point["y"])
 
+    def _monster_looting_enabled(self, monster_name: str | None) -> bool:
+        hunt = app_state.get_profile().hunt
+        normalized_monster = str(monster_name or "").strip().lower()
+        rule = next(
+            (
+                row for row in hunt.monster_rules
+                if str(row.monster or "").strip().lower() == normalized_monster
+            ),
+            None,
+        )
+        if rule is None:
+            return bool(hunt.loot_all)
+        if not rule.enabled:
+            return False
+        return str(rule.loot_mode or "all").strip().lower() != "none"
+
     def _loot_allowed_for_kill(
         self,
         monster_name: str | None,
@@ -2326,26 +2342,46 @@ class HuntingAI:
 
         snapshot = authenticated_client_monitor.snapshot()
 
-        # Chain visible configured targets immediately after a kill. This keeps
-        # a local group (e.g. Obeaune + Cornutus + Hydra, or two Obeaunes)
-        # together instead of briefly resuming exploration and walking away.
-        if self._acquire_target(snapshot):
-            next_priority = self._monster_priority(self.target_name)
-            self._set_state(
-                "TARGET_SELECTED",
-                f"Next visible target: {self.target_name} (priority {next_priority})",
-            )
-            return
-
-        if self._loot_candidates(snapshot):
+        # Strict kill -> loot -> rescan -> next target lifecycle. Do not chain
+        # another visible monster before giving this kill's drops time to appear.
+        if self._monster_looting_enabled(old_name):
             hunt = app_state.get_profile().hunt
             low = max(0.0, float(hunt.loot_drop_delay_min))
             high = max(low, float(hunt.loot_drop_delay_max))
             self._loot_not_before = time.time() + ((low + high) / 2.0)
-            self._set_state("LOOTING", "Combat clear; waiting for drops before looting")
+            self._set_state(
+                "LOOTING",
+                f"{old_name or 'Monster'} dead; waiting for drops before next target",
+            )
             return
 
-        self._set_state("SEARCHING", "Selecting next monster")
+        # Loot disabled for this monster: still perform a completely fresh
+        # target scan before any wandering command can be sent.
+        fresh = authenticated_client_monitor.snapshot()
+        candidates = self._eligible_target_candidates(fresh)
+        self._log(
+            "post_kill_rescan",
+            killed_target_id=old_id,
+            killed_target_name=old_name,
+            candidate_count=len(candidates),
+            candidates=[
+                {
+                    "id": row[2].get("id"),
+                    "name": row[2].get("name"),
+                    "priority": row[0],
+                    "distance": row[1],
+                }
+                for row in candidates
+            ],
+        )
+        if self._acquire_target(fresh):
+            self._set_state(
+                "TARGET_SELECTED",
+                f"Next visible target after kill: {self.target_name}",
+            )
+            return
+
+        self._set_state("SEARCHING", "No visible target after kill; exploring")
 
     def _approach_loot_item(
         self,
@@ -2364,16 +2400,6 @@ class HuntingAI:
             floor_items = live.get("floor_items") or []
             if not any(int(row.get("id") or -1) == int(item_id) for row in floor_items):
                 return True
-
-            if (
-                app_state.get_profile().hunt.threat_first_combat
-                and self._acquire_aggressor(snapshot)
-            ):
-                self._set_state(
-                    "TARGET_SELECTED",
-                    f"Interrupted loot approach for aggressor {self.target_name}",
-                )
-                return False
 
             player = self._position(snapshot)
             if player is None:
@@ -2417,22 +2443,39 @@ class HuntingAI:
             self._stop.wait(0.04)
             return
 
-        if (
-            app_state.get_profile().hunt.threat_first_combat
-            and self._acquire_aggressor(snapshot)
-        ):
-            self._set_state(
-                "TARGET_SELECTED",
-                f"Interrupted loot for aggressor {self.target_name}",
-            )
-            return
-
         items = self._loot_candidates(snapshot)
         if not items:
             self.loot_retry.clear()
             self._loot_first_attempt_at.clear()
             self._reset_wander_navigation(release_move=True)
-            self._set_state("SEARCHING", "Loot complete; continuing hunt")
+
+            # Loot phase is complete. Re-read the authenticated client actor
+            # table now, rather than reusing the snapshot from before/while
+            # looting. This is the authoritative post-loot monster rescan.
+            fresh = authenticated_client_monitor.snapshot()
+            candidates = self._eligible_target_candidates(fresh)
+            self._log(
+                "post_loot_rescan",
+                candidate_count=len(candidates),
+                candidates=[
+                    {
+                        "id": row[2].get("id"),
+                        "name": row[2].get("name"),
+                        "priority": row[0],
+                        "distance": row[1],
+                    }
+                    for row in candidates
+                ],
+            )
+
+            if self._acquire_target(fresh):
+                self._set_state(
+                    "TARGET_SELECTED",
+                    f"Loot complete; next visible target: {self.target_name}",
+                )
+                return
+
+            self._set_state("SEARCHING", "Loot complete; no visible target")
             return
 
         player = self._position(snapshot)
@@ -2542,13 +2585,6 @@ class HuntingAI:
         while not self._stop.is_set() and time.time() < deadline:
             self._stop.wait(0.04)
             fresh = authenticated_client_monitor.snapshot()
-
-            if self._acquire_aggressor(fresh):
-                self._set_state(
-                    "TARGET_SELECTED",
-                    f"Interrupted loot for aggressor {self.target_name}",
-                )
-                return
 
             ids = {
                 int(entry["id"])
