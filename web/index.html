@@ -121,6 +121,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div class="summary-row"><span>Town return</span><strong id="summaryTownReturn">—</strong></div>
         <div class="quick-actions">
           <button class="action secondary" onclick="loadProfile()">Reload saved settings</button>
+          <button class="action secondary" onclick="downloadProfileBackup()">Download backup</button>
+          <button class="action secondary" onclick="document.getElementById('profileBackupFile').click()">Upload backup</button>
+          <input id="profileBackupFile" type="file" accept=".json,application/json" style="display:none" onchange="uploadProfileBackup(this)">
         </div>
       </div>
     </section>
@@ -1116,6 +1119,68 @@ function renderDashboardProfileSummary(p){
       ? 'Disabled · hunt only'
       : ((town.return_weight_percent??70)+'% weight')
   );
+}
+
+async function downloadProfileBackup(){
+  try{
+    const r=await fetch('/api/profile');
+    if(!r.ok) throw new Error('Could not read current profile');
+    const profile=await r.json();
+    const safeName=String(profile.name||'ro-control-profile')
+      .replace(/[^a-z0-9_-]+/gi,'-')
+      .replace(/^-+|-+$/g,'') || 'ro-control-profile';
+    const blob=new Blob(
+      [JSON.stringify({
+        format:'ro-control-profile',
+        version:1,
+        exported_at:new Date().toISOString(),
+        profile:profile
+      },null,2)],
+      {type:'application/json'}
+    );
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=safeName+'.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    out('Profile backup downloaded: '+safeName+'.json');
+  }catch(e){
+    out('Could not download profile backup: '+e.message);
+  }
+}
+
+async function uploadProfileBackup(input){
+  const file=input&&input.files&&input.files[0];
+  if(!file) return;
+  try{
+    const text=await file.text();
+    const parsed=JSON.parse(text);
+    const profile=(parsed&&parsed.format==='ro-control-profile'&&parsed.profile)
+      ? parsed.profile
+      : parsed;
+    const r=await fetch('/api/profile',{
+      method:'PUT',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify(profile)
+    });
+    const data=await r.json();
+    if(!r.ok){
+      throw new Error(
+        typeof data.detail==='string'
+          ? data.detail
+          : JSON.stringify(data.detail||data)
+      );
+    }
+    await loadProfile();
+    out('Profile backup imported successfully. These settings are now active and saved locally.');
+  }catch(e){
+    out('Could not import profile backup: '+e.message);
+  }finally{
+    input.value='';
+  }
 }
 
 async function loadProfile(){
