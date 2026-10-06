@@ -324,13 +324,21 @@ class FullAutomationController:
 
         self._stop.wait(0.50)
 
+        first_enter = game_actions.press_hotkey("ENTER")
+        self._log("kafra_physical_input", step="advance_initial_dialog", result=first_enter)
+        if not first_enter.get("ok"):
+            self.last_error = f"Could not advance initial Kafra dialogue: {first_enter.get('reason')}"
+            return False
+
+        self._stop.wait(0.30)
+
         down = game_actions.press_hotkey("DOWN")
         self._log("kafra_physical_input", step="arrow_down_to_storage", result=down)
         if not down.get("ok"):
             self.last_error = f"Could not press Down in Kafra menu: {down.get('reason')}"
             return False
 
-        self._stop.wait(0.50)
+        self._stop.wait(0.10)
 
         enter_storage = game_actions.press_hotkey("ENTER")
         self._log("kafra_physical_input", step="enter_storage_option", result=enter_storage)
@@ -338,7 +346,7 @@ class FullAutomationController:
             self.last_error = f"Could not confirm Kafra storage option: {enter_storage.get('reason')}"
             return False
 
-        self._stop.wait(0.50)
+        self._stop.wait(0.30)
 
         final_enter = game_actions.press_hotkey("ENTER")
         self._log("kafra_physical_input", step="close_final_kafra_dialog", result=final_enter)
@@ -362,7 +370,7 @@ class FullAutomationController:
             self.last_error = "Storage list did not open after the physical Kafra dialogue sequence."
             return False
 
-        self._stop.wait(0.50)
+        self._stop.wait(0.20)
         return True
 
     @staticmethod
