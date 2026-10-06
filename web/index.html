@@ -313,6 +313,35 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </section>
 
       <section class="card full">
+        <h2>Encountered monsters this session</h2>
+        <div class="muted" style="margin-bottom:12px">
+          Runtime actor IDs are different for each individual spawn. Use this table to verify whether Hydra/Cornutus are arriving with names we recognize or as unknown/misparsed actors.
+        </div>
+        <div class="actions" style="margin-bottom:12px">
+          <button class="action secondary" onclick="refreshMonsterEncounters()">Refresh encountered monsters</button>
+          <button class="action danger" onclick="clearMonsterEncounters()">Clear history</button>
+        </div>
+        <div style="overflow:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Monster</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Actor ID</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Raw secondary ID</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Map</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Last position</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Packets</th>
+              </tr>
+            </thead>
+            <tbody id="monsterEncounterRows">
+              <tr><td colspan="6" class="muted" style="padding:10px">No encounter history loaded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="monsterEncounterSummary" class="section-note" style="margin-top:12px">Walk around the map, then press Refresh.</div>
+      </section>
+
+      <section class="card full">
         <h2>PCAP analyzer</h2>
         <label>Capture file<input id="pcapFile" type="file" accept=".pcap,.pcapng"></label>
         <div class="actions"><button class="action secondary" onclick="analyzePcap()">Analyze capture</button></div>
@@ -2086,6 +2115,51 @@ async function refreshHuntDiagnosticQuiet(){
     const data=await r.json();
     renderHuntDiagnostic(data);
   }catch(e){}
+}
+
+function renderMonsterEncounters(data){
+  const body=document.getElementById('monsterEncounterRows');
+  const summary=document.getElementById('monsterEncounterSummary');
+  if(!body) return;
+  const rows=(data&&data.encounters)||[];
+  if(!rows.length){
+    body.innerHTML='<tr><td colspan="6" class="muted" style="padding:10px">No monsters recorded in this session yet.</td></tr>';
+  }else{
+    body.innerHTML=rows.map(function(row){
+      const name=String(row.name||'').trim()||'<unknown>';
+      return '<tr>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+escapeHtml(name)+'</td>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+escapeHtml(String(row.actor_id??'—'))+'</td>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+escapeHtml(String(row.char_id??'—'))+'</td>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+escapeHtml(String(row.map||'—'))+'</td>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+
+          escapeHtml((row.last_x!=null&&row.last_y!=null)?(row.last_x+','+row.last_y):'—')+
+        '</td>'+
+        '<td style="padding:8px;border-bottom:1px solid var(--line)">'+escapeHtml((row.packets||[]).join(', '))+'</td>'+
+      '</tr>';
+    }).join('');
+  }
+  if(summary){
+    const grouped=(data&&data.by_name)||[];
+    summary.innerHTML='<strong>'+rows.length+' monster spawns recorded.</strong> '+
+      grouped.map(function(g){
+        return escapeHtml(g.name)+': '+g.count+' spawn(s)';
+      }).join(' · ');
+  }
+}
+async function refreshMonsterEncounters(){
+  try{
+    const r=await fetch('/api/diagnostics/authenticated-client/monster-encounters');
+    const data=await r.json();
+    renderMonsterEncounters(data);
+    out(data);
+  }catch(e){out(String(e))}
+}
+async function clearMonsterEncounters(){
+  const r=await fetch('/api/diagnostics/authenticated-client/monster-encounters/clear',{method:'POST'});
+  const data=await r.json();
+  renderMonsterEncounters(data);
+  out(data);
 }
 
 async function analyzePcap(){
