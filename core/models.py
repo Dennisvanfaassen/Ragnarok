@@ -97,6 +97,14 @@ class HealingSettings(BaseModel):
     cooldown_seconds: float = 0.9
 
 
+class AspdSettings(BaseModel):
+    enabled: bool = False
+    item: str = "Awakening Potion"
+    name_id: int | None = 656
+    reuse_minutes: float = 30.0
+    restock_target: int = 4
+
+
 class SupplySettings(BaseModel):
     awakening_potions: int = 4
     butterfly_wings: int = 1
@@ -139,6 +147,7 @@ class BotProfile(BaseModel):
     server_profile: str = "soulbound"
     hunt: HuntSettings = Field(default_factory=HuntSettings)
     healing: HealingSettings = Field(default_factory=HealingSettings)
+    aspd: AspdSettings = Field(default_factory=AspdSettings)
     town: TownSettings = Field(default_factory=TownSettings)
 
 
