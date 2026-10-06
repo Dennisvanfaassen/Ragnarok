@@ -233,6 +233,85 @@ class TownTravelController:
         self._set("ERROR", "Interactive portal did not change map.")
         return False
 
+    def _force_portal_entry(
+        self,
+        source_map: str,
+        portal: tuple[int, int],
+        *,
+        timeout: float = 4.0,
+    ) -> bool:
+        """Actively step across a physical portal trigger when pathing stops short.
+
+        OpenKore portal coordinates and the local nav grid can differ by one or
+        two cells. Once we are near the portal, probe only the immediate 3x3
+        trigger area and wait for the actual server map change.
+        """
+        before_map = source_map
+        deadline = time.time() + timeout
+        last_send = 0.0
+
+        # Exact trigger first, then immediate neighbors. This stays tightly
+        # bounded around the known portal instead of wandering away.
+        candidates = [
+            portal,
+            (portal[0] + 1, portal[1]),
+            (portal[0] - 1, portal[1]),
+            (portal[0], portal[1] + 1),
+            (portal[0], portal[1] - 1),
+            (portal[0] + 1, portal[1] + 1),
+            (portal[0] + 1, portal[1] - 1),
+            (portal[0] - 1, portal[1] + 1),
+            (portal[0] - 1, portal[1] - 1),
+        ]
+        attempt = 0
+
+        while not self._stop.is_set() and time.time() < deadline:
+            snapshot = self._snapshot()
+            current_map = str(self._world(snapshot).get("map") or "")
+            if current_map and current_map != before_map:
+                game_actions.release_hold_move()
+                self._log(
+                    "portal_crossed_after_entry_probe",
+                    source_map=before_map,
+                    dest_map=current_map,
+                    portal={"x": portal[0], "y": portal[1]},
+                )
+                return True
+
+            player = self._position(snapshot)
+            if player is None:
+                self._stop.wait(0.05)
+                continue
+
+            now = time.time()
+            if now - last_send >= 0.28:
+                destination = candidates[attempt % len(candidates)]
+                attempt += 1
+
+                if game_actions.native_move_ready():
+                    result = game_actions.move_to(destination)
+                else:
+                    result = game_actions.update_hold_direction(
+                        destination[0] - player[0],
+                        destination[1] - player[1],
+                        radius_px=self.cursor_radius,
+                        min_pixel_change=8,
+                    )
+
+                self._log(
+                    "portal_entry_probe",
+                    attempt=attempt,
+                    player={"x": player[0], "y": player[1]},
+                    destination={"x": destination[0], "y": destination[1]},
+                    result=result,
+                )
+                last_send = now
+
+            self._stop.wait(0.05)
+
+        game_actions.release_hold_move()
+        return False
+
     def _walk_to_portal(self, leg: dict[str, Any]) -> bool:
         source_map = str(leg["source_map"])
         portal = (int(leg["source_x"]), int(leg["source_y"]))
@@ -339,13 +418,23 @@ class TownTravelController:
                         self._set("ERROR", "Could not steer toward portal.")
                         return False
 
-            # When on/near the trigger, keep holding toward it and wait for the
-            # server map change instead of clicking repeatedly.
-            if max(abs(player[0] - portal[0]), abs(player[1] - portal[1])) <= 2:
+            # Once close to the portal, stop relying on the ordinary A*
+            # endpoint. Some portal coordinates sit one cell beyond the nav
+            # endpoint, which previously left the character standing in front
+            # of the warp. Actively probe the exact trigger and its immediate
+            # neighboring cells until the server confirms a map change.
+            if max(abs(player[0] - portal[0]), abs(player[1] - portal[1])) <= 3:
                 self._set(
                     "ENTERING_PORTAL",
-                    f"Entering portal to {leg['dest_map']}",
+                    f"Stepping through portal to {leg['dest_map']}",
                 )
+                if self._force_portal_entry(source_map, portal, timeout=4.0):
+                    return True
+                self._set(
+                    "ERROR",
+                    f"Reached portal at {portal[0]},{portal[1]} but the map did not change.",
+                )
+                return False
 
             self._stop.wait(0.05)
 
