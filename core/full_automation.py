@@ -851,6 +851,30 @@ class FullAutomationController:
         with self._lock:
             if self.running:
                 return self.snapshot()
+
+            profile = app_state.get_profile()
+            hunt_map = str(profile.hunt.map or "").strip()
+            enabled_monsters = [
+                rule.monster
+                for rule in profile.hunt.monster_rules
+                if rule.enabled and str(rule.behavior or "attack").strip().lower() != "ignore"
+            ]
+            if not enabled_monsters:
+                enabled_monsters = [
+                    name for name in profile.hunt.monsters
+                    if str(name or "").strip()
+                ]
+
+            if not hunt_map:
+                raise RuntimeError(
+                    "No hunting map is saved. Configure Hunting & Loot and save settings first."
+                )
+            if not enabled_monsters:
+                raise RuntimeError(
+                    "No monsters are enabled in the saved Hunt profile. "
+                    "Select at least one monster and save settings first."
+                )
+
             if not authenticated_client_monitor.snapshot().get("classic_pid"):
                 raise RuntimeError("Classic.exe is not detected.")
             native = native_action_bridge.snapshot()
