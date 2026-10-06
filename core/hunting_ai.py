@@ -287,7 +287,7 @@ class HuntingAI:
         self.route_target_pos = None
         self.attack_retry = 0
         self._target_failure_count.setdefault(int(self.target_id), 0)
-        self._target_locked_at.setdefault(int(self.target_id), time.time())
+        self._target_locked_at[int(self.target_id)] = time.time()
         self._log(
             "target_locked",
             target_id=self.target_id,
@@ -2963,6 +2963,14 @@ class HuntingAI:
                         "preempt_for_higher_priority_aggressor": app_state.get_profile().hunt.preempt_for_higher_priority_aggressor,
                         "loot_after_aggressors": app_state.get_profile().hunt.loot_after_aggressors,
                         "exploration_frontier_bias": app_state.get_profile().hunt.exploration_frontier_bias,
+                        "attack_check_los": app_state.get_profile().hunt.attack_check_los,
+                        "attack_wait_approach_finish": app_state.get_profile().hunt.attack_wait_approach_finish,
+                        "attack_max_route_time": app_state.get_profile().hunt.attack_max_route_time,
+                        "attack_route_max_path_distance": app_state.get_profile().hunt.attack_route_max_path_distance,
+                        "failed_los_cooldown_seconds": app_state.get_profile().hunt.failed_los_cooldown_seconds,
+                        "move_giveup_seconds": app_state.get_profile().hunt.move_giveup_seconds,
+                        "loot_giveup_seconds": app_state.get_profile().hunt.loot_giveup_seconds,
+                        "hunting_liveness_timeout": app_state.get_profile().hunt.hunting_liveness_timeout,
                     },
                     "wander_lookahead": self.wander_lookahead,
                     "wander_cursor_radius": self.wander_cursor_radius,
