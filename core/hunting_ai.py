@@ -95,6 +95,7 @@ class HuntingAI:
         self.attack_clicked_at = 0.0
         self._combat_click_locked = False
         self._combat_seen = False
+        self._combat_committed_target_id: int | None = None
         self._attack_origin = None
         self._attack_backend = "mouse"
         self._opening_skill_used_target_id = None
@@ -278,6 +279,7 @@ class HuntingAI:
         self.attack_clicked_at = 0.0
         self._combat_click_locked = False
         self._combat_seen = False
+        self._combat_committed_target_id = None
         self._attack_reposition_required = False
         self._attack_reposition_origin = None
         self._attack_route_anchor = None
@@ -550,6 +552,12 @@ class HuntingAI:
             profile.hunt.threat_first_combat
             and profile.hunt.preempt_for_higher_priority_aggressor
             and self.target_id is not None
+        ):
+            return False
+
+        if (
+            self._combat_committed_target_id is not None
+            and int(self._combat_committed_target_id) == int(self.target_id)
         ):
             return False
 
@@ -1446,6 +1454,9 @@ class HuntingAI:
             return False
 
         self._attack_backend = str(result.get("backend") or "native")
+        self._combat_committed_target_id = (
+            int(self.target_id) if self.target_id is not None else None
+        )
         self.attack_retry = 0
         self._attack_origin = player
         self._combat_click_locked = False
@@ -1986,6 +1997,9 @@ class HuntingAI:
             return
 
         self._attack_backend = str(result.get("backend") or "native")
+        self._combat_committed_target_id = (
+            int(self.target_id) if self.target_id is not None else None
+        )
         self._attack_origin = player
         self._combat_click_locked = False
         self._combat_seen = False
@@ -2127,11 +2141,14 @@ class HuntingAI:
                 f"Combat confirmed on {self.target_name}; waiting for death"
             )
 
-        # If the native attack was accepted but no combat ever starts, the
-        # monster is usually behind geometry or otherwise unreachable. Do not
-        # wait forever on that actor.
+        committed = (
+            self.target_id is not None
+            and self._combat_committed_target_id is not None
+            and int(self.target_id) == int(self._combat_committed_target_id)
+        )
         if (
-            not self._combat_seen
+            not committed
+            and not self._combat_seen
             and time.time() - self.attack_clicked_at
             >= max(0.8, float(app_state.get_profile().hunt.combat_no_progress_timeout))
         ):
@@ -2144,16 +2161,6 @@ class HuntingAI:
                 target_name=self.target_name,
                 failures=failures,
             )
-            if failures >= 2:
-                failed_id = self.target_id
-                failed_name = self.target_name
-                self._cooldown_target(failed_id, "attack_never_entered_combat")
-                self._clear_target()
-                self._set_state(
-                    "SEARCHING",
-                    f"Skipping unreachable {failed_name}",
-                )
-                return
             self._set_state(
                 "ROUTING",
                 f"No combat progress on {self.target_name}; trying a better approach",
@@ -3164,6 +3171,14 @@ class HuntingAI:
                 "state": self.state,
                 "message": self.message,
                 "state_since": self.state_since,
+                "combat_lock": {
+                    "committed_target_id": self._combat_committed_target_id,
+                    "locked": (
+                        self.target_id is not None
+                        and self._combat_committed_target_id is not None
+                        and int(self.target_id) == int(self._combat_committed_target_id)
+                    ),
+                },
                 "target": (
                     {
                         "id": self.target_id,
