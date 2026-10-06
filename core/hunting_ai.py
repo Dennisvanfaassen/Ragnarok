@@ -2341,7 +2341,10 @@ class HuntingAI:
             self._stop.wait(0.04)
             return
 
-        if self._acquire_aggressor(snapshot):
+        if (
+            app_state.get_profile().hunt.threat_first_combat
+            and self._acquire_aggressor(snapshot)
+        ):
             self._set_state(
                 "TARGET_SELECTED",
                 f"Interrupted loot for aggressor {self.target_name}",
