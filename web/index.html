@@ -463,18 +463,18 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
               <option value="false">Allow screen/mouse fallback</option>
             </select>
           </label>
-          <label>Threat-first combat
+          <label>Threat handling
             <select id="threatFirstCombat">
-              <option value="true" selected>Aggressors before loot/passive mobs</option>
-              <option value="false">Normal target order</option>
+              <option value="true" selected>Aggressors may interrupt looting</option>
+              <option value="false">Finish looting before threats</option>
             </select>
           </label>
         </div>
         <div class="row">
           <label>Priority pre-emption
             <select id="priorityPreempt">
-              <option value="true" selected>Switch to higher-priority aggressor</option>
-              <option value="false">Finish current target first</option>
+              <option value="true" selected>Before combat, switch to lower-number target</option>
+              <option value="false">Keep first selected target until combat</option>
             </select>
           </label>
           <label>Exploration strategy
@@ -485,7 +485,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           </label>
         </div>
         <div class="section-note" style="margin-bottom:12px">
-          Priority uses lower numbers first: 1 outranks 10, and 10 outranks 100. Priority can change the target while selecting or approaching, but once combat starts the bot keeps that monster locked until it dies.
+          Priority is strict: lower numbers always win target selection. Example: priority 1 is chosen before 2, and 2 before 3. Distance only breaks ties between monsters with the same priority. A monster set to "Only if it attacks me" joins that same priority order only while it is aggressive. Once combat starts, the target stays locked until it dies.
         </div>
         <div class="row">
           <label>Attack route timeout (sec)
