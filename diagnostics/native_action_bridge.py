@@ -485,6 +485,37 @@ rpc.exports = {
         };
     },
 
+    useSkillToId(skillLevel, skillId, targetId) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const level = Number(skillLevel) & 0xffff;
+        const skill = Number(skillId) & 0xffff;
+        const target = Number(targetId) >>> 0;
+        // 2021-06-30 Zero: 0x0438 CZ_USE_SKILL
+        // [opcode u16][level u16][skill id u16][target actor id u32]
+        const bytes = [
+            0x38, 0x04,
+            level & 0xff, (level >>> 8) & 0xff,
+            skill & 0xff, (skill >>> 8) & 0xff,
+            target & 0xff,
+            (target >>> 8) & 0xff,
+            (target >>> 16) & 0xff,
+            (target >>> 24) & 0xff
+        ];
+        const packet = Memory.alloc(10);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 10, 0);
+        return {
+            ok: result === 10,
+            bytes_sent: result,
+            skill_level: level,
+            skill_id: skill,
+            target_id: target,
+            packet_hex: bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '),
+            socket: mapSocket.toString()
+        };
+    },
+
     itemUse(index, targetId) {
         if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
         if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
@@ -889,6 +920,45 @@ class NativeActionBridge:
         result["executed"] = bool(result.get("ok"))
         result["command"] = "storage_close"
         self._record({"event": "direct_storage_close", "result": result})
+        return result
+
+    def use_skill_to_id(
+        self,
+        skill_id: int,
+        level: int,
+        target_id: int,
+    ) -> dict[str, Any]:
+        skill_id = int(skill_id)
+        level = int(level)
+        target_id = int(target_id)
+        if not (0 < skill_id <= 65535):
+            return {"ok": False, "executed": False, "reason": "skill_id_out_of_range"}
+        if not (0 < level <= 65535):
+            return {"ok": False, "executed": False, "reason": "skill_level_out_of_range"}
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "executed": False, "reason": "bridge_not_running"}
+        if not self._agent_status().get("socket_learned"):
+            return {"ok": False, "executed": False, "reason": "map_socket_not_learned"}
+        try:
+            result = dict(
+                script.exports_sync.use_skill_to_id(
+                    level,
+                    skill_id,
+                    target_id,
+                )
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+            }
+        result["executed"] = bool(result.get("ok"))
+        result["command"] = "use_skill_to_id"
+        self._record({"event": "direct_skill_use", "result": result})
         return result
 
     def item_use(self, inventory_index: int, target_id: int) -> dict[str, Any]:
