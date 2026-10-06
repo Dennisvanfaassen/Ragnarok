@@ -836,45 +836,20 @@ class FullAutomationController:
             self._set("HUNTING", f"Hunting on {hunt_map}.")
 
             while not self._stop.is_set():
-                snapshot = self._snapshot()
-                town_service_registry.observe_live(snapshot)
-                world = self._world(snapshot)
-                profile = app_state.get_profile()
-                weight_percent = world.get("weight_percent")
-                threshold = max(1, min(99, int(profile.town.return_weight_percent)))
+                # RO Control is intentionally hunt/travel only. Town storage,
+                # selling and buying are manual player actions because SoulBound
+                # disconnects the client when automated storage transfers are used.
+                # Keep the hunting controller alive and never invoke a town cycle.
+                if not active_hunt_controller.snapshot().get("running"):
+                    active_hunt_controller.start({})
+                    self._set("HUNTING", f"Hunting on {hunt_map}.")
 
-                forced_cycle = self._force_cycle.is_set()
-                automatic_reason = (
-                    self._automatic_town_trigger(
-                        weight_percent=weight_percent,
-                        threshold=threshold,
-                    )
-                    if profile.town.auto_town_cycle
-                    else None
-                )
-                if forced_cycle or automatic_reason is not None:
+                if self._force_cycle.is_set():
                     self._force_cycle.clear()
-                    trigger_reason = (
-                        "Manual town-cycle request"
-                        if forced_cycle
-                        else automatic_reason
-                    )
                     self._log(
-                        "town_cycle_triggered",
-                        reason=trigger_reason,
-                        weight_percent=weight_percent,
+                        "town_cycle_ignored",
+                        reason="Town automation disabled; storage/selling/buying are manual.",
                     )
-                    if not self._town_cycle(
-                        forced=forced_cycle,
-                        resume_hunt=True,
-                        trigger_reason=trigger_reason,
-                    ):
-                        self._set(
-                            "PAUSED",
-                            self.last_error or "Town cycle failed.",
-                        )
-                        return
-                    self._set("HUNTING", "Town cycle complete; hunting resumed.")
 
                 self._stop.wait(0.20)
         except Exception as exc:
@@ -940,25 +915,11 @@ class FullAutomationController:
             self.running = False
 
     def force_town_cycle(self) -> dict[str, Any]:
-        if self.running:
-            self._force_cycle.set()
-            self._log("force_town_cycle_requested")
-            return self.snapshot()
-
-        if not authenticated_client_monitor.snapshot().get("classic_pid"):
-            raise RuntimeError("Classic.exe is not detected.")
-
-        self._stop.clear()
-        self.last_error = None
-        self.running = True
-        self._thread = threading.Thread(
-            target=self._run_standalone_town_cycle_test,
-            daemon=True,
-            name="standalone-town-cycle-test",
+        raise RuntimeError(
+            "Town automation is disabled. Storage, selling and buying are manual; "
+            "RO Control now handles travel, hunting and looting only."
         )
-        self._thread.start()
-        self._log("standalone_town_cycle_requested")
-        return self.snapshot()
+
 
     def stop(self) -> dict[str, Any]:
         self._stop.set()
