@@ -499,116 +499,34 @@ class HuntingAI:
         rule = self._monster_rule(name)
         return max(1, min(999, int(rule.priority))) if rule is not None else 50
 
-    def _best_aggressor_actor(
+    def _eligible_target_candidates(
         self,
         snapshot: dict[str, Any],
         *,
         exclude_id: int | None = None,
-    ) -> dict[str, Any] | None:
-        live = snapshot.get("live_state") or {}
-        ids = set(live.get("aggressor_ids") or [])
-        if not ids:
-            return None
-
-        player = self._position(snapshot)
-        actors = [
-            actor
-            for actor in (live.get("actors") or [])
-            if actor.get("kind") == "monster"
-            and int(actor.get("id") or -1) in ids
-            and not self._target_on_cooldown(int(actor.get("id") or -1))
-            and (exclude_id is None or int(actor.get("id") or -1) != int(exclude_id))
-            and self._monster_behavior(actor.get("name")) in {"attack", "aggressor_only"}
-        ]
-        if not actors:
-            return None
-
-        def sort_key(actor: dict[str, Any]):
-            priority = self._monster_priority(actor.get("name"))
-            if player is None:
-                distance = 999999
-            else:
-                distance = max(
-                    abs(int(actor.get("x") or player[0]) - player[0]),
-                    abs(int(actor.get("y") or player[1]) - player[1]),
-                )
-            return (priority, distance, int(actor.get("id") or 0))
-
-        actors.sort(key=sort_key)
-        return actors[0]
-
-    def _acquire_aggressor(self, snapshot: dict[str, Any]) -> bool:
-        actor = self._best_aggressor_actor(snapshot)
-        if actor is None:
-            return False
-        return self._lock_actor(actor, "aggressor")
-
-    def _maybe_preempt_for_higher_priority_aggressor(
-        self,
-        snapshot: dict[str, Any],
-    ) -> bool:
-        profile = app_state.get_profile()
-        if not (
-            profile.hunt.threat_first_combat
-            and profile.hunt.preempt_for_higher_priority_aggressor
-            and self.target_id is not None
-        ):
-            return False
-
-        if (
-            self._combat_committed_target_id is not None
-            and int(self._combat_committed_target_id) == int(self.target_id)
-        ):
-            return False
-
-        candidate = self._best_aggressor_actor(
-            snapshot,
-            exclude_id=int(self.target_id),
-        )
-        if candidate is None:
-            return False
-
-        current_priority = self._monster_priority(self.target_name)
-        candidate_priority = self._monster_priority(candidate.get("name"))
-        if candidate_priority >= current_priority:
-            return False
-
-        old_id = self.target_id
-        old_name = self.target_name
-        if not self._lock_actor(candidate, "higher_priority_aggressor_preempt"):
-            return False
-
-        self._log(
-            "priority_preempt",
-            previous_target_id=old_id,
-            previous_target_name=old_name,
-            previous_priority=current_priority,
-            new_target_id=self.target_id,
-            new_target_name=self.target_name,
-            new_priority=candidate_priority,
-        )
-
-        # A priority switch changes the target, but it does not bypass normal
-        # route/LOS checks. The new threat is approached first when necessary.
-        self._set_state(
-            "TARGET_SELECTED",
-            f"Priority switched to {self.target_name}",
-        )
-        return True
-
-    def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
+    ) -> list[tuple[int, int, dict[str, Any]]]:
         profile = app_state.get_profile()
         targeting = build_targeting_state(snapshot, profile.hunt.monsters)
-        player = self._position(snapshot)
-        candidates = []
+        live = snapshot.get("live_state") or {}
+        aggressor_ids = {int(v) for v in (live.get("aggressor_ids") or [])}
+        candidates: list[tuple[int, int, dict[str, Any]]] = []
 
         for actor in targeting.get("candidates") or []:
-            if self._target_on_cooldown(int(actor.get("id") or -1)):
+            actor_id = int(actor.get("id") or -1)
+            if exclude_id is not None and actor_id == int(exclude_id):
                 continue
+            if self._target_on_cooldown(actor_id):
+                continue
+
             rule = self._monster_rule(actor.get("name"))
             behavior = self._monster_behavior(actor.get("name"))
-            if behavior != "attack":
+            if behavior == "ignore":
                 continue
+            if behavior == "aggressor_only" and actor_id not in aggressor_ids:
+                continue
+            if behavior not in {"attack", "aggressor_only"}:
+                continue
+
             actor_x, actor_y = actor.get("x"), actor.get("y")
             if (
                 actor_x is not None
@@ -628,17 +546,106 @@ class HuntingAI:
                 if int(rule.max_distance or 0) > 0 and int(tile_distance) > int(rule.max_distance):
                     continue
 
-            priority = int(rule.priority) if rule is not None else 50
+            priority = self._monster_priority(actor.get("name"))
             candidates.append((priority, int(tile_distance or 0), actor))
+
+        # Priority is authoritative. Distance is only a tie-breaker between
+        # monsters with the same numeric priority.
+        candidates.sort(
+            key=lambda row: (
+                row[0],
+                row[1],
+                int(row[2].get("id") or 0),
+            )
+        )
+        return candidates
+
+    def _best_aggressor_actor(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        exclude_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        live = snapshot.get("live_state") or {}
+        aggressor_ids = {int(v) for v in (live.get("aggressor_ids") or [])}
+        for _priority, _distance, actor in self._eligible_target_candidates(
+            snapshot,
+            exclude_id=exclude_id,
+        ):
+            if int(actor.get("id") or -1) in aggressor_ids:
+                return actor
+        return None
+
+    def _acquire_aggressor(self, snapshot: dict[str, Any]) -> bool:
+        actor = self._best_aggressor_actor(snapshot)
+        if actor is None:
+            return False
+        return self._lock_actor(actor, "aggressor")
+
+    def _maybe_preempt_for_higher_priority_aggressor(
+        self,
+        snapshot: dict[str, Any],
+    ) -> bool:
+        profile = app_state.get_profile()
+        if not (
+            profile.hunt.preempt_for_higher_priority_aggressor
+            and self.target_id is not None
+        ):
+            return False
+
+        # Once combat has started, never switch targets mid-kill.
+        if (
+            self._combat_committed_target_id is not None
+            and int(self._combat_committed_target_id) == int(self.target_id)
+        ):
+            return False
+
+        candidates = self._eligible_target_candidates(
+            snapshot,
+            exclude_id=int(self.target_id),
+        )
+        if not candidates:
+            return False
+
+        candidate_priority, _distance, candidate = candidates[0]
+        current_priority = self._monster_priority(self.target_name)
+
+        # Lower number means higher priority. Equal-priority monsters never
+        # cause a pre-attack switch; distance only decides the initial choice.
+        if candidate_priority >= current_priority:
+            return False
+
+        old_id = self.target_id
+        old_name = self.target_name
+        if not self._lock_actor(candidate, "higher_priority_target_preempt"):
+            return False
+
+        self._log(
+            "priority_preempt",
+            previous_target_id=old_id,
+            previous_target_name=old_name,
+            previous_priority=current_priority,
+            new_target_id=self.target_id,
+            new_target_name=self.target_name,
+            new_priority=candidate_priority,
+        )
+        self._set_state(
+            "TARGET_SELECTED",
+            f"Priority switched to {self.target_name} ({candidate_priority})",
+        )
+        return True
+
+    def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
+        profile = app_state.get_profile()
+        player = self._position(snapshot)
+        candidates = self._eligible_target_candidates(snapshot)
 
         if not candidates:
             return False
 
-        candidates.sort(key=lambda row: (row[0], row[1], int(row[2].get("id") or 0)))
-
-        # Before locking a passive target, reject candidates that clearly have
-        # no reasonable route. This is cheaper than entering the full combat
-        # state machine and later discovering the same blocked monster.
+        # Route validation is evaluated in strict priority order. We only move
+        # to the next priority when the higher-priority candidate is currently
+        # unreachable/outside configured chase distance.
         if player is not None:
             map_name = str(self._world(snapshot).get("map") or "")
             try:
@@ -648,7 +655,7 @@ class HuntingAI:
 
             if grid is not None:
                 max_path = max(1, int(profile.hunt.attack_route_max_path_distance))
-                for _priority, _distance, actor in candidates:
+                for priority, _distance, actor in candidates:
                     ax, ay = actor.get("x"), actor.get("y")
                     if ax is None or ay is None:
                         continue
@@ -659,7 +666,13 @@ class HuntingAI:
                             not profile.hunt.attack_check_los
                             or clear_walk_line(grid, player, target)
                         ):
-                            return self._lock_actor(actor, "normal_target_route_checked")
+                            self._log(
+                                "priority_target_selected",
+                                target_id=actor.get("id"),
+                                target_name=actor.get("name"),
+                                priority=priority,
+                            )
+                            return self._lock_actor(actor, "priority_target_route_checked")
                         continue
 
                     path = astar(
@@ -676,15 +689,11 @@ class HuntingAI:
                         )
                         continue
                     if len(path) - 1 > max_path:
-                        # "Max attack route" is a chase-distance limit, not a
-                        # blacklist. Do not cooldown a valid configured monster
-                        # merely because it is currently too far away; the bot
-                        # may walk much closer a moment later and should then
-                        # consider the same Hydra/Cornutus immediately.
                         self._log(
                             "target_deferred_too_far",
                             target_id=actor.get("id"),
                             target_name=actor.get("name"),
+                            priority=priority,
                             path_steps=len(path) - 1,
                             max_path_steps=max_path,
                         )
@@ -695,11 +704,25 @@ class HuntingAI:
                             "target_precheck_avoid_zone",
                         )
                         continue
-                    return self._lock_actor(actor, "normal_target_route_checked")
+
+                    self._log(
+                        "priority_target_selected",
+                        target_id=actor.get("id"),
+                        target_name=actor.get("name"),
+                        priority=priority,
+                    )
+                    return self._lock_actor(actor, "priority_target_route_checked")
 
                 return False
 
-        return self._lock_actor(candidates[0][2], "normal_target")
+        priority, _distance, actor = candidates[0]
+        self._log(
+            "priority_target_selected",
+            target_id=actor.get("id"),
+            target_name=actor.get("name"),
+            priority=priority,
+        )
+        return self._lock_actor(actor, "priority_target")
 
     @staticmethod
     def _tile_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -1429,18 +1452,6 @@ class HuntingAI:
 
 
     def _step_searching(self, snapshot: dict[str, Any]):
-        if self._acquire_aggressor(snapshot):
-            if self._attack_locked_immediately(
-                snapshot,
-                reason="search_aggressor",
-            ):
-                return
-            self._set_state(
-                "TARGET_SELECTED",
-                f"Prioritizing aggressor {self.target_name}",
-            )
-            return
-
         loot = self._loot_candidates(snapshot)
         if loot:
             self._set_state("LOOTING", f"Looting {len(loot)} floor item(s)")
@@ -2314,13 +2325,6 @@ class HuntingAI:
         self._reset_wander_navigation(release_move=True)
 
         snapshot = authenticated_client_monitor.snapshot()
-        if self._acquire_aggressor(snapshot):
-            self._set_state(
-                "TARGET_SELECTED",
-                f"Aggressor priority: {self.target_name}",
-            )
-            return
-
         if self._loot_candidates(snapshot):
             hunt = app_state.get_profile().hunt
             low = max(0.0, float(hunt.loot_drop_delay_min))
@@ -2521,18 +2525,6 @@ class HuntingAI:
         return point if grid.walkable(*point) else None
 
     def _step_wandering(self, snapshot: dict[str, Any]):
-        if self._acquire_aggressor(snapshot):
-            if self._attack_locked_immediately(
-                snapshot,
-                reason="wander_aggressor_interrupt",
-            ):
-                return
-            self._set_state(
-                "TARGET_SELECTED",
-                f"Aggressor spotted: {self.target_name}",
-            )
-            return
-
         if self._acquire_target(snapshot):
             if self._attack_locked_immediately(
                 snapshot,
