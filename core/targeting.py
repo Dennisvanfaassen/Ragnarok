@@ -37,7 +37,9 @@ def build_targeting_state(
 
         if now - last_seen > stale_after_seconds:
             continue
-        if wanted and _norm(name) not in wanted:
+        # Hunting is whitelist-based. An empty saved monster list means
+        # "attack nothing", never "attack everything".
+        if not wanted or _norm(name) not in wanted:
             continue
         if actor_x is None or actor_y is None:
             continue
@@ -74,7 +76,8 @@ def build_targeting_state(
 
     return {
         "wanted_monsters": wanted_monsters,
-        "target_all_monsters": not bool(wanted),
+        "target_all_monsters": False,
+        "targeting_enabled": bool(wanted),
         "candidate_count": len(candidates),
         "selected": selected,
         "candidates": candidates[:50],
