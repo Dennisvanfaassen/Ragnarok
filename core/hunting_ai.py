@@ -2325,6 +2325,18 @@ class HuntingAI:
         self._reset_wander_navigation(release_move=True)
 
         snapshot = authenticated_client_monitor.snapshot()
+
+        # Chain visible configured targets immediately after a kill. This keeps
+        # a local group (e.g. Obeaune + Cornutus + Hydra, or two Obeaunes)
+        # together instead of briefly resuming exploration and walking away.
+        if self._acquire_target(snapshot):
+            next_priority = self._monster_priority(self.target_name)
+            self._set_state(
+                "TARGET_SELECTED",
+                f"Next visible target: {self.target_name} (priority {next_priority})",
+            )
+            return
+
         if self._loot_candidates(snapshot):
             hunt = app_state.get_profile().hunt
             low = max(0.0, float(hunt.loot_drop_delay_min))
