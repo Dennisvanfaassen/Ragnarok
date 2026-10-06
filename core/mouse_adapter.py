@@ -213,6 +213,41 @@ class MouseGameAdapter:
         time.sleep(0.035)
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
+    def click_actor(
+        self,
+        player: tuple[int, int],
+        target: tuple[int, int],
+        *,
+        sprite_y_offset: int | None = None,
+    ) -> dict[str, Any]:
+        hwnd = self._find_window()
+        if not hwnd:
+            return {"ok": False, "reason": "window_not_found"}
+
+        self.release_hold_move()
+        point = self._project(
+            hwnd,
+            player,
+            target,
+            sprite=True,
+            sprite_y_offset=(
+                self.sprite_y_offset
+                if sprite_y_offset is None
+                else int(sprite_y_offset)
+            ),
+        )
+        if point is None:
+            return {"ok": False, "reason": "actor_not_clickable"}
+
+        self._click_screen(hwnd, int(point[0]), int(point[1]))
+        return {
+            "ok": True,
+            "screen": {"x": int(point[0]), "y": int(point[1])},
+            "map_from": {"x": int(player[0]), "y": int(player[1])},
+            "map_to": {"x": int(target[0]), "y": int(target[1])},
+            "input_mode": "windows_mouse_click",
+        }
+
     def press_hotkey(self, key: str) -> dict[str, Any]:
         hwnd = self._find_window()
         if not hwnd:
@@ -226,6 +261,10 @@ class MouseGameAdapter:
             "F5": 0x74, "F6": 0x75, "F7": 0x76, "F8": 0x77,
             "F9": 0x78, "F10": 0x79, "F11": 0x7A, "F12": 0x7B,
             "ENTER": 0x0D, "RETURN": 0x0D,
+            "UP": 0x26, "ARROWUP": 0x26,
+            "DOWN": 0x28, "ARROWDOWN": 0x28,
+            "LEFT": 0x25, "ARROWLEFT": 0x25,
+            "RIGHT": 0x27, "ARROWRIGHT": 0x27,
         }
         vk = key_map.get(normalized)
         if vk is None:
