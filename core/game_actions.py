@@ -224,6 +224,22 @@ class GameActionAdapter:
             result["input_mode"] = "screen_projection"
         return result
 
+    def click_actor(
+        self,
+        player: tuple[int, int],
+        target: tuple[int, int],
+        *,
+        sprite_y_offset: int | None = None,
+    ) -> dict[str, Any]:
+        result = self._backend.click_actor(
+            player,
+            target,
+            sprite_y_offset=sprite_y_offset,
+        )
+        if isinstance(result, dict):
+            result.setdefault("backend", "windows_input")
+        return result
+
     def press_hotkey(self, key: str) -> dict[str, Any]:
         result = self._backend.press_hotkey(key)
         if isinstance(result, dict):
