@@ -67,6 +67,15 @@ async def save_profile(profile: BotProfile):
     return app_state.set_profile(profile)
 
 
+@app.patch("/api/profile/town-mode")
+async def patch_town_mode(payload: dict):
+    profile = app_state.get_profile()
+    enabled = bool(payload.get("auto_town_cycle"))
+    town = profile.town.model_copy(update={"auto_town_cycle": enabled})
+    updated = profile.model_copy(update={"town": town})
+    return app_state.set_profile(updated)
+
+
 @app.get("/api/hunt-profiles")
 async def list_hunt_profiles():
     return hunt_profile_store.list()
