@@ -1124,7 +1124,11 @@ class AuthenticatedClientMonitor:
     def character_snapshot(self) -> dict[str, Any]:
         with self._lock:
             world = dict(self._world)
-            skills = [dict(row) for _, row in sorted(self._skills.items())]
+            skills = [
+                dict(row)
+                for _, row in sorted(self._skills.items())
+                if int(row.get("level") or 0) > 0
+            ]
             statuses = [dict(row) for _, row in sorted(self._active_statuses.items())]
             updated_at = self._skills_updated_at
             status_packets_seen = self._status_packets_seen
