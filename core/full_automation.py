@@ -1015,7 +1015,11 @@ class FullAutomationController:
                         )
                         active_hunt_controller.stop()
                         self._set("TOWN_CYCLE", f"Returning to town: {trigger}.")
-                        if not self._town_cycle(forced=False, resume_hunt=True):
+                        if not self._town_cycle(
+                            forced=False,
+                            resume_hunt=True,
+                            trigger_reason=trigger,
+                        ):
                             self._set("PAUSED", self.last_error or "Automatic town cycle failed.")
                             break
                         self._set("HUNTING", f"Hunting on {hunt_map}.")
