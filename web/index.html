@@ -34,6 +34,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .heat-legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);flex-wrap:wrap}
 .heat-swatch{width:18px;height:8px;border-radius:999px;display:inline-block}
 .heat-unvisited{background:#39314c}.heat-stale{background:#654d9b}.heat-warm{background:#3f7eb5}.heat-recent{background:#28d7a1}
+.map-density-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:end;width:100%}.map-density-controls label{min-width:150px;margin:0}
+.density-legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-left:auto}.density-gradient{width:150px;height:9px;border-radius:999px;background:linear-gradient(90deg,#356fe8 0%,#39c983 35%,#f2d44f 68%,#f04f4f 100%)}
+.map-inspector-monsters{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.map-inspector-monster{font-size:11px;border:1px solid var(--line);background:#111825;border-radius:999px;padding:5px 7px}
 .map-detail-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:12px;margin-top:12px}
 .map-inspector,.map-intelligence{background:#0c1119;border:1px solid var(--line);border-radius:12px;padding:13px}
 .map-inspector-title{font-weight:800;margin-bottom:8px}.map-inspector-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;font-size:12px}
@@ -902,16 +905,42 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </div>
       </div>
       <div class="map-layerbar">
-        <label class="map-layer-toggle"><input id="mapLayerHeat" type="checkbox" checked onchange="drawLiveMap()">Exploration heatmap</label>
-        <label class="map-layer-toggle"><input id="mapLayerTrail" type="checkbox" checked onchange="drawLiveMap()">Recent path</label>
-        <label class="map-layer-toggle"><input id="mapLayerPlan" type="checkbox" checked onchange="drawLiveMap()">Current roam route</label>
-        <label class="map-layer-toggle"><input id="mapLayerKills" type="checkbox" checked onchange="drawLiveMap()">Recent kills</label>
-        <label class="map-layer-toggle"><input id="mapLayerActors" type="checkbox" checked onchange="drawLiveMap()">Live actors</label>
-        <div class="heat-legend">
-          <span class="heat-swatch heat-unvisited"></span>Unvisited
-          <span class="heat-swatch heat-stale"></span>Stale
-          <span class="heat-swatch heat-warm"></span>Visited
-          <span class="heat-swatch heat-recent"></span>Recent
+        <div class="map-density-controls">
+          <label>Heat layer
+            <select id="mapHeatMode" onchange="onMapHeatModeChanged()">
+              <option value="density" selected>Monster density</option>
+              <option value="exploration">Exploration</option>
+              <option value="none">No heatmap</option>
+            </select>
+          </label>
+          <label>Period
+            <select id="mapDensityPeriod" onchange="refreshMonsterDensity(true)">
+              <option value="session" selected>This session</option>
+              <option value="30m">Last 30 minutes</option>
+              <option value="2h">Last 2 hours</option>
+              <option value="today">Today</option>
+              <option value="7d">Last 7 days</option>
+              <option value="all">All time</option>
+            </select>
+          </label>
+          <label>Monster
+            <select id="mapDensityMonster" onchange="refreshMonsterDensity(true)">
+              <option value="all">All monsters</option>
+            </select>
+          </label>
+          <label class="map-layer-toggle"><input id="mapLayerActors" type="checkbox" checked onchange="drawLiveMap()">Live monsters</label>
+          <label class="map-layer-toggle"><input id="mapMonsterLabels" type="checkbox" onchange="drawLiveMap()">Monster names</label>
+          <label class="map-layer-toggle"><input id="mapLayerTrail" type="checkbox" checked onchange="drawLiveMap()">Recent path</label>
+          <label class="map-layer-toggle"><input id="mapLayerPlan" type="checkbox" checked onchange="drawLiveMap()">Current roam route</label>
+          <div id="mapExplorationLegend" class="heat-legend" style="display:none">
+            <span class="heat-swatch heat-unvisited"></span>Unvisited
+            <span class="heat-swatch heat-stale"></span>Stale
+            <span class="heat-swatch heat-warm"></span>Visited
+            <span class="heat-swatch heat-recent"></span>Recent
+          </div>
+          <div id="mapDensityLegend" class="density-legend">
+            Low <span class="density-gradient"></span> High
+          </div>
         </div>
       </div>
       <div class="map-shell">
@@ -944,13 +973,13 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <div class="map-stats">
         <div class="map-stat"><div class="muted">Position</div><div id="mapPlayerPos" class="metric" style="font-size:18px">—</div></div>
         <div class="map-stat"><div class="muted">Explored this session</div><div id="mapExploredPercent" class="metric" style="font-size:18px">0%</div></div>
-        <div class="map-stat"><div class="muted">Monsters known</div><div id="mapMonsterCount" class="metric" style="font-size:18px">0</div></div>
+        <div class="map-stat"><div class="muted">Live monsters</div><div id="mapMonsterCount" class="metric" style="font-size:18px">0</div></div>
         <div class="map-stat"><div class="muted">Map size</div><div id="mapSize" class="metric" style="font-size:18px">—</div></div>
       </div>
       <div class="map-detail-grid">
         <div class="map-inspector">
-          <div class="map-inspector-title">Exploration inspector</div>
-          <div id="mapInspectorHint" class="muted">Move your mouse over the map to inspect an exploration cell.</div>
+          <div id="mapInspectorTitle" class="map-inspector-title">Monster density inspector</div>
+          <div id="mapInspectorHint" class="muted">Move over a hotspot or live monster to inspect it.</div>
           <div id="mapInspectorGrid" class="map-inspector-grid" style="margin-top:10px"></div>
         </div>
         <div class="map-intelligence">
@@ -959,7 +988,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             <span>Visited cells</span><strong id="mapVisitedCells">0 / 0</strong>
             <span>Current goal</span><strong id="mapCurrentGoal">—</strong>
             <span>Hunt state</span><strong id="mapHuntState">—</strong>
-            <span>Recent kills</span><strong id="mapRecentKills">0</strong>
+            <span>Density samples</span><strong id="mapDensitySamples">0</strong>
           </div>
           <div class="map-progress"><div id="mapProgressFill" class="map-progress-fill"></div></div>
           <div id="mapHuntMessage" class="muted" style="margin-top:8px">Waiting for exploration data…</div>
