@@ -125,7 +125,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
   <div class="bot-controlbar">
     <div class="bot-control-left">
       <span id="automationBadge" class="bot-badge stopped">BOT STOPPED</span>
-      <span id="automationPhaseText" class="bot-phase">Idle · ] uses the last saved settings</span>
+      <span id="automationPhaseText" class="bot-phase">Idle · Tab uses the last saved settings</span>
     </div>
     <div class="bot-control-actions">
       <button class="action secondary" onclick="saveProfile()">Save settings</button>
@@ -1651,7 +1651,7 @@ async function saveProfile(silent=false){
   renderTownBuyRules();
   const phaseText=document.getElementById('automationPhaseText');
   if(phaseText && !document.getElementById('automationBadge').classList.contains('running')){
-    phaseText.textContent='Settings saved · ] uses this saved profile';
+    phaseText.textContent='Settings saved · Tab uses this saved profile';
   }
   if(!silent) out(data);
   return data;
@@ -2324,7 +2324,13 @@ async function setAutoTownCycleModeFromSelect(){
   const enabled=select&&select.value==='true';
   renderAutoTownCycleToggle(enabled);
   try{
-    await saveProfile(true);
+    const r=await fetch('/api/profile/town-mode',{
+      method:'PATCH',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({auto_town_cycle:enabled})
+    });
+    const data=await r.json();
+    if(!r.ok) throw new Error((data&&data.detail)||'Could not save town cycle mode');
     out('Town cycle mode changed to '+(enabled?'AUTOMATIC.':'MANUAL.'));
   }catch(e){
     out('Could not save town cycle mode: '+e.message);
@@ -2335,17 +2341,24 @@ async function setAutoTownCycleModeFromSelect(){
 async function toggleAutoTownCycle(){
   const select=document.getElementById('autoTownCycle');
   const enabled=select ? select.value==='true' : true;
-  if(select) select.value=enabled?'false':'true';
-  renderAutoTownCycleToggle(!enabled);
+  const next=!enabled;
+  if(select) select.value=next?'true':'false';
+  renderAutoTownCycleToggle(next);
   try{
-    await saveProfile(true);
+    const r=await fetch('/api/profile/town-mode',{
+      method:'PATCH',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({auto_town_cycle:next})
+    });
+    const data=await r.json();
+    if(!r.ok) throw new Error((data&&data.detail)||'Could not change automatic town cycle');
   }catch(e){
     if(select) select.value=enabled?'true':'false';
     renderAutoTownCycleToggle(enabled);
     out('Could not change automatic town cycle: '+e.message);
     return;
   }
-  out('Automatic town cycle '+(!enabled?'enabled.':'disabled. Hunting will continue without automatic town returns.'));
+  out('Automatic town cycle '+(next?'enabled.':'disabled. Hunting will continue without automatic town returns.'));
 }
 
 async function startFullAutomation(){
@@ -2362,7 +2375,6 @@ async function startFullAutomation(){
 }
 async function forceTownCycle(){
   try{
-    await saveProfile(true);
     const r=await fetch('/api/full-automation/force-town-cycle',{method:'POST'});
     const data=await r.json();
     if(!r.ok) throw new Error((data&&data.detail)||'Could not start town cycle');
@@ -2401,7 +2413,7 @@ function renderFullAutomation(data){
     const message=(data&&data.message)||'';
     phaseText.textContent=running
       ? phase.toUpperCase()+(message?' · '+message:'')
-      : ((data&&data.last_error)?String(data.last_error):'Idle · ] uses the last saved settings');
+      : ((data&&data.last_error)?String(data.last_error):'Idle · Tab uses the last saved settings');
   }
   const dashPhase=document.getElementById('dashAutomationPhase');
   if(dashPhase) dashPhase.textContent=(data&&data.phase)||'idle';
