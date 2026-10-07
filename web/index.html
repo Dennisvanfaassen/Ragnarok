@@ -2606,12 +2606,32 @@ function drawLiveMap(){
       dot(actor,actor.aggressive_to_me?5:4,'#ff4f64',actor.aggressive_to_me?'#ffd166':null);
     }
   }
-  dot(mapOverlay.player,6,'#4da3ff','#ffffff');
+
+  const guard=(mapExploration&&mapExploration.position_guard)||{};
+  const trustedPlayer=guard.trusted||mapOverlay.player;
+  dot(trustedPlayer,6,'#4da3ff','#ffffff');
 
   document.getElementById('mapTitle').textContent=
     (mapOverlay.map||'—')+' · live client-known actors';
-  document.getElementById('mapPlayerPos').textContent=mapOverlay.player
-    ? mapOverlay.player.x+', '+mapOverlay.player.y : '—';
+  document.getElementById('mapPlayerPos').textContent=trustedPlayer
+    ? trustedPlayer.x+', '+trustedPlayer.y : '—';
+
+  const guardWarning=document.getElementById('positionGuardWarning');
+  if(guardWarning){
+    const rejected=guard.last_rejected||null;
+    const recent=rejected&&rejected.time&&((Date.now()/1000)-Number(rejected.time)<5);
+    if(recent){
+      const raw=rejected.raw||{};
+      const trusted=guard.trusted||{};
+      guardWarning.textContent='Position resync protected navigation · ignored raw '+
+        (raw.x??'—')+','+(raw.y??'—')+' · using '+
+        (trusted.x??'—')+','+(trusted.y??'—')+' · '+String(rejected.reason||'invalid coordinate').replaceAll('_',' ');
+      guardWarning.classList.add('show');
+    }else{
+      guardWarning.classList.remove('show');
+      guardWarning.textContent='';
+    }
+  }
   document.getElementById('mapMonsterCount').textContent=(mapOverlay.counts&&mapOverlay.counts.monsters)||0;
   document.getElementById('mapSize').textContent=mapGrid.width+' × '+mapGrid.height;
   const summary=exploration.summary||{};
