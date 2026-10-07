@@ -1741,7 +1741,17 @@ class HuntingAI:
     def _step_target_selected(self, snapshot: dict[str, Any]):
         actor = self._refresh_locked_target(snapshot)
         if actor is None:
-            self._set_state("TARGET_DEAD", "Target disappeared before approach")
+            remembered = self._remembered_target()
+            if remembered is None:
+                lost_name = self.target_name
+                self._clear_target()
+                self._set_state("SEARCHING", f"Lost sight of {lost_name}; rescanning")
+                return
+            self.target_pos = (int(remembered["x"]), int(remembered["y"]))
+            self._set_state(
+                "ROUTING",
+                f"Briefly lost sight of {self.target_name}; checking last seen position",
+            )
             return
 
         player = self._position(snapshot)
@@ -1772,10 +1782,19 @@ class HuntingAI:
 
         actor = self._refresh_locked_target(snapshot)
         player = self._position(snapshot)
+        remembered_only = False
 
         if actor is None:
-            self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
-            return
+            remembered = self._remembered_target()
+            if remembered is None:
+                lost_name = self.target_name
+                self._clear_target()
+                self._set_state("SEARCHING", f"Lost sight of {lost_name}; rescanning")
+                return
+            actor = remembered
+            remembered_only = True
+            self.target_pos = (int(remembered["x"]), int(remembered["y"]))
+
         if player is None or self.target_pos is None:
             self._stop.wait(0.10)
             return
@@ -1827,6 +1846,21 @@ class HuntingAI:
                     },
                 )
 
+        # A briefly lost monster can be followed to its last visible position,
+        # but never attacked until the client sees it again.
+        if remembered_only and distance <= 2:
+            self._stop.wait(0.06)
+            fresh = authenticated_client_monitor.snapshot()
+            if self._refresh_locked_target(fresh) is None:
+                lost_name = self.target_name
+                self._clear_target()
+                self._set_state("SEARCHING", f"Checked last position of {lost_name}; rescanning")
+                return
+            actor = self._refresh_locked_target(fresh)
+            remembered_only = False
+            player = self._position(fresh) or player
+            distance = self._tile_distance(player, self.target_pos)
+
         # Fast path: only attack directly when the configured approach and LOS
         # rules say the target is already in a valid attack position.
         try:
@@ -1835,14 +1869,15 @@ class HuntingAI:
             grid = None
 
         if (
-            not self._attack_reposition_required
+            not remembered_only
+            and not self._attack_reposition_required
             and grid is not None
             and (
                 not hunt.attack_wait_approach_finish
                 or distance <= (
-                    min(self.attack_range, self._required_opening_range(snapshot))
+                    min(self._attack_commit_range, self._required_opening_range(snapshot))
                     if self._required_opening_range(snapshot) is not None
-                    else self.attack_range
+                    else self._attack_commit_range
                 )
             )
             and (
@@ -1868,12 +1903,12 @@ class HuntingAI:
 
         opener_range = self._required_opening_range(snapshot)
         required_range = (
-            min(self.attack_range, opener_range)
+            min(self._attack_commit_range, opener_range)
             if opener_range is not None
-            else self.attack_range
+            else self._attack_commit_range
         )
 
-        if distance <= required_range:
+        if not remembered_only and distance <= required_range:
             self._set_state(
                 "ATTACK_READY",
                 (
@@ -1983,7 +2018,15 @@ class HuntingAI:
             )
             return
 
-        segment = self._choose_move_segment(path_preview)
+        adaptive_tiles = (
+            self._adaptive_move_segment_tiles(grid, player)
+            if grid is not None
+            else self.move_segment_tiles
+        )
+        segment = self._choose_move_segment(
+            path_preview,
+            max_tiles=adaptive_tiles,
+        )
         if segment is None:
             if self._attack_reposition_required and len(path_preview) > 1:
                 idx = min(2, len(path_preview) - 1)
@@ -2048,8 +2091,13 @@ class HuntingAI:
             int(self.target_id),
         )
         if end_pos is None:
-            self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
-            return
+            remembered = self._remembered_target()
+            if remembered is None:
+                lost_name = self.target_name
+                self._clear_target()
+                self._set_state("SEARCHING", f"Lost sight of {lost_name}; rescanning")
+                return
+            end_pos = self._position(authenticated_client_monitor.snapshot()) or player
 
         if end_pos != player and not self._attack_reposition_required:
             self._attack_reposition_origin = None
@@ -2057,7 +2105,14 @@ class HuntingAI:
         fresh = authenticated_client_monitor.snapshot()
         actor = self._refresh_locked_target(fresh)
         if actor is None:
-            self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
+            remembered = self._remembered_target()
+            if remembered is None:
+                lost_name = self.target_name
+                self._clear_target()
+                self._set_state("SEARCHING", f"Lost sight of {lost_name}; rescanning")
+                return
+            self.target_pos = (int(remembered["x"]), int(remembered["y"]))
+            self._set_state("ROUTING", f"Following last sighting of {self.target_name}")
             return
 
         if (
