@@ -305,6 +305,10 @@ class HuntingAI:
         self.attack_retry = 0
         self._target_failure_count.setdefault(int(self.target_id), 0)
         self._target_locked_at[int(self.target_id)] = time.time()
+        self._attack_commit_range = random.randint(
+            max(1, int(self.attack_range) - 1),
+            max(1, int(self.attack_range)),
+        )
         self._log(
             "target_locked",
             target_id=self.target_id,
@@ -928,7 +932,12 @@ class HuntingAI:
             snapshot = authenticated_client_monitor.snapshot()
 
             if self._find_actor(snapshot, target_id) is None:
-                return None
+                remembered = self._monster_memory.get(int(target_id))
+                if remembered is None:
+                    return None
+                last_seen = float(remembered.get("last_seen") or 0.0)
+                if time.time() - last_seen > float(remembered.get("ttl") or 1.0):
+                    return None
 
             pos = self._position(snapshot)
             if pos is None:
@@ -951,17 +960,24 @@ class HuntingAI:
     def _choose_move_segment(
         self,
         path_preview: list[dict[str, Any]],
+        *,
+        max_tiles: int | None = None,
     ) -> tuple[int, int] | None:
         if len(path_preview) < 2:
             return None
 
-        # Never deliberately walk onto the monster tile. Keep at least
-        # attack_range route cells available for the attack phase.
+        # Never deliberately walk onto the monster tile. Keep the selected
+        # per-target commit range available for the final attack approach.
         max_index = max(
             1,
-            len(path_preview) - 1 - self.attack_range,
+            len(path_preview) - 1 - max(1, int(self._attack_commit_range)),
         )
-        index = min(self.move_segment_tiles, max_index)
+        segment_tiles = (
+            max(1, int(max_tiles))
+            if max_tiles is not None
+            else self.move_segment_tiles
+        )
+        index = min(segment_tiles, max_index)
         point = path_preview[index]
         return int(point["x"]), int(point["y"])
 
@@ -1527,9 +1543,22 @@ class HuntingAI:
         while anchor_index < len(path) - 1:
             chosen = anchor_index + 1
 
-            # Pick the furthest later A* cell that can be reached by one
-            # completely walkable straight line from this anchor.
-            max_idx = min(len(path) - 1, anchor_index + 18)
+            # Open ground supports long, confident runs. Near walls/corners
+            # keep segments shorter so turns happen deliberately instead of
+            # overshooting into obstacles.
+            openness = exploration_planner._local_openness(
+                grid, path[anchor_index], radius=5
+            )
+            wall = exploration_planner._wall_proximity(
+                grid, path[anchor_index], max_radius=5
+            )
+            if openness >= 0.78 and wall <= 0.25:
+                span = 18
+            elif openness <= 0.48 or wall >= 0.70:
+                span = 7
+            else:
+                span = 12
+            max_idx = min(len(path) - 1, anchor_index + span)
             for idx in range(max_idx, anchor_index, -1):
                 if clear_walk_line(grid, path[anchor_index], path[idx]):
                     chosen = idx
@@ -1558,6 +1587,14 @@ class HuntingAI:
         self.wander_reconnect_route_index = None
         self._native_wander_destination = None
         self._native_wander_sent_at = 0.0
+        base = max(
+            7,
+            int(app_state.get_profile().hunt.exploration_reconsider_distance),
+        )
+        self._wander_visibility_stop_distance = random.randint(
+            max(6, base - 2),
+            base + 2,
+        )
 
     def _nearest_wander_index(self, player: tuple[int, int]) -> int:
         if not self.wander_path:
