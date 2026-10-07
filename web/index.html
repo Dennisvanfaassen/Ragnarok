@@ -2432,7 +2432,9 @@ let latestAuthClient=null;
 let mapGrid={map:null,width:0,height:0,cells:null,baseCanvas:null};
 let mapOverlay=null;
 let mapExploration=null;
+let mapDensity=null;
 let mapHoverCell=null;
+let mapHoverMonster=null;
 let huntRoute={map:null,mode:'loop',waypoints:[],exists:false};
 let huntProfilesData={active_id:null,profiles:[]};
 let routeDraft=[];
@@ -2641,6 +2643,57 @@ function rawCanvasMapPoint(event){
   };
 }
 
+function onMapHeatModeChanged(){
+  const mode=document.getElementById('mapHeatMode')?.value||'density';
+  const expLegend=document.getElementById('mapExplorationLegend');
+  const densityLegend=document.getElementById('mapDensityLegend');
+  if(expLegend) expLegend.style.display=mode==='exploration'?'flex':'none';
+  if(densityLegend) densityLegend.style.display=mode==='density'?'flex':'none';
+  if(mode==='density') refreshMonsterDensity(true);
+  clearMapInspector();
+  drawLiveMap();
+}
+
+function updateDensityMonsterOptions(){
+  const select=document.getElementById('mapDensityMonster');
+  if(!select) return;
+  const current=select.value||'all';
+  const rows=(mapDensity&&mapDensity.monsters)||[];
+  select.innerHTML='<option value="all">All monsters</option>'+
+    rows.map(row=>'<option value="'+escapeHtml(row.name)+'">'+escapeHtml(row.name)+' ('+row.samples+')</option>').join('');
+  if([...select.options].some(o=>o.value===current)) select.value=current;
+  else select.value='all';
+}
+
+async function refreshMonsterDensity(force=false){
+  if(!mapOverlay||!mapOverlay.map) return;
+  const period=document.getElementById('mapDensityPeriod')?.value||'session';
+  const monster=document.getElementById('mapDensityMonster')?.value||'all';
+  try{
+    const url='/api/map/monster-density?period='+encodeURIComponent(period)+'&monster='+encodeURIComponent(monster);
+    const r=await fetch(url);
+    const data=await r.json();
+    if(!r.ok) throw new Error((data&&data.detail)||'Could not load monster density');
+    mapDensity=data;
+    updateDensityMonsterOptions();
+    if(force || currentView==='map') drawLiveMap();
+  }catch(e){}
+}
+
+function densityColor(intensity,alpha){
+  const t=Math.max(0,Math.min(1,Number(intensity)||0));
+  let a,b,u;
+  if(t<0.35){
+    a=[53,111,232];b=[57,201,131];u=t/0.35;
+  }else if(t<0.68){
+    a=[57,201,131];b=[242,212,79];u=(t-0.35)/0.33;
+  }else{
+    a=[242,212,79];b=[240,79,79];u=(t-0.68)/0.32;
+  }
+  const mix=(x,y)=>Math.round(x+(y-x)*u);
+  return 'rgba('+mix(a[0],b[0])+','+mix(a[1],b[1])+','+mix(a[2],b[2])+','+alpha+')';
+}
+
 function formatAge(seconds){
   if(seconds==null) return 'Never visited';
   const s=Math.max(0,Math.round(Number(seconds)||0));
@@ -2652,18 +2705,43 @@ function formatAge(seconds){
 function inspectMapCell(event){
   if(routeEditing) return;
   const p=rawCanvasMapPoint(event);
-  const cells=((mapExploration&&mapExploration.exploration)||{}).cells||[];
-  if(!p||!cells.length){clearMapInspector();return}
+  if(!p){clearMapInspector();return}
+
+  const liveMonsters=(mapOverlay&&mapOverlay.monsters)||[];
+  let nearest=null;
+  let nearestDistance=Infinity;
+  for(const monster of liveMonsters){
+    const d=Math.hypot(Number(monster.x)-p.x,Number(monster.y)-p.y);
+    if(d<nearestDistance && d<=3){
+      nearest=monster;nearestDistance=d;
+    }
+  }
+  if(nearest){
+    mapHoverMonster=nearest;
+    mapHoverCell=null;
+    renderMapInspector({__type:'monster',...nearest});
+    const canvas=document.getElementById('liveMapCanvas');
+    if(canvas) canvas.classList.add('map-inspecting');
+    drawLiveMap();
+    return;
+  }
+
+  mapHoverMonster=null;
+  const mode=document.getElementById('mapHeatMode')?.value||'density';
+  const cells=mode==='density'
+    ? ((mapDensity&&mapDensity.cells)||[])
+    : (((mapExploration&&mapExploration.exploration)||{}).cells||[]);
   const cell=cells.find(c=>p.x>=c.x&&p.x<c.x+c.width&&p.y>=c.y&&p.y<c.y+c.height)||null;
   mapHoverCell=cell;
   const canvas=document.getElementById('liveMapCanvas');
   if(canvas) canvas.classList.toggle('map-inspecting',!!cell);
-  renderMapInspector(cell);
+  renderMapInspector(cell?{...cell,__type:mode==='density'?'density':'exploration'}:null);
   drawLiveMap();
 }
 
 function clearMapInspector(){
   mapHoverCell=null;
+  mapHoverMonster=null;
   const canvas=document.getElementById('liveMapCanvas');
   if(canvas) canvas.classList.remove('map-inspecting');
   renderMapInspector(null);
@@ -2671,14 +2749,56 @@ function clearMapInspector(){
 }
 
 function renderMapInspector(cell){
+  const title=document.getElementById('mapInspectorTitle');
   const hint=document.getElementById('mapInspectorHint');
   const grid=document.getElementById('mapInspectorGrid');
   if(!hint||!grid) return;
+
   if(!cell){
-    hint.textContent='Move your mouse over the map to inspect an exploration cell.';
+    const mode=document.getElementById('mapHeatMode')?.value||'density';
+    if(title) title.textContent=mode==='density'?'Monster density inspector':'Exploration inspector';
+    hint.textContent=mode==='density'
+      ? 'Move over a hotspot or live monster to inspect it.'
+      : 'Move your mouse over the map to inspect an exploration cell.';
     grid.innerHTML='';
     return;
   }
+
+  if(cell.__type==='monster'){
+    if(title) title.textContent='Live monster';
+    hint.textContent=(cell.name||'Unknown monster')+' · '+cell.x+', '+cell.y;
+    const priority=(()=>{
+      const rule=huntMonsterRules[String(cell.name||'').toLowerCase()];
+      return rule?String(rule.priority??'—'):'—';
+    })();
+    const player=(mapExploration&&mapExploration.position_guard&&mapExploration.position_guard.trusted)||mapOverlay?.player;
+    const distance=player?Math.round(Math.hypot(cell.x-player.x,cell.y-player.y)):'—';
+    grid.innerHTML=
+      '<span>Monster</span><strong>'+escapeHtml(cell.name||'Unknown')+'</strong>'+
+      '<span>Position</span><strong>'+cell.x+', '+cell.y+'</strong>'+
+      '<span>Distance</span><strong>'+distance+' tiles</strong>'+
+      '<span>Priority</span><strong>'+priority+'</strong>'+
+      '<span>Aggressive</span><strong>'+(cell.aggressive_to_me?'Yes':'No')+'</strong>';
+    return;
+  }
+
+  if(cell.__type==='density'){
+    if(title) title.textContent='Monster density inspector';
+    hint.textContent='Hotspot cell '+cell.cx+', '+cell.cy+' · tiles '+cell.x+','+cell.y+' → '+(cell.x+cell.width-1)+','+(cell.y+cell.height-1);
+    const top=(cell.top_monsters||[]);
+    const chips=top.length
+      ? '<div class="map-inspector-monsters">'+top.map(row=>'<span class="map-inspector-monster">'+escapeHtml(row.name)+' · '+row.count+'</span>').join('')+'</div>'
+      : '';
+    grid.innerHTML=
+      '<span>Density samples</span><strong>'+Number(cell.density||0)+'</strong>'+
+      '<span>Relative intensity</span><strong>'+Math.round(Number(cell.intensity||0)*100)+'%</strong>'+
+      '<span>Selected period</span><strong>'+escapeHtml(document.getElementById('mapDensityPeriod')?.selectedOptions?.[0]?.textContent||'—')+'</strong>'+
+      '<span>Monster filter</span><strong>'+escapeHtml(document.getElementById('mapDensityMonster')?.selectedOptions?.[0]?.textContent||'All')+'</strong>'+
+      '<span style="grid-column:1/-1">Top monsters</span><strong style="grid-column:1/-1;text-align:left">'+chips+'</strong>';
+    return;
+  }
+
+  if(title) title.textContent='Exploration inspector';
   hint.textContent='Cell '+cell.cx+', '+cell.cy+' · tiles '+cell.x+','+cell.y+' → '+(cell.x+cell.width-1)+','+(cell.y+cell.height-1);
   const status=cell.visited?(Number(cell.age_seconds||0)<20?'Recently searched':'Previously searched'):'Not searched this session';
   grid.innerHTML=
