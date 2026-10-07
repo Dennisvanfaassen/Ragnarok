@@ -117,6 +117,9 @@ class AspdSettings(BaseModel):
     enabled: bool = False
     item: str = "Awakening Potion"
     name_id: int | None = 656
+    # EFST_ATTHASTE_POTION2. When status telemetry is available, the bot only
+    # reuses the potion after this effect disappears.
+    status_effect_id: int | None = 38
     reuse_minutes: float = 30.0
     restock_target: int = 4
 
