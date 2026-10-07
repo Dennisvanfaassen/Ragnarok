@@ -369,6 +369,74 @@ class ExplorationPlanner:
         self.note_goal(goal)
         return best
 
+    def heatmap_snapshot(self, grid: NavGrid | None = None) -> dict[str, Any]:
+        """Detailed session exploration state for the dashboard map."""
+        now = time.time()
+        cells: list[dict[str, Any]] = []
+
+        if grid is not None:
+            max_cx = max(0, (grid.width - 1) // self.cell_size)
+            max_cy = max(0, (grid.height - 1) // self.cell_size)
+            for cy in range(max_cy + 1):
+                for cx in range(max_cx + 1):
+                    x0 = cx * self.cell_size
+                    y0 = cy * self.cell_size
+                    x1 = min(grid.width, x0 + self.cell_size)
+                    y1 = min(grid.height, y0 + self.cell_size)
+                    walkable = 0
+                    total = max(1, (x1 - x0) * (y1 - y0))
+                    for y in range(y0, y1):
+                        row = y * grid.width
+                        for x in range(x0, x1):
+                            if grid.cells[row + x] == 1:
+                                walkable += 1
+                    if walkable == 0:
+                        continue
+
+                    key = (cx, cy)
+                    last = self._last_visit.get(key)
+                    visits = float(self._visits.get(key, 0.0))
+                    center = (
+                        min(grid.width - 1, x0 + max(0, (x1 - x0 - 1) // 2)),
+                        min(grid.height - 1, y0 + max(0, (y1 - y0 - 1) // 2)),
+                    )
+                    cells.append({
+                        "cx": cx, "cy": cy, "x": x0, "y": y0,
+                        "width": x1 - x0, "height": y1 - y0,
+                        "center_x": center[0], "center_y": center[1],
+                        "walkable_ratio": round(walkable / total, 3),
+                        "visited": last is not None,
+                        "last_visited_at": round(last, 3) if last is not None else None,
+                        "age_seconds": round(max(0.0, now - last), 2) if last is not None else None,
+                        "visit_seconds": round(visits, 2),
+                        "coverage": round(self._coverage(center), 3),
+                        "openness": round(self._local_openness(grid, center), 3),
+                        "wall_proximity": round(self._wall_proximity(grid, center), 3),
+                        "escape_directions": self._escape_directions(grid, center),
+                    })
+
+        visited = [row for row in cells if row["visited"]]
+        ages = [float(row["age_seconds"]) for row in visited if row["age_seconds"] is not None]
+        return {
+            "map": self._map,
+            "cell_size": self.cell_size,
+            "generated_at": round(now, 3),
+            "cells": cells,
+            "summary": {
+                "walkable_cells": len(cells),
+                "visited_cells": len(visited),
+                "unvisited_cells": len(cells) - len(visited),
+                "visited_percent": round((len(visited) / max(1, len(cells))) * 100, 1),
+                "oldest_visit_age_seconds": round(max(ages), 1) if ages else None,
+            },
+            "recent_positions": [{"x": x, "y": y} for x, y in list(self._recent_positions)],
+            "recent_goals": [{"x": x, "y": y} for x, y in list(self._recent_goals)],
+            "heading": (
+                {"x": round(self._heading[0], 3), "y": round(self._heading[1], 3)}
+                if self._heading else None
+            ),
+        }
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "map": self._map,
