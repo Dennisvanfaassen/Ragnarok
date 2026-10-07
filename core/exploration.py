@@ -38,6 +38,7 @@ class ExplorationPlanner:
 
         self._map: str | None = None
         self._visits: dict[tuple[int, int], float] = defaultdict(float)
+        self._last_visit: dict[tuple[int, int], float] = {}
         self._heading: tuple[float, float] | None = None
         self._recent_goals: deque[tuple[int, int]] = deque(maxlen=14)
         self._recent_positions: deque[tuple[int, int]] = deque(maxlen=120)
@@ -49,6 +50,7 @@ class ExplorationPlanner:
             return
         self._map = map_name
         self._visits.clear()
+        self._last_visit.clear()
         self._heading = None
         self._recent_goals.clear()
         self._recent_positions.clear()
@@ -67,6 +69,7 @@ class ExplorationPlanner:
 
         cell = self._cell(position)
         self._visits[cell] += min(2.0, dt)
+        self._last_visit[cell] = now
 
         if self._last_pos and position != self._last_pos:
             dx = position[0] - self._last_pos[0]
