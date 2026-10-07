@@ -108,7 +108,14 @@ class HuntSettings(BaseModel):
 class HealingSettings(BaseModel):
     enabled: bool = True
     item: str = ""
+    # Legacy fixed threshold retained for older saved profiles. Humanized
+    # healing uses the min/max range below for each new healing decision.
     hp_below_percent: int = 50
+    hp_trigger_min_percent: int = 30
+    hp_trigger_max_percent: int = 60
+    burst_min_items: int = 1
+    burst_max_items: int = 3
+    burst_delay_seconds: float = 0.2
     hotkey: str = "1"
     cooldown_seconds: float = 0.9
 
