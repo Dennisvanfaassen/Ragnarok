@@ -800,7 +800,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <h2>1. Town cycle trigger</h2>
         <div class="row">
           <label>Automatic town cycle
-            <select id="autoTownCycle" onchange="renderAutoTownCycleToggle(this.value==='true')">
+            <select id="autoTownCycle" onchange="setAutoTownCycleModeFromSelect()">
               <option value="false" selected>Manual — only when I run it</option>
               <option value="true">Automatic — return when triggers are reached</option>
             </select>
@@ -2319,6 +2319,19 @@ function renderAutoTownCycleToggle(enabled){
       : 'Manual mode: the bot will never return to town automatically. Use “Run town cycle now” whenever you want storage, selling and restocking to run.';
   }
 }
+async function setAutoTownCycleModeFromSelect(){
+  const select=document.getElementById('autoTownCycle');
+  const enabled=select&&select.value==='true';
+  renderAutoTownCycleToggle(enabled);
+  try{
+    await saveProfile(true);
+    out('Town cycle mode changed to '+(enabled?'AUTOMATIC.':'MANUAL.'));
+  }catch(e){
+    out('Could not save town cycle mode: '+e.message);
+    await loadProfile();
+  }
+}
+
 async function toggleAutoTownCycle(){
   const select=document.getElementById('autoTownCycle');
   const enabled=select ? select.value==='true' : true;
