@@ -694,7 +694,7 @@ class HuntingAI:
             return False
         return self._lock_actor(actor, "aggressor")
 
-    def _maybe_preempt_for_higher_priority_aggressor(
+    def _maybe_preempt_for_higher_priority_target(
         self,
         snapshot: dict[str, Any],
     ) -> bool:
@@ -705,37 +705,25 @@ class HuntingAI:
         ):
             return False
 
-        # Once combat has started, never switch targets mid-kill.
+        # Once an attack has actually been committed, finish that monster.
+        # Before that point, monster priority is authoritative: any lower
+        # numeric priority may replace the current approach/selection lock.
         if (
             self._combat_committed_target_id is not None
             and int(self._combat_committed_target_id) == int(self.target_id)
         ):
             return False
 
-        live = snapshot.get("live_state") or {}
-        aggressor_ids = {int(v) for v in (live.get("aggressor_ids") or [])}
-        candidates = [
-            row
-            for row in self._eligible_target_candidates(
-                snapshot,
-                exclude_id=int(self.target_id),
-            )
-            if int(row[2].get("id") or -1) in aggressor_ids
-            and self._reaction_ready(row[2])
-        ]
+        candidates = self._eligible_target_candidates(
+            snapshot,
+            exclude_id=int(self.target_id),
+        )
         if not candidates:
             return False
 
         candidate_priority, _distance, candidate = candidates[0]
         current_priority = self._monster_priority(self.target_name)
-        required_gap = max(1, int(profile.hunt.preempt_priority_gap))
-
-        # Preserve visual target continuity while approaching. Only a
-        # meaningfully higher-priority aggressor may steal the lock before
-        # combat begins; equal/nearby priorities wait their turn.
         if candidate_priority >= current_priority:
-            return False
-        if (current_priority - candidate_priority) < required_gap:
             return False
 
         old_id = self.target_id
@@ -751,6 +739,7 @@ class HuntingAI:
             new_target_id=self.target_id,
             new_target_name=self.target_name,
             new_priority=candidate_priority,
+            strict_priority=True,
         )
         self._set_state(
             "TARGET_SELECTED",
@@ -1746,6 +1735,9 @@ class HuntingAI:
         return True
 
     def _step_target_selected(self, snapshot: dict[str, Any]):
+        if self._maybe_preempt_for_higher_priority_target(snapshot):
+            return
+
         actor = self._refresh_locked_target(snapshot)
         if actor is None:
             remembered = self._remembered_target()
@@ -1784,7 +1776,7 @@ class HuntingAI:
         self._set_state("ROUTING", f"Calculating route to {self.target_name}")
 
     def _step_routing(self, snapshot: dict[str, Any]):
-        if self._maybe_preempt_for_higher_priority_aggressor(snapshot):
+        if self._maybe_preempt_for_higher_priority_target(snapshot):
             return
 
         actor = self._refresh_locked_target(snapshot)
@@ -2244,7 +2236,7 @@ class HuntingAI:
         return False
 
     def _step_attack_ready(self, snapshot: dict[str, Any]):
-        if self._maybe_preempt_for_higher_priority_aggressor(snapshot):
+        if self._maybe_preempt_for_higher_priority_target(snapshot):
             return
 
         actor = self._refresh_locked_target(snapshot)
@@ -2612,7 +2604,15 @@ class HuntingAI:
         self._reset_wander_navigation(release_move=True)
 
         hunt = app_state.get_profile().hunt
-        if random.random() < max(0.0, min(1.0, float(hunt.post_kill_pause_chance))):
+        looting_enabled = self._monster_looting_enabled(old_name)
+
+        # When looting is enabled the drop-spawn wait already provides a short,
+        # natural post-kill beat. Do not stack another pause on top of it.
+        if (
+            not looting_enabled
+            and random.random()
+                < max(0.0, min(1.0, float(hunt.post_kill_pause_chance)))
+        ):
             low = max(0.0, float(hunt.post_kill_pause_min))
             high = max(low, float(hunt.post_kill_pause_max))
             pause = random.uniform(low, high)
@@ -2623,8 +2623,7 @@ class HuntingAI:
 
         # Strict kill -> loot -> rescan -> next target lifecycle. Do not chain
         # another visible monster before giving this kill's drops time to appear.
-        if self._monster_looting_enabled(old_name):
-            hunt = app_state.get_profile().hunt
+        if looting_enabled:
             low = max(0.0, float(hunt.loot_drop_delay_min))
             high = max(low, float(hunt.loot_drop_delay_max))
             self._loot_not_before = time.time() + random.uniform(low, high)
