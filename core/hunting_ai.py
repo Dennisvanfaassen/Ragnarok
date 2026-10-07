@@ -3512,6 +3512,7 @@ class HuntingAI:
 
         while not self._stop.is_set() and run_id == self._run_id:
             snapshot = authenticated_client_monitor.snapshot()
+            self._observe_monster_memory(snapshot)
 
             if not snapshot.get("classic_pid"):
                 self._set_state("IDLE", "Waiting for Classic.exe")
