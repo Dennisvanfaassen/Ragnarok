@@ -6,7 +6,7 @@ import time
 from ctypes import wintypes
 from typing import Any
 
-from core.full_automation import full_automation_controller
+from core.active_control import active_hunt_controller
 from core.mouse_adapter import mouse_game_adapter
 
 
@@ -46,10 +46,10 @@ LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
 
 
 class HuntingHotkey:
-    """Global Tab toggle for Full Hunt Automation.
+    """Global Tab toggle for hunting.
 
     The key is swallowed while RO Control is running. On stop, any held mouse
-    button is released synchronously before the full automation shutdown begins.
+    button is released synchronously before the hunting shutdown begins.
     """
 
     def __init__(self):
@@ -79,7 +79,7 @@ class HuntingHotkey:
         # Emergency responsiveness: release held movement immediately on the
         # keyboard-hook thread if hunting is currently active.
         try:
-            if full_automation_controller.snapshot().get("running"):
+            if active_hunt_controller.snapshot().get("running"):
                 mouse_game_adapter.release_hold_move()
         except Exception:
             pass
@@ -99,15 +99,15 @@ class HuntingHotkey:
             self._toggle_busy = True
 
         try:
-            state = full_automation_controller.snapshot()
+            state = active_hunt_controller.snapshot()
             if state.get("running"):
-                full_automation_controller.stop()
+                active_hunt_controller.stop()
                 action = "stopped"
-                message = "Full automation stopped with Tab."
+                message = "Hunting stopped with Tab."
             else:
-                full_automation_controller.start()
+                active_hunt_controller.start({})
                 action = "started"
-                message = "Full automation started with Tab."
+                message = "Hunting started with Tab."
 
             with self._lock:
                 self._last_toggle_at = time.time()
@@ -140,7 +140,7 @@ class HuntingHotkey:
         ):
             with self._lock:
                 self._status = "ready"
-                self._message = "Tab toggles Full Hunt Automation globally."
+                self._message = "Tab toggles hunting globally."
 
             msg = wintypes.MSG()
             try:
@@ -211,7 +211,7 @@ class HuntingHotkey:
         self._hook = hook
         with self._lock:
             self._status = "ready"
-            self._message = "Tab toggles Full Hunt Automation globally (keyboard-hook fallback)."
+            self._message = "Tab toggles hunting globally (keyboard-hook fallback)."
 
         msg = wintypes.MSG()
         try:
@@ -240,8 +240,8 @@ class HuntingHotkey:
                 "last_toggle_at": self._last_toggle_at,
                 "last_action": self._last_action,
                 "last_error": self._last_error,
-                "full_automation_running": bool(
-                    full_automation_controller.snapshot().get("running")
+                "hunt_running": bool(
+                    active_hunt_controller.snapshot().get("running")
                 ),
             }
 
