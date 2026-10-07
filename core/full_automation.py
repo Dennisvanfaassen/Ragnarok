@@ -371,7 +371,39 @@ class FullAutomationController:
             self.last_error = "Storage list did not open after the physical Kafra dialogue sequence."
             return False
 
-        self._stop.wait(0.20)
+        # Give the client/server item state a short settle window after the
+        # storage list arrives. Manual Classic.exe interaction naturally has
+        # this delay; sending a storage move immediately after open can use a
+        # stale pre-storage inventory amount.
+        settle_deadline = time.time() + 1.20
+        last_inventory_update = (
+            authenticated_client_monitor.item_state_snapshot()
+            .get("updated_at", {})
+            .get("inventory")
+        )
+        stable_since = time.time()
+        while not self._stop.is_set() and time.time() < settle_deadline:
+            current_update = (
+                authenticated_client_monitor.item_state_snapshot()
+                .get("updated_at", {})
+                .get("inventory")
+            )
+            if current_update != last_inventory_update:
+                last_inventory_update = current_update
+                stable_since = time.time()
+            if time.time() - stable_since >= 0.45:
+                break
+            self._stop.wait(0.08)
+
+        self._log(
+            "storage_ready",
+            storage_updated_at=(
+                authenticated_client_monitor.item_state_snapshot()
+                .get("updated_at", {})
+                .get("storage")
+            ),
+            inventory_updated_at=last_inventory_update,
+        )
         return True
 
     @staticmethod
@@ -484,6 +516,7 @@ class FullAutomationController:
         state = authenticated_client_monitor.item_state_snapshot()
         items = list(state.get("inventory") or [])
         deposited = 0
+        deposited_units = 0
         kept = 0
         reserved_for_sale = 0
         self._deposited_indices_this_cycle.clear()
@@ -546,156 +579,175 @@ class FullAutomationController:
                 )
                 continue
 
-            confirmed = False
-            last_result: dict[str, Any] | None = None
+            item_units_moved = 0
             last_protocol_index: int | None = None
-            moved_amount = 0
+            hard_unit_cap = 2000
 
-            for attempt in range(1, 4):
-                before_state = authenticated_client_monitor.item_state_snapshot()
+            while not self._stop.is_set() and item_units_moved < hard_unit_cap:
                 live_item = self._resolve_live_inventory_item(planned)
-
                 if live_item is None:
-                    self._log(
-                        "storage_deposit_live_item_missing",
-                        attempt=attempt,
-                        planned_index=planned_index,
-                        name=planned.get("name"),
-                        name_id=planned.get("name_id"),
-                    )
-                    self._stop.wait(0.20)
-                    continue
+                    # The original stack is gone. That is the expected end state
+                    # after the final acknowledged unit transfer.
+                    break
 
                 protocol_index = int(live_item.get("index") or -1)
                 live_amount = int(live_item.get("amount") or 0)
                 if protocol_index < 0 or live_amount <= 0:
-                    continue
+                    break
 
-                # Never ask the server to move more than is actually present in
-                # the live stack. This was the failure mode seen in diagnostics:
-                # a stale request could target an index whose amount had changed.
-                amount = min(planned_amount, live_amount)
-                name_id = int(live_item.get("name_id") or -1)
-                before_storage_total = self._storage_total_for_name_id(
-                    before_state,
-                    name_id,
-                )
-                before_inventory_amount = live_amount
-
+                confirmed = False
+                last_result: dict[str, Any] | None = None
                 last_protocol_index = protocol_index
-                moved_amount = amount
-                last_result = native_action_bridge.storage_add(
-                    protocol_index,
-                    amount,
-                )
-                self._log(
-                    "storage_deposit",
-                    attempt=attempt,
-                    planned_index=planned_index,
-                    protocol_index=protocol_index,
-                    name=live_item.get("name") or planned.get("name"),
-                    name_id=name_id,
-                    amount=amount,
-                    live_amount=live_amount,
-                    stackable=live_item.get("stackable"),
-                    result=last_result,
-                )
 
-                if not last_result.get("ok"):
-                    self._stop.wait(0.35)
-                    continue
+                # Safety-first transfer: send exactly ONE unit. The manual
+                # working capture proved the opcode/layout is correct, while
+                # the disconnecting automated capture used a stale stack amount.
+                # One-unit moves cannot overrun a live stack, and every unit is
+                # followed by a fresh server acknowledgement + inventory resolve.
+                for attempt in range(1, 4):
+                    before_state = authenticated_client_monitor.item_state_snapshot()
+                    live_item = self._resolve_live_inventory_item(planned)
+                    if live_item is None:
+                        confirmed = True
+                        break
 
-                deadline = time.time() + 1.75
-                while not self._stop.is_set() and time.time() < deadline:
-                    current_state = authenticated_client_monitor.item_state_snapshot()
-                    live_inventory = current_state.get("inventory") or []
-                    current = next(
-                        (
-                            row for row in live_inventory
-                            if int(row.get("index") or -1) == protocol_index
-                            and self._storage_item_identity(row)
-                                == self._storage_item_identity(live_item)
-                        ),
-                        None,
-                    )
-                    current_amount = (
-                        int(current.get("amount") or 0)
-                        if current is not None
-                        else 0
-                    )
-                    storage_total = self._storage_total_for_name_id(
-                        current_state,
+                    protocol_index = int(live_item.get("index") or -1)
+                    before_inventory_amount = int(live_item.get("amount") or 0)
+                    if protocol_index < 0 or before_inventory_amount <= 0:
+                        confirmed = True
+                        break
+
+                    name_id = int(live_item.get("name_id") or -1)
+                    before_storage_total = self._storage_total_for_name_id(
+                        before_state,
                         name_id,
                     )
 
-                    inventory_confirmed = (
-                        current is None
-                        or current_amount < before_inventory_amount
+                    last_protocol_index = protocol_index
+                    last_result = native_action_bridge.storage_add(
+                        protocol_index,
+                        1,
                     )
-                    storage_confirmed = (
-                        storage_total >= before_storage_total + amount
+                    self._log(
+                        "storage_deposit_unit",
+                        attempt=attempt,
+                        planned_index=planned_index,
+                        protocol_index=protocol_index,
+                        name=live_item.get("name") or planned.get("name"),
+                        name_id=name_id,
+                        amount=1,
+                        reported_live_amount=before_inventory_amount,
+                        unit_number=item_units_moved + 1,
+                        result=last_result,
                     )
-                    if inventory_confirmed or storage_confirmed:
-                        confirmed = True
-                        self._log(
-                            "storage_deposit_ack",
-                            attempt=attempt,
-                            protocol_index=protocol_index,
-                            name=live_item.get("name") or planned.get("name"),
-                            inventory_before=before_inventory_amount,
-                            inventory_after=current_amount,
-                            storage_before=before_storage_total,
-                            storage_after=storage_total,
-                            inventory_confirmed=inventory_confirmed,
-                            storage_confirmed=storage_confirmed,
-                        )
-                        break
-                    self._stop.wait(0.08)
 
-                self._log(
-                    "storage_deposit_confirmation",
-                    attempt=attempt,
-                    planned_index=planned_index,
-                    protocol_index=protocol_index,
-                    name=live_item.get("name") or planned.get("name"),
-                    confirmed=confirmed,
-                )
-                if confirmed:
+                    if not last_result.get("ok"):
+                        self._stop.wait(0.30)
+                        continue
+
+                    deadline = time.time() + 1.75
+                    while not self._stop.is_set() and time.time() < deadline:
+                        current_state = authenticated_client_monitor.item_state_snapshot()
+                        live_inventory = current_state.get("inventory") or []
+                        current = next(
+                            (
+                                row for row in live_inventory
+                                if int(row.get("index") or -1) == protocol_index
+                                and self._storage_item_identity(row)
+                                    == self._storage_item_identity(live_item)
+                            ),
+                            None,
+                        )
+                        current_amount = (
+                            int(current.get("amount") or 0)
+                            if current is not None
+                            else 0
+                        )
+                        storage_total = self._storage_total_for_name_id(
+                            current_state,
+                            name_id,
+                        )
+
+                        inventory_confirmed = (
+                            current is None
+                            or current_amount < before_inventory_amount
+                        )
+                        storage_confirmed = (
+                            storage_total >= before_storage_total + 1
+                        )
+                        if inventory_confirmed or storage_confirmed:
+                            confirmed = True
+                            self._log(
+                                "storage_deposit_ack",
+                                attempt=attempt,
+                                protocol_index=protocol_index,
+                                name=live_item.get("name") or planned.get("name"),
+                                inventory_before=before_inventory_amount,
+                                inventory_after=current_amount,
+                                storage_before=before_storage_total,
+                                storage_after=storage_total,
+                                inventory_confirmed=inventory_confirmed,
+                                storage_confirmed=storage_confirmed,
+                                amount=1,
+                            )
+                            break
+                        self._stop.wait(0.08)
+
+                    if confirmed:
+                        break
+
+                    # Re-read and re-resolve before each retry. Never retry an
+                    # index/amount snapshot captured before a storage update.
+                    self._stop.wait(0.40)
+
+                if not confirmed:
+                    cleanup = native_action_bridge.storage_close()
+                    self._log(
+                        "storage_close_after_failed_deposit",
+                        planned_index=planned_index,
+                        protocol_index=last_protocol_index,
+                        name=planned.get("name"),
+                        moved_units=item_units_moved,
+                        result=cleanup,
+                    )
+                    self.last_error = (
+                        f"Storage could not move {planned.get('name') or planned_index} "
+                        f"(live index {last_protocol_index}) after 3 safe unit attempts. "
+                        "Kafra storage was closed and the town cycle was paused."
+                    )
+                    return False
+
+                # If the item vanished during resolution, there was nothing left
+                # to send. Otherwise one unit was acknowledged.
+                after = self._resolve_live_inventory_item(planned)
+                if last_result and last_result.get("ok"):
+                    item_units_moved += 1
+                    deposited_units += 1
+                    if last_protocol_index is not None:
+                        self._deposited_indices_this_cycle.add(last_protocol_index)
+
+                if after is None:
                     break
 
-                # Re-resolve the live inventory item before every retry. Never
-                # resend a stale protocol index after an inventory refresh.
-                self._stop.wait(0.45)
+                # A short human-scale gap also gives the server's inventory and
+                # storage list packets time to land before the next unit.
+                self._stop.wait(0.12)
 
-            if not confirmed:
-                cleanup = native_action_bridge.storage_close()
-                self._log(
-                    "storage_close_after_failed_deposit",
-                    planned_index=planned_index,
-                    protocol_index=last_protocol_index,
-                    name=planned.get("name"),
-                    result=cleanup,
-                )
+            if item_units_moved >= hard_unit_cap:
                 self.last_error = (
-                    f"Storage could not move {planned.get('name') or planned_index} "
-                    f"(live index {last_protocol_index}, amount {moved_amount or planned_amount}) "
-                    "after 3 live-resolved attempts. Kafra storage was closed and "
-                    "the town cycle was paused."
+                    f"Storage safety limit reached while moving "
+                    f"{planned.get('name') or planned_index}; cycle paused."
                 )
                 return False
 
-            if last_protocol_index is not None:
-                self._deposited_indices_this_cycle.add(last_protocol_index)
             self._deposited_indices_this_cycle.add(planned_index)
-            deposited += 1
-
-            # OpenKore serializes transfers and waits for item-list state to
-            # advance. SoulBound also dislikes tightly packed storage moves.
-            self._stop.wait(0.22)
+            if item_units_moved > 0:
+                deposited += 1
 
         self._log(
             "storage_deposit_complete",
-            deposited=deposited,
+            deposited_stacks=deposited,
+            deposited_units=deposited_units,
             kept=kept,
             reserved_for_sale=reserved_for_sale,
         )
