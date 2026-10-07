@@ -983,12 +983,14 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <div id="mapInspectorGrid" class="map-inspector-grid" style="margin-top:10px"></div>
         </div>
         <div class="map-intelligence">
-          <div class="map-inspector-title">Exploration intelligence</div>
+          <div class="map-inspector-title">Map intelligence</div>
           <div class="map-inspector-grid">
             <span>Visited cells</span><strong id="mapVisitedCells">0 / 0</strong>
             <span>Current goal</span><strong id="mapCurrentGoal">—</strong>
             <span>Hunt state</span><strong id="mapHuntState">—</strong>
             <span>Density samples</span><strong id="mapDensitySamples">0</strong>
+            <span>Hotspot cells</span><strong id="mapDensityCells">0</strong>
+            <span>Busiest hotspot</span><strong id="mapDensityHotspot">—</strong>
           </div>
           <div class="map-progress"><div id="mapProgressFill" class="map-progress-fill"></div></div>
           <div id="mapHuntMessage" class="muted" style="margin-top:8px">Waiting for exploration data…</div>
@@ -3097,6 +3099,15 @@ function drawLiveMap(){
   const densitySummary=(mapDensity&&mapDensity.summary)||{};
   const densitySamples=document.getElementById('mapDensitySamples');
   if(densitySamples) densitySamples.textContent=String(densitySummary.samples||0);
+  const densityCells=document.getElementById('mapDensityCells');
+  if(densityCells) densityCells.textContent=String(densitySummary.active_cells||0);
+  const hotspot=document.getElementById('mapDensityHotspot');
+  if(hotspot){
+    const hottest=((mapDensity&&mapDensity.cells)||[]).slice().sort((a,b)=>Number(b.density||0)-Number(a.density||0))[0];
+    hotspot.textContent=hottest
+      ? (Math.round(hottest.x+hottest.width/2)+', '+Math.round(hottest.y+hottest.height/2)+' · '+hottest.density)
+      : '—';
+  }
   document.getElementById('mapHuntMessage').textContent=(mapExploration&&mapExploration.hunt_message)||'Waiting for exploration data…';
 }
 
