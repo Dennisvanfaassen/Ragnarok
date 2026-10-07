@@ -15,6 +15,7 @@ import mss
 import mss.tools
 
 from diagnostics.authenticated_client import authenticated_client_monitor
+from diagnostics.native_action_bridge import native_action_bridge
 
 
 user32 = ctypes.windll.user32
@@ -202,6 +203,13 @@ class HuntingDiagnosticRecorder:
         cursor = self._cursor()
         target = hunt.get("target") or {}
         route = (hunt.get("settings") or {}).get("saved_hunt_route") or {}
+        try:
+            native = native_action_bridge.snapshot()
+            native_agent = native.get("agent") or {}
+            native_recent_calls = list(native_agent.get("recent_calls") or [])
+        except Exception:
+            native = {}
+            native_recent_calls = []
 
         record = {
             "time": now,
@@ -226,6 +234,13 @@ class HuntingDiagnosticRecorder:
             "cursor": cursor,
             "last_client_action": world.get("last_client_action"),
             "last_combat": world.get("last_combat"),
+            "native_bridge": {
+                "status": native.get("status"),
+                "attached": native.get("attached"),
+                "socket_learned": (native.get("agent") or {}).get("socket_learned"),
+                "socket": (native.get("agent") or {}).get("socket"),
+                "recent_calls": native_recent_calls,
+            },
             "actors": [
                 {
                     "id": a.get("id"),
@@ -325,7 +340,8 @@ class HuntingDiagnosticRecorder:
                 "calibration": calibration,
                 "notes": (
                     "Passive game-state diagnostics plus normal Windows input telemetry. "
-                    "No credentials or packet payload bytes are recorded."
+                    "Includes a rolling trace of recent outbound socket calls (length and first "
+                    "32 packet bytes) from the native bridge; credentials are not recorded."
                 ),
             }
             (session / "metadata.json").write_text(
