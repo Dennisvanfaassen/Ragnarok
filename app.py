@@ -16,6 +16,7 @@ from core.hotkey import hunting_hotkey
 from core.world_route import world_route_planner
 from core.town_travel import town_travel_controller
 from core.map_dashboard import map_grid_payload, map_live_overlay
+from core.exploration import exploration_planner
 from core.hunt_routes import hunt_route_store
 from core.game_actions import game_actions
 from core.full_automation import full_automation_controller
@@ -565,6 +566,33 @@ async def live_map_grid():
 @app.get("/api/map/live")
 async def live_map_overlay():
     return map_live_overlay()
+
+
+@app.get("/api/map/exploration")
+async def live_map_exploration():
+    snapshot = authenticated_client_monitor.snapshot()
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+    map_name = str(world.get("map") or "").strip()
+    grid = None
+    if map_name:
+        try:
+            grid, _ = nav_repository.load(map_name)
+        except Exception:
+            grid = None
+
+    exploration = exploration_planner.heatmap_snapshot(grid)
+    hunt = active_hunt_controller.snapshot()
+    debug = hunt.get("map_debug") or {}
+    return {
+        "status": "ready" if map_name else "waiting",
+        "map": map_name or None,
+        "exploration": exploration,
+        "navigation": debug.get("navigation") or {},
+        "recent_kills": debug.get("recent_kills") or [],
+        "hunt_state": hunt.get("state"),
+        "hunt_message": hunt.get("message"),
+        "target": hunt.get("target"),
+    }
 
 
 @app.get("/api/hunt-route/current")
