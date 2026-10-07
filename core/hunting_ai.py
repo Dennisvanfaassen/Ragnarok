@@ -1648,6 +1648,13 @@ class HuntingAI:
         self._stop.wait(0.015)
 
         fresh = authenticated_client_monitor.snapshot()
+
+        # Last-moment priority check before any attack command is sent. This
+        # closes the small same-tick window where a higher-priority monster can
+        # appear after the first target was selected but before the attack.
+        if self._maybe_preempt_for_higher_priority_target(fresh):
+            return False
+
         actor = self._refresh_locked_target(fresh)
         player = self._position(fresh)
         if actor is None or player is None or self.target_pos is None:
