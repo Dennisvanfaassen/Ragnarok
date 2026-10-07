@@ -17,7 +17,8 @@ WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 
 # Windows virtual-key code for Tab.
-VK_TAB = 0x09
+# Windows virtual-key code for ] } on a standard keyboard.
+VK_OEM_6 = 0xDD
 WM_HOTKEY = 0x0312
 MOD_NOREPEAT = 0x4000
 HOTKEY_ID = 0x524F
@@ -46,7 +47,7 @@ LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
 
 
 class HuntingHotkey:
-    """Global Tab toggle for hunting.
+    """Global ] toggle for hunting.
 
     The key is swallowed while RO Control is running. On stop, any held mouse
     button is released synchronously before the hunting shutdown begins.
@@ -59,7 +60,7 @@ class HuntingHotkey:
         self._pressed = False
         self._lock = threading.RLock()
         self._status = "stopped"
-        self._message = "Global Tab hotkey is not running."
+        self._message = "Global ] hotkey is not running."
         self._last_toggle_at: float | None = None
         self._last_action: str | None = None
         self._last_error: str | None = None
@@ -91,7 +92,7 @@ class HuntingHotkey:
         ).start()
 
     def _toggle(self):
-        # Serialize toggles so a second Tab press cannot race a still-starting or
+        # Serialize toggles so a second ] press cannot race a still-starting or
         # still-stopping automation worker.
         with self._lock:
             if getattr(self, "_toggle_busy", False):
@@ -103,11 +104,11 @@ class HuntingHotkey:
             if state.get("running"):
                 active_hunt_controller.stop()
                 action = "stopped"
-                message = "Hunting stopped with Tab."
+                message = "Hunting stopped with ]."
             else:
                 active_hunt_controller.start({})
                 action = "started"
-                message = "Hunting started with Tab."
+                message = "Hunting started with ]."
 
             with self._lock:
                 self._last_toggle_at = time.time()
@@ -124,7 +125,7 @@ class HuntingHotkey:
                 self._last_toggle_at = time.time()
                 self._last_action = "error"
                 self._last_error = str(exc)
-                self._message = f"Tab toggle failed: {exc}"
+                self._message = f"] toggle failed: {exc}"
         finally:
             with self._lock:
                 self._toggle_busy = False
@@ -136,11 +137,11 @@ class HuntingHotkey:
             None,
             HOTKEY_ID,
             MOD_NOREPEAT,
-            VK_TAB,
+            VK_OEM_6,
         ):
             with self._lock:
                 self._status = "ready"
-                self._message = "Tab toggles hunting globally."
+                self._message = "] toggles hunting globally."
 
             msg = wintypes.MSG()
             try:
@@ -158,10 +159,10 @@ class HuntingHotkey:
                     pass
                 with self._lock:
                     self._status = "stopped"
-                    self._message = "Global Tab hotkey stopped."
+                    self._message = "Global ] hotkey stopped."
             return
 
-        # Fallback for systems where the global Tab hotkey cannot be registered.
+        # Fallback for systems where the global ] hotkey cannot be registered.
         @LowLevelKeyboardProc
         def callback(n_code, w_param, l_param):
             if n_code >= 0:
@@ -170,7 +171,7 @@ class HuntingHotkey:
                     ctypes.POINTER(KBDLLHOOKSTRUCT),
                 ).contents
 
-                if int(info.vkCode) == VK_TAB:
+                if int(info.vkCode) == VK_OEM_6:
                     if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
                         with self._lock:
                             if not self._pressed:
@@ -203,7 +204,7 @@ class HuntingHotkey:
             with self._lock:
                 self._status = "error"
                 self._message = (
-                    "Could not register global Tab. Run RO Control as administrator."
+                    "Could not register global ]. Run RO Control as administrator."
                 )
                 self._last_error = self._message
             return
@@ -211,7 +212,7 @@ class HuntingHotkey:
         self._hook = hook
         with self._lock:
             self._status = "ready"
-            self._message = "Tab toggles hunting globally (keyboard-hook fallback)."
+            self._message = "] toggles hunting globally (keyboard-hook fallback)."
 
         msg = wintypes.MSG()
         try:
@@ -228,15 +229,15 @@ class HuntingHotkey:
                 pass
             with self._lock:
                 self._status = "stopped"
-                self._message = "Global Tab hotkey stopped."
+                self._message = "Global ] hotkey stopped."
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "status": self._status,
                 "message": self._message,
-                "key": "Tab",
-                "virtual_key": "VK_TAB",
+                "key": "]",
+                "virtual_key": "VK_OEM_6",
                 "last_toggle_at": self._last_toggle_at,
                 "last_action": self._last_action,
                 "last_error": self._last_error,
