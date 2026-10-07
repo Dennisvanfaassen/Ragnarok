@@ -411,6 +411,75 @@ class FullAutomationController:
         ).strip().lower()
         return default_action if default_action in {"keep", "store"} else "store"
 
+    @staticmethod
+    def _storage_item_identity(item: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            int(item.get("name_id") or -1),
+            str(item.get("cards_hex") or ""),
+            int(item.get("upgrade") or 0),
+            int(item.get("expire") or 0),
+            int(item.get("bind_on_equip_type") or 0),
+            bool(item.get("stackable", True)),
+        )
+
+    def _resolve_live_inventory_item(
+        self,
+        planned: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve a planned item against the current protocol inventory list.
+
+        Storage moves can cause inventory packet refreshes/reordering. Never trust
+        the original list position after another stack has moved; prefer the same
+        protocol index only when its identity still matches, otherwise resolve an
+        equivalent live item by its wire-level identity.
+        """
+        inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+        planned_index = int(planned.get("index") or -1)
+        identity = self._storage_item_identity(planned)
+
+        exact = next(
+            (
+                row for row in inventory
+                if int(row.get("index") or -1) == planned_index
+                and self._storage_item_identity(row) == identity
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact
+
+        matches = [
+            row for row in inventory
+            if self._storage_item_identity(row) == identity
+            and int(row.get("amount") or 0) > 0
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        # Stackable consumables/materials are uniquely represented by nameID on
+        # this client. For duplicate non-stackable equipment, never guess.
+        if bool(planned.get("stackable", True)):
+            name_id = int(planned.get("name_id") or -1)
+            same_id = [
+                row for row in inventory
+                if int(row.get("name_id") or -1) == name_id
+                and int(row.get("amount") or 0) > 0
+            ]
+            if len(same_id) == 1:
+                return same_id[0]
+        return None
+
+    @staticmethod
+    def _storage_total_for_name_id(
+        state: dict[str, Any],
+        name_id: int,
+    ) -> int:
+        return sum(
+            int(row.get("amount") or 0)
+            for row in (state.get("storage") or [])
+            if int(row.get("name_id") or -1) == int(name_id)
+        )
+
     def _deposit_all_unequipped(self) -> bool:
         state = authenticated_client_monitor.item_state_snapshot()
         items = list(state.get("inventory") or [])
@@ -438,117 +507,191 @@ class FullAutomationController:
             ],
         )
 
-        for item in items:
-            equipped = int(item.get("equipped") or 0)
-            index = int(item.get("index") or -1)
-            amount = int(item.get("amount") or 0)
+        for planned in items:
+            equipped = int(planned.get("equipped") or 0)
+            planned_index = int(planned.get("index") or -1)
+            planned_amount = int(planned.get("amount") or 0)
+
             if equipped != 0:
                 kept += 1
                 self._log(
                     "storage_keep_equipped",
-                    index=index,
-                    name=item.get("name"),
+                    index=planned_index,
+                    name=planned.get("name"),
                     equipped=equipped,
                 )
                 continue
-            if index < 0 or amount <= 0:
+            if planned_index < 0 or planned_amount <= 0:
                 continue
 
-            action = self._town_item_action(item)
+            action = self._town_item_action(planned)
             if action == "keep":
                 kept += 1
                 self._log(
                     "town_keep_item",
-                    index=index,
-                    name=item.get("name"),
-                    name_id=item.get("name_id"),
-                    amount=amount,
+                    index=planned_index,
+                    name=planned.get("name"),
+                    name_id=planned.get("name_id"),
+                    amount=planned_amount,
                 )
                 continue
             if action == "sell":
                 reserved_for_sale += 1
                 self._log(
                     "town_reserve_for_sale",
-                    index=index,
-                    name=item.get("name"),
-                    name_id=item.get("name_id"),
-                    amount=amount,
+                    index=planned_index,
+                    name=planned.get("name"),
+                    name_id=planned.get("name_id"),
+                    amount=planned_amount,
                 )
                 continue
 
-            before_amount = int(item.get("amount") or 0)
             confirmed = False
             last_result: dict[str, Any] | None = None
+            last_protocol_index: int | None = None
+            moved_amount = 0
 
             for attempt in range(1, 4):
-                last_result = native_action_bridge.storage_add(index, amount)
+                before_state = authenticated_client_monitor.item_state_snapshot()
+                live_item = self._resolve_live_inventory_item(planned)
+
+                if live_item is None:
+                    self._log(
+                        "storage_deposit_live_item_missing",
+                        attempt=attempt,
+                        planned_index=planned_index,
+                        name=planned.get("name"),
+                        name_id=planned.get("name_id"),
+                    )
+                    self._stop.wait(0.20)
+                    continue
+
+                protocol_index = int(live_item.get("index") or -1)
+                live_amount = int(live_item.get("amount") or 0)
+                if protocol_index < 0 or live_amount <= 0:
+                    continue
+
+                # Never ask the server to move more than is actually present in
+                # the live stack. This was the failure mode seen in diagnostics:
+                # a stale request could target an index whose amount had changed.
+                amount = min(planned_amount, live_amount)
+                name_id = int(live_item.get("name_id") or -1)
+                before_storage_total = self._storage_total_for_name_id(
+                    before_state,
+                    name_id,
+                )
+                before_inventory_amount = live_amount
+
+                last_protocol_index = protocol_index
+                moved_amount = amount
+                last_result = native_action_bridge.storage_add(
+                    protocol_index,
+                    amount,
+                )
                 self._log(
                     "storage_deposit",
                     attempt=attempt,
-                    index=index,
-                    name=item.get("name"),
-                    name_id=item.get("name_id"),
+                    planned_index=planned_index,
+                    protocol_index=protocol_index,
+                    name=live_item.get("name") or planned.get("name"),
+                    name_id=name_id,
                     amount=amount,
-                    stackable=item.get("stackable"),
+                    live_amount=live_amount,
+                    stackable=live_item.get("stackable"),
                     result=last_result,
                 )
+
                 if not last_result.get("ok"):
                     self._stop.wait(0.35)
                     continue
 
-                deadline = time.time() + 1.35
+                deadline = time.time() + 1.75
                 while not self._stop.is_set() and time.time() < deadline:
-                    live_inventory = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+                    current_state = authenticated_client_monitor.item_state_snapshot()
+                    live_inventory = current_state.get("inventory") or []
                     current = next(
                         (
                             row for row in live_inventory
-                            if int(row.get("index") or -1) == index
+                            if int(row.get("index") or -1) == protocol_index
+                            and self._storage_item_identity(row)
+                                == self._storage_item_identity(live_item)
                         ),
                         None,
                     )
-                    current_amount = int(current.get("amount") or 0) if current is not None else 0
-                    if current is None or current_amount < before_amount:
+                    current_amount = (
+                        int(current.get("amount") or 0)
+                        if current is not None
+                        else 0
+                    )
+                    storage_total = self._storage_total_for_name_id(
+                        current_state,
+                        name_id,
+                    )
+
+                    inventory_confirmed = (
+                        current is None
+                        or current_amount < before_inventory_amount
+                    )
+                    storage_confirmed = (
+                        storage_total >= before_storage_total + amount
+                    )
+                    if inventory_confirmed or storage_confirmed:
                         confirmed = True
+                        self._log(
+                            "storage_deposit_ack",
+                            attempt=attempt,
+                            protocol_index=protocol_index,
+                            name=live_item.get("name") or planned.get("name"),
+                            inventory_before=before_inventory_amount,
+                            inventory_after=current_amount,
+                            storage_before=before_storage_total,
+                            storage_after=storage_total,
+                            inventory_confirmed=inventory_confirmed,
+                            storage_confirmed=storage_confirmed,
+                        )
                         break
                     self._stop.wait(0.08)
 
                 self._log(
                     "storage_deposit_confirmation",
                     attempt=attempt,
-                    index=index,
-                    name=item.get("name"),
+                    planned_index=planned_index,
+                    protocol_index=protocol_index,
+                    name=live_item.get("name") or planned.get("name"),
                     confirmed=confirmed,
                 )
                 if confirmed:
                     break
 
-                # Same verified storage-move packet, retried after a short delay.
-                # This covers the client/server race immediately after Kafra opens.
-                self._stop.wait(0.55)
+                # Re-resolve the live inventory item before every retry. Never
+                # resend a stale protocol index after an inventory refresh.
+                self._stop.wait(0.45)
 
             if not confirmed:
-                # Do not leave the player's storage window hanging open when a
-                # transfer fails. Close it cleanly, but do not continue to the
-                # Tool Dealer because the requested storage plan is incomplete.
                 cleanup = native_action_bridge.storage_close()
                 self._log(
                     "storage_close_after_failed_deposit",
-                    index=index,
-                    name=item.get("name"),
+                    planned_index=planned_index,
+                    protocol_index=last_protocol_index,
+                    name=planned.get("name"),
                     result=cleanup,
                 )
                 self.last_error = (
-                    f"Storage could not move {item.get('name') or index} "
-                    f"(index {index}, amount {amount}) after 3 attempts. "
-                    "Kafra storage was closed and the town cycle was paused."
+                    f"Storage could not move {planned.get('name') or planned_index} "
+                    f"(live index {last_protocol_index}, amount {moved_amount or planned_amount}) "
+                    "after 3 live-resolved attempts. Kafra storage was closed and "
+                    "the town cycle was paused."
                 )
                 return False
 
-            self._deposited_indices_this_cycle.add(index)
+            if last_protocol_index is not None:
+                self._deposited_indices_this_cycle.add(last_protocol_index)
+            self._deposited_indices_this_cycle.add(planned_index)
             deposited += 1
-            # SoulBound can disconnect when storage moves arrive too close
-            # together. Deliberately pace each confirmed stack transfer.
-            self._stop.wait(0.20)
+
+            # OpenKore serializes transfers and waits for item-list state to
+            # advance. SoulBound also dislikes tightly packed storage moves.
+            self._stop.wait(0.22)
 
         self._log(
             "storage_deposit_complete",
