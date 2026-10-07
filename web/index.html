@@ -67,6 +67,15 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .bot-badge.stopped{background:#171b24;color:#aab3c3}
 .bot-badge.error{border-color:#8b3f4e;background:#29141a;color:#ff9daf}.bot-badge.error::before{background:#ff607d}
 .bot-phase{font-size:12px;color:var(--muted)}
+.setup-hero{display:grid;grid-template-columns:1.3fr .7fr;gap:16px}
+.setup-steps{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.setup-step{display:flex;gap:12px;align-items:flex-start;text-align:left;border:1px solid var(--line);background:#0c1119;border-radius:14px;padding:14px;color:var(--text);cursor:pointer}
+.setup-step:hover{border-color:#46516a;background:#111824}.setup-num{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#242c3d;color:#fff;font-weight:800;flex:0 0 auto}
+.setup-step strong{display:block;margin-bottom:4px}.setup-step span{font-size:12px;color:var(--muted);line-height:1.4}
+.readiness-list{display:grid;gap:8px}.ready-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:#0b1018;font-size:12px}
+.ready-row span:first-child{color:var(--muted)}.ready-state{font-weight:800}.ready-state.ok{color:#77e3bd}.ready-state.warn{color:#ffd166}.ready-state.bad{color:#ff879d}
+.position-warning{display:none;margin-top:10px;padding:10px 12px;border:1px solid #7a5e2a;background:#241d0d;border-radius:10px;color:#ffd784;font-size:12px}
+.position-warning.show{display:block}
 @media(max-width:900px){.command-hero{grid-template-columns:1fr}.status-strip,.summary-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.hunt-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
@@ -79,6 +88,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
   <div class="brand">RO <span>Control</span></div>
   <div class="nav">
     <div id="navDashboard" class="active" onclick="switchView('dashboard')">Dashboard</div>
+    <div id="navSetup" onclick="switchView('setup')">Setup</div>
     <div class="nav-group-label">Bot setup</div>
     <div id="navCharacter" onclick="switchView('character')">Character</div>
     <div id="navHunting" onclick="switchView('hunting')">Hunting & Loot</div>
@@ -184,6 +194,52 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <button class="section-note" style="text-align:left;cursor:pointer" onclick="switchView('map')"><strong>4. Map & route</strong><br>Automatic exploration or a custom patrol route.</button>
       </div>
     </section>
+  </div>
+
+  <div id="setupView" class="view-hidden">
+    <div class="grid">
+      <section class="card full">
+        <div class="setup-hero">
+          <div>
+            <div class="muted">Easy setup</div>
+            <h2 style="font-size:22px;margin:5px 0 8px">Get the bot ready in a few steps</h2>
+            <div class="muted">Use this page as the guided setup. Each step opens the existing configuration page, so there is only one place where every setting is actually stored.</div>
+          </div>
+          <div class="section-note">
+            <strong style="display:block;color:#fff;margin-bottom:5px">Recommended flow</strong>
+            Character → Hunt → Monsters → Supplies → Map → Start
+          </div>
+        </div>
+      </section>
+
+      <section class="card wide">
+        <h2>Setup steps</h2>
+        <div class="setup-steps">
+          <button class="setup-step" onclick="switchView('character')"><span class="setup-num">1</span><span><strong>Character</strong><span>Confirm the client, character and learned skills are detected.</span></span></button>
+          <button class="setup-step" onclick="switchView('hunting')"><span class="setup-num">2</span><span><strong>Hunting map</strong><span>Select the map and choose automatic exploration or a saved route.</span></span></button>
+          <button class="setup-step" onclick="switchView('hunting')"><span class="setup-num">3</span><span><strong>Monsters & priorities</strong><span>Choose targets, priorities, attack behavior and loot rules.</span></span></button>
+          <button class="setup-step" onclick="switchView('supplies')"><span class="setup-num">4</span><span><strong>Healing & supplies</strong><span>Configure healing, Fly Wings and ASPD consumables.</span></span></button>
+          <button class="setup-step" onclick="switchView('map')"><span class="setup-num">5</span><span><strong>Map & route</strong><span>Review the heatmap or create an optional patrol route.</span></span></button>
+          <button class="setup-step" onclick="saveProfile();switchView('dashboard')"><span class="setup-num">6</span><span><strong>Review & start</strong><span>Save everything, return to the dashboard and start hunting.</span></span></button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Readiness</h2>
+        <div id="setupReadiness" class="readiness-list">
+          <div class="ready-row"><span>Classic.exe</span><strong class="ready-state warn">Checking…</strong></div>
+          <div class="ready-row"><span>Character position</span><strong class="ready-state warn">Checking…</strong></div>
+          <div class="ready-row"><span>Hunting map</span><strong class="ready-state warn">Checking…</strong></div>
+          <div class="ready-row"><span>Monsters configured</span><strong class="ready-state warn">Checking…</strong></div>
+          <div class="ready-row"><span>Healing</span><strong class="ready-state warn">Checking…</strong></div>
+          <div class="ready-row"><span>Native actions</span><strong class="ready-state warn">Checking…</strong></div>
+        </div>
+        <div class="quick-actions">
+          <button class="action" onclick="startFullAutomation()">Start bot</button>
+          <button class="action secondary" onclick="switchView('advanced')">Advanced</button>
+        </div>
+      </section>
+    </div>
   </div>
 
   <div id="suppliesView" class="view-hidden">
@@ -773,6 +829,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <div>
           <h2 style="font-size:18px;margin-bottom:5px">Live Map</h2>
           <div id="mapTitle" class="muted">Waiting for current map…</div>
+          <div id="positionGuardWarning" class="position-warning"></div>
         </div>
         <div class="map-legend">
           <span class="legend-item"><span class="legend-dot legend-you"></span>You</span>
@@ -1510,6 +1567,7 @@ async function loadProfile(){
     document.getElementById('combatNoProgressTimeout').value=(p.hunt&&p.hunt.combat_no_progress_timeout)??1.6;
     document.getElementById('huntingLivenessTimeout').value=(p.hunt&&p.hunt.hunting_liveness_timeout)??3;
     renderDashboardProfileSummary(p);
+    updateSetupReadiness();
     await refreshCharacter();
     if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
@@ -1720,6 +1778,7 @@ async function startAuthenticatedClient(){
   out(data);
 }
 function renderLiveState(data){
+  latestAuthClient=data||null;
   const live=(data&&data.live_state)||{};
   const world=live.world||{};
   const counts=live.actor_counts||{};
@@ -1743,7 +1802,41 @@ function renderLiveState(data){
   if(dashActors) dashActors.textContent=counts.total??0;
   const breakdown=document.getElementById('liveActorBreakdown');
   if(breakdown) breakdown.value=(counts.monsters??0)+' / '+(counts.players??0)+' / '+(counts.other??0);
+  updateSetupReadiness();
 }
+function readinessRow(label,state,text){
+  return '<div class="ready-row"><span>'+escapeHtml(label)+'</span><strong class="ready-state '+state+'">'+escapeHtml(text)+'</strong></div>';
+}
+
+function updateSetupReadiness(){
+  const box=document.getElementById('setupReadiness');
+  if(!box) return;
+  const live=((latestAuthClient||{}).live_state)||{};
+  const world=live.world||{};
+  const profileMap=(document.getElementById('huntMap')?.value||'').trim();
+  const enabledMonsters=typeof currentMonsterRules==='function'
+    ? currentMonsterRules().filter(r=>r.enabled&&r.behavior!=='ignore')
+    : [];
+  const healEnabled=document.getElementById('healEnabled')?.value!=='false';
+  const healItem=(document.getElementById('healItem')?.value||'').trim();
+  const authStatus=(latestAuthClient&&latestAuthClient.status)||'stopped';
+  const classicOk=!!(latestAuthClient&&latestAuthClient.classic_pid);
+  const positionOk=world.x!=null&&world.y!=null;
+  const mapOk=!!profileMap;
+  const monstersOk=enabledMonsters.length>0;
+  const healingOk=!healEnabled||!!healItem;
+  const nativeOk=authStatus!=='stopped' && !!(latestAuthClient&&latestAuthClient.agent&&latestAuthClient.agent.socket_learned);
+
+  box.innerHTML=[
+    readinessRow('Classic.exe',classicOk?'ok':'bad',classicOk?'Detected':'Not detected'),
+    readinessRow('Character position',positionOk?'ok':'warn',positionOk?(world.x+', '+world.y):'Waiting'),
+    readinessRow('Hunting map',mapOk?'ok':'bad',mapOk?profileMap:'Choose a map'),
+    readinessRow('Monsters configured',monstersOk?'ok':'bad',monstersOk?(enabledMonsters.length+' enabled'):'None selected'),
+    readinessRow('Healing',healingOk?'ok':'warn',healEnabled?(healItem||'Choose item'):'Disabled'),
+    readinessRow('Native actions',nativeOk?'ok':'warn',nativeOk?'Ready':'Waiting for map socket')
+  ].join('');
+}
+
 async function refreshAuthenticatedClient(){
   const r=await fetch('/api/diagnostics/authenticated-client');
   const data=await r.json();
@@ -2037,6 +2130,7 @@ async function refreshTownTravelQuiet(){
 }
 
 let currentView='dashboard';
+let latestAuthClient=null;
 let mapGrid={map:null,width:0,height:0,cells:null,baseCanvas:null};
 let mapOverlay=null;
 let mapExploration=null;
@@ -2049,6 +2143,7 @@ function switchView(view){
   currentView=view;
   const views={
     dashboard:document.getElementById('dashboardView'),
+    setup:document.getElementById('setupView'),
     character:document.getElementById('characterView'),
     hunting:document.getElementById('huntingView'),
     supplies:document.getElementById('suppliesView'),
@@ -2058,6 +2153,7 @@ function switchView(view){
   };
   const navs={
     dashboard:document.getElementById('navDashboard'),
+    setup:document.getElementById('navSetup'),
     character:document.getElementById('navCharacter'),
     hunting:document.getElementById('navHunting'),
     supplies:document.getElementById('navSupplies'),
@@ -2070,6 +2166,7 @@ function switchView(view){
     if(navs[key]) navs[key].classList.toggle('active',key===view);
   });
   if(view==='map') refreshMapLive(true);
+  if(view==='setup') updateSetupReadiness();
   if(view==='character') refreshCharacter();
   if(view==='hunting'){ loadHuntingCatalog(); refreshCharacter(); }
   if(view==='storage') refreshTownInventory();
