@@ -268,13 +268,11 @@ class ExplorationPlanner:
         candidates: list[tuple[float, list[tuple[int, int]]]] = []
         base_heading = self._heading
 
-        # If no heading exists yet, pick one once. Afterwards direction persists.
         if base_heading is None:
             angle = random.random() * math.tau
             base_heading = (math.cos(angle), math.sin(angle))
             self._heading = base_heading
 
-        # Search mostly ahead, with wider alternatives for terrain/coverage.
         angle_offsets = [
             0,
             math.radians(18),
@@ -287,6 +285,18 @@ class ExplorationPlanner:
             -math.radians(90),
             math.pi,
         ]
+        distances = (
+            self.max_goal_distance,
+            int((self.min_goal_distance + self.max_goal_distance) / 2),
+            self.min_goal_distance,
+        )
+
+        # First rank candidate destinations cheaply. Previously every possible
+        # destination ran a full A* search (up to ~30 per decision), which could
+        # cause a visible 1-2 second hesitation after combat. Only the strongest
+        # candidates get expensive route validation now.
+        cheap: list[tuple[float, tuple[int, int]]] = []
+        seen: set[tuple[int, int]] = set()
 
         for angle_offset in angle_offsets:
             ca = math.cos(angle_offset)
@@ -294,16 +304,10 @@ class ExplorationPlanner:
             hx, hy = base_heading
             direction = (hx * ca - hy * sa, hx * sa + hy * ca)
 
-            for distance in (
-                self.max_goal_distance,
-                int((self.min_goal_distance + self.max_goal_distance) / 2),
-                self.min_goal_distance,
-            ):
+            for distance in distances:
                 gx = int(round(start[0] + direction[0] * distance))
                 gy = int(round(start[1] + direction[1] * distance))
 
-                # Find a nearby walkable goal instead of abandoning the heading
-                # just because the exact sampled tile is blocked.
                 walkable_goal = None
                 for radius in range(0, 9):
                     found = []
@@ -321,24 +325,54 @@ class ExplorationPlanner:
                         )
                         break
 
-                if walkable_goal is None:
+                if walkable_goal is None or walkable_goal in seen:
                     continue
+                seen.add(walkable_goal)
 
+                dx = walkable_goal[0] - start[0]
+                dy = walkable_goal[1] - start[1]
+                length = max(1.0, math.hypot(dx, dy))
+                heading_alignment = (
+                    (dx / length) * base_heading[0]
+                    + (dy / length) * base_heading[1]
+                )
+                openness = self._local_openness(grid, walkable_goal)
+                wall = self._wall_proximity(grid, walkable_goal)
+                coverage = self._coverage(walkable_goal)
+                cheap_score = (
+                    heading_alignment * self.heading_weight
+                    - coverage * self.coverage_weight
+                    + openness * self.open_space_weight
+                    - wall * self.wall_hug_penalty
+                    - self._goal_recent_penalty(walkable_goal)
+                    + min(1.0, length / max(1, self.max_goal_distance)) * 0.35
+                )
+                cheap.append((cheap_score, walkable_goal))
+
+        if not cheap:
+            return None
+
+        cheap.sort(key=lambda row: row[0], reverse=True)
+
+        # Validate a small high-quality shortlist first. If terrain makes all
+        # of those unreachable, progressively fall back through the remainder.
+        shortlist = cheap[:10]
+        remainder = cheap[10:]
+        for pool in (shortlist, remainder):
+            for _cheap_score, walkable_goal in pool:
                 path = astar(grid, start, walkable_goal, max_expansions=90000)
                 if not path or len(path) < 8:
                     continue
-
                 score = self._score(grid, start, walkable_goal, path)
                 candidates.append((score, path))
+
+            if candidates:
+                break
 
         if not candidates:
             return None
 
         candidates.sort(key=lambda entry: entry[0], reverse=True)
-
-        # Avoid a mechanically identical "perfect" destination every time.
-        # Choose among near-equal top routes, while never allowing a clearly
-        # worse edge/dead-end candidate to win through randomness alone.
         best_score = candidates[0][0]
         near_best = [
             entry for entry in candidates[:5]
@@ -351,7 +385,6 @@ class ExplorationPlanner:
             best = random.choices(near_best, weights=weights, k=1)[0][1]
         goal = best[-1]
 
-        # Slowly steer the persistent heading toward the chosen sweep direction.
         dx = goal[0] - start[0]
         dy = goal[1] - start[1]
         length = math.hypot(dx, dy)
