@@ -690,7 +690,7 @@ class HuntingAI:
 
     def _acquire_aggressor(self, snapshot: dict[str, Any]) -> bool:
         actor = self._best_aggressor_actor(snapshot)
-        if actor is None:
+        if actor is None or not self._reaction_ready(actor):
             return False
         return self._lock_actor(actor, "aggressor")
 
