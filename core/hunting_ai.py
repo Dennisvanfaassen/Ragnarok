@@ -110,6 +110,13 @@ class HuntingAI:
         self._return_weight_reached = False
         self._last_teleport_at = 0.0
         self._last_teleport_reason: str | None = None
+        self._trusted_position: tuple[int, int] | None = None
+        self._trusted_position_map: str | None = None
+        self._trusted_position_at = 0.0
+        self._position_candidate: tuple[int, int] | None = None
+        self._position_candidate_since = 0.0
+        self._position_reject_count = 0
+        self._position_last_rejected: dict[str, Any] | None = None
         self._wander_last_position: tuple[int, int] | None = None
         self._wander_last_progress_at = time.time()
         self._target_failure_count: dict[int, int] = {}
@@ -218,13 +225,112 @@ class HuntingAI:
     def _world(snapshot: dict[str, Any]) -> dict[str, Any]:
         return (snapshot.get("live_state") or {}).get("world") or {}
 
-    @staticmethod
-    def _position(snapshot: dict[str, Any]) -> tuple[int, int] | None:
-        world = HuntingAI._world(snapshot)
+    def _position(self, snapshot: dict[str, Any]) -> tuple[int, int] | None:
+        """Return a map-sane position and quarantine transient bad coordinates."""
+        world = self._world(snapshot)
         x, y = world.get("x"), world.get("y")
+        map_name = str(world.get("map") or "").strip()
         if x is None or y is None:
-            return None
-        return int(x), int(y)
+            return self._trusted_position
+
+        raw = (int(x), int(y))
+        now = time.time()
+
+        try:
+            grid, _ = nav_repository.load(map_name) if map_name else (None, None)
+        except Exception:
+            grid = None
+
+        in_bounds = bool(
+            grid is None
+            or (
+                0 <= raw[0] < int(grid.width)
+                and 0 <= raw[1] < int(grid.height)
+            )
+        )
+        if not in_bounds:
+            self._position_reject_count += 1
+            self._position_last_rejected = {
+                "time": now,
+                "map": map_name or None,
+                "raw": {"x": raw[0], "y": raw[1]},
+                "reason": "outside_map_bounds",
+                "trusted": (
+                    {"x": self._trusted_position[0], "y": self._trusted_position[1]}
+                    if self._trusted_position else None
+                ),
+            }
+            self._position_candidate = None
+            self._position_candidate_since = 0.0
+            return self._trusted_position
+
+        map_changed = bool(
+            map_name
+            and self._trusted_position_map
+            and map_name != self._trusted_position_map
+        )
+        if self._trusted_position is None or map_changed:
+            self._trusted_position = raw
+            self._trusted_position_map = map_name or self._trusted_position_map
+            self._trusted_position_at = now
+            self._position_candidate = None
+            self._position_candidate_since = 0.0
+            return raw
+
+        jump = self._tile_distance(self._trusted_position, raw)
+        teleport_recent = now - float(self._last_teleport_at or 0.0) <= 1.25
+
+        # Ordinary movement updates are small. A very large same-map jump can
+        # be legitimate after Fly Wing/teleport, otherwise quarantine it for a
+        # short period so one malformed movement packet cannot poison A*.
+        if jump > 40 and not teleport_recent:
+            if (
+                self._position_candidate is None
+                or self._tile_distance(self._position_candidate, raw) > 2
+            ):
+                self._position_candidate = raw
+                self._position_candidate_since = now
+
+            held_for = now - self._position_candidate_since
+            if held_for < 0.75:
+                self._position_reject_count += 1
+                self._position_last_rejected = {
+                    "time": now,
+                    "map": map_name or None,
+                    "raw": {"x": raw[0], "y": raw[1]},
+                    "reason": "implausible_same_map_jump",
+                    "jump_tiles": jump,
+                    "held_seconds": round(held_for, 3),
+                    "trusted": {
+                        "x": self._trusted_position[0],
+                        "y": self._trusted_position[1],
+                    },
+                }
+                return self._trusted_position
+
+        self._trusted_position = raw
+        self._trusted_position_map = map_name or self._trusted_position_map
+        self._trusted_position_at = now
+        self._position_candidate = None
+        self._position_candidate_since = 0.0
+        return raw
+
+    def _position_guard_snapshot(self) -> dict[str, Any]:
+        return {
+            "trusted": (
+                {"x": self._trusted_position[0], "y": self._trusted_position[1]}
+                if self._trusted_position else None
+            ),
+            "map": self._trusted_position_map,
+            "accepted_at": round(self._trusted_position_at, 3)
+            if self._trusted_position_at else None,
+            "rejected_count": self._position_reject_count,
+            "last_rejected": self._position_last_rejected,
+            "candidate": (
+                {"x": self._position_candidate[0], "y": self._position_candidate[1]}
+                if self._position_candidate else None
+            ),
+        }
 
     @staticmethod
     def _render_position(
@@ -3766,6 +3872,13 @@ class HuntingAI:
             self._wander_last_progress_at = time.time()
             self._monster_memory.clear()
             self._reaction_ready_at.clear()
+            self._trusted_position = None
+            self._trusted_position_map = None
+            self._trusted_position_at = 0.0
+            self._position_candidate = None
+            self._position_candidate_since = 0.0
+            self._position_reject_count = 0
+            self._position_last_rejected = None
             self._attack_commit_range = self.attack_range
             self._roam_pause_until = 0.0
             self._last_roam_reconsider_at = 0.0
@@ -3946,6 +4059,7 @@ class HuntingAI:
                     },
                     "exploration": exploration_planner.snapshot(),
                 },
+                "position_guard": self._position_guard_snapshot(),
                 "map_debug": {
                     "navigation": {
                         "wander_goal": (
