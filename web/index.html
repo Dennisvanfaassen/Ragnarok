@@ -795,7 +795,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </div>
       </div>
       <div class="map-shell">
-        <canvas id="liveMapCanvas" width="1100" height="760"></canvas>
+        <canvas id="liveMapCanvas" width="1100" height="760" onmousemove="inspectMapCell(event)" onmouseleave="clearMapInspector()"></canvas>
       </div>
       <div class="route-editor">
         <div class="row">
@@ -2225,6 +2225,77 @@ function canvasToMap(event){
   return nearestWalkableClient(x,y);
 }
 
+function rawCanvasMapPoint(event){
+  const canvas=document.getElementById('liveMapCanvas');
+  if(!canvas||!mapGrid.cells) return null;
+  const rect=canvas.getBoundingClientRect();
+  const dpr=Math.max(1,window.devicePixelRatio||1);
+  const pad=24*dpr;
+  const scale=Math.min(
+    (canvas.width-pad*2)/mapGrid.width,
+    (canvas.height-pad*2)/mapGrid.height
+  );
+  const drawW=mapGrid.width*scale,drawH=mapGrid.height*scale;
+  const ox=(canvas.width-drawW)/2,oy=(canvas.height-drawH)/2;
+  const px=(event.clientX-rect.left)*dpr,py=(event.clientY-rect.top)*dpr;
+  if(px<ox||py<oy||px>ox+drawW||py>oy+drawH) return null;
+  return {
+    x:Math.max(0,Math.min(mapGrid.width-1,Math.floor((px-ox)/scale))),
+    y:Math.max(0,Math.min(mapGrid.height-1,Math.floor(mapGrid.height-(py-oy)/scale)))
+  };
+}
+
+function formatAge(seconds){
+  if(seconds==null) return 'Never visited';
+  const s=Math.max(0,Math.round(Number(seconds)||0));
+  if(s<60) return s+'s ago';
+  if(s<3600) return Math.floor(s/60)+'m '+(s%60)+'s ago';
+  return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m ago';
+}
+
+function inspectMapCell(event){
+  if(routeEditing) return;
+  const p=rawCanvasMapPoint(event);
+  const cells=((mapExploration&&mapExploration.exploration)||{}).cells||[];
+  if(!p||!cells.length){clearMapInspector();return}
+  const cell=cells.find(c=>p.x>=c.x&&p.x<c.x+c.width&&p.y>=c.y&&p.y<c.y+c.height)||null;
+  mapHoverCell=cell;
+  const canvas=document.getElementById('liveMapCanvas');
+  if(canvas) canvas.classList.toggle('map-inspecting',!!cell);
+  renderMapInspector(cell);
+  drawLiveMap();
+}
+
+function clearMapInspector(){
+  mapHoverCell=null;
+  const canvas=document.getElementById('liveMapCanvas');
+  if(canvas) canvas.classList.remove('map-inspecting');
+  renderMapInspector(null);
+  drawLiveMap();
+}
+
+function renderMapInspector(cell){
+  const hint=document.getElementById('mapInspectorHint');
+  const grid=document.getElementById('mapInspectorGrid');
+  if(!hint||!grid) return;
+  if(!cell){
+    hint.textContent='Move your mouse over the map to inspect an exploration cell.';
+    grid.innerHTML='';
+    return;
+  }
+  hint.textContent='Cell '+cell.cx+', '+cell.cy+' · tiles '+cell.x+','+cell.y+' → '+(cell.x+cell.width-1)+','+(cell.y+cell.height-1);
+  const status=cell.visited?(Number(cell.age_seconds||0)<20?'Recently searched':'Previously searched'):'Not searched this session';
+  grid.innerHTML=
+    '<span>Status</span><strong>'+escapeHtml(status)+'</strong>'+
+    '<span>Last visited</span><strong>'+escapeHtml(formatAge(cell.age_seconds))+'</strong>'+
+    '<span>Time spent</span><strong>'+Number(cell.visit_seconds||0).toFixed(1)+'s</strong>'+
+    '<span>Coverage score</span><strong>'+Number(cell.coverage||0).toFixed(2)+'</strong>'+
+    '<span>Open space</span><strong>'+Math.round(Number(cell.openness||0)*100)+'%</strong>'+
+    '<span>Wall proximity</span><strong>'+Math.round(Number(cell.wall_proximity||0)*100)+'%</strong>'+
+    '<span>Escape directions</span><strong>'+String(cell.escape_directions??0)+'/8</strong>'+
+    '<span>Walkable area</span><strong>'+Math.round(Number(cell.walkable_ratio||0)*100)+'%</strong>';
+}
+
 function onMapCanvasClick(event){
   if(!routeEditing) return;
   const p=canvasToMap(event);
@@ -2297,6 +2368,93 @@ function drawLiveMap(){
     y:oy+(mapGrid.height-1-y)*scale
   });
 
+  function mapCellRect(cell){
+    return {
+      x:ox+cell.x*scale,
+      y:oy+(mapGrid.height-(cell.y+cell.height))*scale,
+      w:Math.max(1,cell.width*scale),
+      h:Math.max(1,cell.height*scale)
+    };
+  }
+
+  function heatColor(cell){
+    if(!cell.visited) return 'rgba(86,62,116,.34)';
+    const age=Number(cell.age_seconds||0);
+    if(age<20) return 'rgba(40,215,161,.48)';
+    if(age<90) return 'rgba(67,151,196,.43)';
+    if(age<240) return 'rgba(102,82,160,.40)';
+    return 'rgba(126,83,155,.34)';
+  }
+
+  const exploration=(mapExploration&&mapExploration.exploration)||{};
+  if(document.getElementById('mapLayerHeat')?.checked){
+    for(const cell of (exploration.cells||[])){
+      const r=mapCellRect(cell);
+      ctx.fillStyle=heatColor(cell);
+      ctx.fillRect(r.x,r.y,r.w,r.h);
+      if(mapHoverCell && mapHoverCell.cx===cell.cx && mapHoverCell.cy===cell.cy){
+        ctx.strokeStyle='#ffffff';
+        ctx.lineWidth=1.5*dpr;
+        ctx.strokeRect(r.x+.5*dpr,r.y+.5*dpr,Math.max(1,r.w-dpr),Math.max(1,r.h-dpr));
+      }
+    }
+  }
+
+  if(document.getElementById('mapLayerTrail')?.checked){
+    const trail=exploration.recent_positions||[];
+    if(trail.length>1){
+      ctx.strokeStyle='rgba(77,163,255,.72)';
+      ctx.lineWidth=2*dpr;
+      ctx.beginPath();
+      trail.forEach((entry,index)=>{
+        const p=point(entry.x,entry.y);
+        if(index===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+      });
+      ctx.stroke();
+    }
+  }
+
+  if(document.getElementById('mapLayerPlan')?.checked){
+    const nav=(mapExploration&&mapExploration.navigation)||{};
+    const planned=nav.astar_path||[];
+    if(planned.length>1){
+      ctx.strokeStyle='rgba(255,209,102,.92)';
+      ctx.lineWidth=2*dpr;
+      ctx.setLineDash([7*dpr,5*dpr]);
+      ctx.beginPath();
+      planned.forEach((entry,index)=>{
+        const p=point(entry.x,entry.y);
+        if(index===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if(nav.wander_goal){
+      const g=point(nav.wander_goal.x,nav.wander_goal.y);
+      ctx.beginPath();
+      ctx.arc(g.x,g.y,8*dpr,0,Math.PI*2);
+      ctx.fillStyle='rgba(255,209,102,.22)';
+      ctx.fill();
+      ctx.lineWidth=2*dpr;
+      ctx.strokeStyle='#ffd166';
+      ctx.stroke();
+    }
+  }
+
+  if(document.getElementById('mapLayerKills')?.checked){
+    for(const kill of ((mapExploration&&mapExploration.recent_kills)||[])){
+      if(kill.x==null||kill.y==null) continue;
+      const p=point(kill.x,kill.y);
+      ctx.strokeStyle='rgba(255,112,137,.9)';
+      ctx.lineWidth=2*dpr;
+      const s=5*dpr;
+      ctx.beginPath();
+      ctx.moveTo(p.x-s,p.y-s);ctx.lineTo(p.x+s,p.y+s);
+      ctx.moveTo(p.x+s,p.y-s);ctx.lineTo(p.x-s,p.y+s);
+      ctx.stroke();
+    }
+  }
+
   function dot(entry,radius,fill,stroke=null){
     if(!entry) return;
     const p=point(entry.x,entry.y);
@@ -2344,10 +2502,12 @@ function drawLiveMap(){
     });
   }
 
-  for(const actor of (mapOverlay.other||[])) dot(actor,3,'#a1a8b5');
-  for(const actor of (mapOverlay.players||[])) dot(actor,4,'#32df8f');
-  for(const actor of (mapOverlay.monsters||[])){
-    dot(actor,actor.aggressive_to_me?5:4,'#ff4f64',actor.aggressive_to_me?'#ffd166':null);
+  if(document.getElementById('mapLayerActors')?.checked){
+    for(const actor of (mapOverlay.other||[])) dot(actor,3,'#a1a8b5');
+    for(const actor of (mapOverlay.players||[])) dot(actor,4,'#32df8f');
+    for(const actor of (mapOverlay.monsters||[])){
+      dot(actor,actor.aggressive_to_me?5:4,'#ff4f64',actor.aggressive_to_me?'#ffd166':null);
+    }
   }
   dot(mapOverlay.player,6,'#4da3ff','#ffffff');
 
@@ -2356,15 +2516,29 @@ function drawLiveMap(){
   document.getElementById('mapPlayerPos').textContent=mapOverlay.player
     ? mapOverlay.player.x+', '+mapOverlay.player.y : '—';
   document.getElementById('mapMonsterCount').textContent=(mapOverlay.counts&&mapOverlay.counts.monsters)||0;
-  document.getElementById('mapPlayerCount').textContent=(mapOverlay.counts&&mapOverlay.counts.players)||0;
   document.getElementById('mapSize').textContent=mapGrid.width+' × '+mapGrid.height;
+  const summary=exploration.summary||{};
+  const explored=Number(summary.visited_percent||0);
+  document.getElementById('mapExploredPercent').textContent=explored.toFixed(1)+'%';
+  document.getElementById('mapVisitedCells').textContent=(summary.visited_cells||0)+' / '+(summary.walkable_cells||0);
+  document.getElementById('mapProgressFill').style.width=Math.max(0,Math.min(100,explored))+'%';
+  const nav=(mapExploration&&mapExploration.navigation)||{};
+  document.getElementById('mapCurrentGoal').textContent=nav.wander_goal
+    ? nav.wander_goal.x+', '+nav.wander_goal.y : '—';
+  document.getElementById('mapHuntState').textContent=(mapExploration&&mapExploration.hunt_state)||'—';
+  document.getElementById('mapRecentKills').textContent=((mapExploration&&mapExploration.recent_kills)||[]).length;
+  document.getElementById('mapHuntMessage').textContent=(mapExploration&&mapExploration.hunt_message)||'Waiting for exploration data…';
 }
 
 async function refreshMapLive(forceGrid=false){
   try{
-    const overlayRes=await fetch('/api/map/live');
+    const [overlayRes,exploreRes]=await Promise.all([
+      fetch('/api/map/live'),
+      fetch('/api/map/exploration')
+    ]);
     const overlay=await overlayRes.json();
     mapOverlay=overlay;
+    mapExploration=await exploreRes.json();
 
     if(overlay.map && (forceGrid || mapGrid.map!==overlay.map || !mapGrid.cells)){
       await loadCurrentMapGrid(true);
