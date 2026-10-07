@@ -250,13 +250,22 @@ class HuntingAI:
                 and 0 <= raw[1] < int(grid.height)
             )
         )
-        if not in_bounds:
+        walkable_raw = bool(grid is None or (in_bounds and grid.walkable(*raw)))
+        if not in_bounds or (
+            self._trusted_position is not None
+            and not walkable_raw
+            and self._tile_distance(self._trusted_position, raw) > 6
+        ):
             self._position_reject_count += 1
             self._position_last_rejected = {
                 "time": now,
                 "map": map_name or None,
                 "raw": {"x": raw[0], "y": raw[1]},
-                "reason": "outside_map_bounds",
+                "reason": (
+                    "outside_map_bounds"
+                    if not in_bounds
+                    else "non_walkable_implausible_position"
+                ),
                 "trusted": (
                     {"x": self._trusted_position[0], "y": self._trusted_position[1]}
                     if self._trusted_position else None
@@ -316,6 +325,22 @@ class HuntingAI:
         self._position_candidate = None
         self._position_candidate_since = 0.0
         return raw
+
+    def _snapshot_with_position(
+        self,
+        snapshot: dict[str, Any],
+        position: tuple[int, int],
+    ) -> dict[str, Any]:
+        live = dict(snapshot.get("live_state") or {})
+        world = dict(live.get("world") or {})
+        world["x"] = int(position[0])
+        world["y"] = int(position[1])
+        world["render_x"] = float(position[0])
+        world["render_y"] = float(position[1])
+        live["world"] = world
+        patched = dict(snapshot)
+        patched["live_state"] = live
+        return patched
 
     def _position_guard_snapshot(self) -> dict[str, Any]:
         return {
@@ -2048,7 +2073,8 @@ class HuntingAI:
                 "y": approach_target[1],
             }
         }
-        pathing = build_pathing_state(snapshot, targeting, nav_repository)
+        pathing_snapshot = self._snapshot_with_position(snapshot, player)
+        pathing = build_pathing_state(pathing_snapshot, targeting, nav_repository)
         path_preview = pathing.get("path_preview") or []
         if path_preview and self._path_crosses_avoid_zone(
             self._world(snapshot).get("map"),
