@@ -76,6 +76,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .ready-row span:first-child{color:var(--muted)}.ready-state{font-weight:800}.ready-state.ok{color:#77e3bd}.ready-state.warn{color:#ffd166}.ready-state.bad{color:#ff879d}
 .position-warning{display:none;margin-top:10px;padding:10px 12px;border:1px solid #7a5e2a;background:#241d0d;border-radius:10px;color:#ffd784;font-size:12px}
 .position-warning.show{display:block}
+.activity-feed{display:grid;gap:7px}.activity-line{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.activity-line:last-child{border-bottom:0}.activity-time{color:#667187}.activity-text{color:#d8deea}
 @media(max-width:900px){.command-hero{grid-template-columns:1fr}.status-strip,.summary-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.hunt-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
@@ -182,6 +183,16 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <label>Live weight<input id="fullAutomationWeight" value="—" disabled></label>
       <div class="actions">
         <button class="action secondary" disabled>Town automation disabled</button>
+      </div>
+    </section>
+
+    <section class="card full">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px">
+        <h2 style="margin:0">Recent activity</h2>
+        <button class="action secondary" style="padding:7px 10px" onclick="switchView('map')">Open live map</button>
+      </div>
+      <div id="activityFeed" class="activity-feed">
+        <div class="muted">Waiting for hunting activity…</div>
       </div>
     </section>
 
@@ -1988,11 +1999,40 @@ async function stopActiveHunt(){
   renderActiveHunt(data);
   out(data);
 }
+function humanActivity(row){
+  const action=String((row&&row.action)||'').toLowerCase();
+  const d=(row&&row.details)||row||{};
+  if(action==='priority_preempt') return 'Priority switched from '+(d.previous_target_name||'target')+' to '+(d.new_target_name||'higher-priority monster');
+  if(action==='target_finished') return (d.target_name||'Monster')+' defeated';
+  if(action==='healing_action') return 'Healing used '+(d.successful_uses??d.requested_uses??1)+' item(s)';
+  if(action==='post_kill_pause') return 'Brief pause after kill';
+  if(action==='native_wander_move') return 'Exploring toward '+((d.destination&&d.destination.x)!=null?(d.destination.x+', '+d.destination.y):'new area');
+  if(action==='exploration_visibility_reconsider') return 'Visible area checked · choosing a new exploration direction';
+  if(action==='roam_micro_pause') return 'Brief exploration pause';
+  if(action==='wander_stall_recovery') return 'Movement stalled · recalculating route';
+  if(action==='target_cooldown') return 'Skipping unreachable target temporarily';
+  if(action==='instant_attack') return 'Attacking '+(d.target_name||'monster');
+  return action ? action.replaceAll('_',' ') : 'Hunting update';
+}
+
+function renderActivityFeed(data){
+  const box=document.getElementById('activityFeed');
+  if(!box) return;
+  const rows=((data&&data.actions)||[]).slice(-8).reverse();
+  if(!rows.length){box.innerHTML='<div class="muted">Waiting for hunting activity…</div>';return}
+  box.innerHTML=rows.map(function(row){
+    const ts=Number(row.time||row.timestamp||0);
+    const time=ts?new Date(ts*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
+    return '<div class="activity-line"><span class="activity-time">'+escapeHtml(time)+'</span><span class="activity-text">'+escapeHtml(humanActivity(row))+'</span></div>';
+  }).join('');
+}
+
 function renderActiveHunt(data){
   const status=document.getElementById('activeHuntStatus');
   const msg=document.getElementById('activeHuntMessage');
   if(status) status.value=(data&&data.state)||(data&&data.status)||'unknown';
   if(msg) msg.value=(data&&data.message)||'';
+  renderActivityFeed(data);
 }
 async function refreshActiveHuntQuiet(){
   try{
