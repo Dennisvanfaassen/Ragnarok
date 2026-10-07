@@ -94,6 +94,23 @@ class HuntSettings(BaseModel):
     failed_los_cooldown_seconds: float = 12.0
     combat_no_progress_timeout: float = 1.6
 
+    # Natural pacing / decision continuity.
+    normal_reaction_delay_min: float = 0.15
+    normal_reaction_delay_max: float = 0.45
+    aggressor_reaction_delay_min: float = 0.06
+    aggressor_reaction_delay_max: float = 0.20
+    post_kill_pause_chance: float = 0.72
+    post_kill_pause_min: float = 0.15
+    post_kill_pause_max: float = 0.50
+    preempt_priority_gap: int = 2
+    monster_memory_min_seconds: float = 1.0
+    monster_memory_max_seconds: float = 3.0
+    roam_pause_interval_min: float = 9.0
+    roam_pause_interval_max: float = 20.0
+    roam_pause_min: float = 0.30
+    roam_pause_max: float = 0.90
+    exploration_reconsider_distance: int = 12
+
     # OpenKore-inspired guard rails. Native actions are still used for
     # execution, but target selection/approach must pass navigation checks.
     attack_check_los: bool = True
