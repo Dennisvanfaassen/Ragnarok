@@ -28,6 +28,19 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .route-editor{margin-top:14px;padding:14px;background:#0c1119;border:1px solid var(--line);border-radius:12px}
 .route-editor .row{align-items:end}.route-help{margin-top:9px;font-size:12px;color:var(--muted)}
 #liveMapCanvas.route-editing{cursor:crosshair;outline:2px solid var(--accent);outline-offset:2px}
+.map-layerbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.map-layer-toggle{display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#0c1119;color:#c9d1df;font-size:12px;cursor:pointer}
+.map-layer-toggle input{width:auto;margin:0;padding:0}
+.heat-legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);flex-wrap:wrap}
+.heat-swatch{width:18px;height:8px;border-radius:999px;display:inline-block}
+.heat-unvisited{background:#39314c}.heat-stale{background:#654d9b}.heat-warm{background:#3f7eb5}.heat-recent{background:#28d7a1}
+.map-detail-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:12px;margin-top:12px}
+.map-inspector,.map-intelligence{background:#0c1119;border:1px solid var(--line);border-radius:12px;padding:13px}
+.map-inspector-title{font-weight:800;margin-bottom:8px}.map-inspector-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;font-size:12px}
+.map-inspector-grid span{color:var(--muted)}.map-inspector-grid strong{text-align:right}
+.map-progress{height:8px;border-radius:999px;background:#090d13;overflow:hidden;margin-top:8px}.map-progress-fill{height:100%;background:var(--accent);width:0%}
+#liveMapCanvas.map-inspecting{cursor:help}
+@media(max-width:900px){.map-detail-grid{grid-template-columns:1fr}}
 .hunt-hero{display:grid;grid-template-columns:2fr 1fr;gap:16px}.monster-list{display:grid;gap:12px}
 .monster-card{border:1px solid var(--line);background:#0c1119;border-radius:14px;padding:14px}
 .monster-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}
@@ -768,6 +781,19 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <span class="legend-item"><span class="legend-dot legend-other"></span>Other</span>
         </div>
       </div>
+      <div class="map-layerbar">
+        <label class="map-layer-toggle"><input id="mapLayerHeat" type="checkbox" checked onchange="drawLiveMap()">Exploration heatmap</label>
+        <label class="map-layer-toggle"><input id="mapLayerTrail" type="checkbox" checked onchange="drawLiveMap()">Recent path</label>
+        <label class="map-layer-toggle"><input id="mapLayerPlan" type="checkbox" checked onchange="drawLiveMap()">Current roam route</label>
+        <label class="map-layer-toggle"><input id="mapLayerKills" type="checkbox" checked onchange="drawLiveMap()">Recent kills</label>
+        <label class="map-layer-toggle"><input id="mapLayerActors" type="checkbox" checked onchange="drawLiveMap()">Live actors</label>
+        <div class="heat-legend">
+          <span class="heat-swatch heat-unvisited"></span>Unvisited
+          <span class="heat-swatch heat-stale"></span>Stale
+          <span class="heat-swatch heat-warm"></span>Visited
+          <span class="heat-swatch heat-recent"></span>Recent
+        </div>
+      </div>
       <div class="map-shell">
         <canvas id="liveMapCanvas" width="1100" height="760"></canvas>
       </div>
@@ -797,9 +823,27 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
       <div class="map-stats">
         <div class="map-stat"><div class="muted">Position</div><div id="mapPlayerPos" class="metric" style="font-size:18px">—</div></div>
+        <div class="map-stat"><div class="muted">Explored this session</div><div id="mapExploredPercent" class="metric" style="font-size:18px">0%</div></div>
         <div class="map-stat"><div class="muted">Monsters known</div><div id="mapMonsterCount" class="metric" style="font-size:18px">0</div></div>
-        <div class="map-stat"><div class="muted">Players known</div><div id="mapPlayerCount" class="metric" style="font-size:18px">0</div></div>
         <div class="map-stat"><div class="muted">Map size</div><div id="mapSize" class="metric" style="font-size:18px">—</div></div>
+      </div>
+      <div class="map-detail-grid">
+        <div class="map-inspector">
+          <div class="map-inspector-title">Exploration inspector</div>
+          <div id="mapInspectorHint" class="muted">Move your mouse over the map to inspect an exploration cell.</div>
+          <div id="mapInspectorGrid" class="map-inspector-grid" style="margin-top:10px"></div>
+        </div>
+        <div class="map-intelligence">
+          <div class="map-inspector-title">Exploration intelligence</div>
+          <div class="map-inspector-grid">
+            <span>Visited cells</span><strong id="mapVisitedCells">0 / 0</strong>
+            <span>Current goal</span><strong id="mapCurrentGoal">—</strong>
+            <span>Hunt state</span><strong id="mapHuntState">—</strong>
+            <span>Recent kills</span><strong id="mapRecentKills">0</strong>
+          </div>
+          <div class="map-progress"><div id="mapProgressFill" class="map-progress-fill"></div></div>
+          <div id="mapHuntMessage" class="muted" style="margin-top:8px">Waiting for exploration data…</div>
+        </div>
       </div>
       <div class="muted" style="margin-top:12px">
         Monster/player markers are limited to actors currently known by your Ragnarok client, normally the loaded area around your character.
@@ -1995,6 +2039,8 @@ async function refreshTownTravelQuiet(){
 let currentView='dashboard';
 let mapGrid={map:null,width:0,height:0,cells:null,baseCanvas:null};
 let mapOverlay=null;
+let mapExploration=null;
+let mapHoverCell=null;
 let huntRoute={map:null,mode:'loop',waypoints:[],exists:false};
 let routeDraft=[];
 let routeEditing=false;
