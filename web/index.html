@@ -167,6 +167,26 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       </div>
     </section>
 
+    <section class="card full">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+        <div>
+          <h2 style="font-size:16px;margin-bottom:5px">Quick hunt profile</h2>
+          <div class="muted">Switch your complete hunt setup without opening the configuration pages.</div>
+        </div>
+        <button class="action secondary" onclick="switchView('hunting')">Manage profiles</button>
+      </div>
+      <div class="row" style="margin-top:12px;align-items:end">
+        <label style="margin:0">Hunt profile
+          <select id="dashboardHuntProfile"></select>
+        </label>
+        <div class="actions">
+          <button class="action secondary" onclick="loadDashboardHuntProfile(false)">Load</button>
+          <button class="action" onclick="loadDashboardHuntProfile(true)">Load & Start</button>
+        </div>
+      </div>
+      <div id="dashboardHuntProfileMeta" class="muted" style="margin-top:9px">No saved hunt profile selected.</div>
+    </section>
+
     <section class="card wide">
       <h2>Live character</h2>
       <div class="summary-grid">
@@ -1324,9 +1344,50 @@ function huntProfileSummary(row){
   };
 }
 
+function renderDashboardHuntProfileSelect(){
+  const select=document.getElementById('dashboardHuntProfile');
+  const meta=document.getElementById('dashboardHuntProfileMeta');
+  if(!select) return;
+  const rows=(huntProfilesData&&huntProfilesData.profiles)||[];
+  if(!rows.length){
+    select.innerHTML='<option value="">No saved hunt profiles yet</option>';
+    select.disabled=true;
+    if(meta) meta.textContent='Create your first profile under Hunting & Loot.';
+    return;
+  }
+  select.disabled=false;
+  const active=huntProfilesData.active_id||'';
+  const groups={};
+  rows.forEach(r=>(groups[r.map||'Other']||(groups[r.map||'Other']=[])).push(r));
+  select.innerHTML=Object.keys(groups).sort().map(function(map){
+    return '<optgroup label="'+escapeHtml(map)+'">'+groups[map].map(function(row){
+      return '<option value="'+escapeHtml(row.id)+'" '+(row.id===active?'selected':'')+'>'+escapeHtml(row.name||'Unnamed hunt')+'</option>';
+    }).join('')+'</optgroup>';
+  }).join('');
+  if(!select.value && rows[0]) select.value=rows[0].id;
+  updateDashboardHuntProfileMeta();
+}
+
+function updateDashboardHuntProfileMeta(){
+  const select=document.getElementById('dashboardHuntProfile');
+  const meta=document.getElementById('dashboardHuntProfileMeta');
+  if(!select||!meta) return;
+  const row=((huntProfilesData&&huntProfilesData.profiles)||[]).find(r=>r.id===select.value);
+  if(!row){meta.textContent='No saved hunt profile selected.';return}
+  const s=huntProfileSummary(row);
+  meta.textContent=(row.map||'Unknown map')+' · '+(s.monsters.length?s.monsters.join(', '):'no attack monsters')+' · '+s.navigation;
+}
+
+async function loadDashboardHuntProfile(startAfter){
+  const id=document.getElementById('dashboardHuntProfile')?.value;
+  if(!id){out('Choose a saved hunt profile first.');return}
+  await activateHuntProfile(id,!!startAfter);
+}
+
 function renderHuntProfiles(){
   const box=document.getElementById('huntProfileGroups');
   const status=document.getElementById('huntProfileStatus');
+  renderDashboardHuntProfileSelect();
   if(!box) return;
   const rows=(huntProfilesData&&huntProfilesData.profiles)||[];
   if(status){
@@ -2997,6 +3058,8 @@ async function startBot(){await fetch('/api/bot/start',{method:'POST'});refresh(
 async function stopBot(){await fetch('/api/bot/stop',{method:'POST'});refresh()}
 const mapCanvas=document.getElementById('liveMapCanvas');
 if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
+const dashboardHuntProfile=document.getElementById('dashboardHuntProfile');
+if(dashboardHuntProfile) dashboardHuntProfile.addEventListener('change',updateDashboardHuntProfileMeta);
 loadRoutableMaps();loadProfile();refreshHuntProfiles();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
 </script>
 </body>
