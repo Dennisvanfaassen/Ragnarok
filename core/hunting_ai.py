@@ -9,6 +9,7 @@ from typing import Any
 from core.game_actions import game_actions
 from core.exploration import exploration_planner
 from core.hunt_routes import hunt_route_store
+from core.monster_density import monster_density_tracker
 from core.openkore_data import item_name
 from core.pathing import astar, build_pathing_state, clear_walk_line, nav_repository
 from core.state import app_state
@@ -3827,6 +3828,7 @@ class HuntingAI:
 
         while not self._stop.is_set() and run_id == self._run_id:
             snapshot = authenticated_client_monitor.snapshot()
+            monster_density_tracker.observe_snapshot(snapshot)
             self._observe_monster_memory(snapshot)
 
             if not snapshot.get("classic_pid"):
