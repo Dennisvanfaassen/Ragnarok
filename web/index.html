@@ -2903,7 +2903,9 @@ function drawLiveMap(){
   }
 
   const exploration=(mapExploration&&mapExploration.exploration)||{};
-  if(document.getElementById('mapLayerHeat')?.checked){
+  const heatMode=document.getElementById('mapHeatMode')?.value||'density';
+
+  if(heatMode==='exploration'){
     for(const cell of (exploration.cells||[])){
       const r=mapCellRect(cell);
       ctx.fillStyle=heatColor(cell);
@@ -2913,6 +2915,28 @@ function drawLiveMap(){
         ctx.lineWidth=1.5*dpr;
         ctx.strokeRect(r.x+.5*dpr,r.y+.5*dpr,Math.max(1,r.w-dpr),Math.max(1,r.h-dpr));
       }
+    }
+  }else if(heatMode==='density'){
+    ctx.save();
+    ctx.globalCompositeOperation='screen';
+    for(const cell of ((mapDensity&&mapDensity.cells)||[])){
+      const center=point(cell.x+cell.width/2,cell.y+cell.height/2);
+      const intensity=Math.max(.05,Math.min(1,Number(cell.intensity)||0));
+      const radius=Math.max(10*dpr,cell.width*scale*(2.4+intensity*1.7));
+      const gradient=ctx.createRadialGradient(center.x,center.y,0,center.x,center.y,radius);
+      gradient.addColorStop(0,densityColor(intensity,0.24+intensity*0.42));
+      gradient.addColorStop(0.38,densityColor(intensity,0.15+intensity*0.24));
+      gradient.addColorStop(1,densityColor(intensity,0));
+      ctx.fillStyle=gradient;
+      ctx.fillRect(center.x-radius,center.y-radius,radius*2,radius*2);
+    }
+    ctx.restore();
+
+    if(mapHoverCell){
+      const r=mapCellRect(mapHoverCell);
+      ctx.strokeStyle='#ffffff';
+      ctx.lineWidth=1.5*dpr;
+      ctx.strokeRect(r.x+.5*dpr,r.y+.5*dpr,Math.max(1,r.w-dpr),Math.max(1,r.h-dpr));
     }
   }
 
@@ -2959,20 +2983,6 @@ function drawLiveMap(){
       ctx.fill();
       ctx.lineWidth=2*dpr;
       ctx.strokeStyle='#ffd166';
-      ctx.stroke();
-    }
-  }
-
-  if(document.getElementById('mapLayerKills')?.checked){
-    for(const kill of ((mapExploration&&mapExploration.recent_kills)||[])){
-      if(kill.x==null||kill.y==null) continue;
-      const p=point(kill.x,kill.y);
-      ctx.strokeStyle='rgba(255,112,137,.9)';
-      ctx.lineWidth=2*dpr;
-      const s=5*dpr;
-      ctx.beginPath();
-      ctx.moveTo(p.x-s,p.y-s);ctx.lineTo(p.x+s,p.y+s);
-      ctx.moveTo(p.x+s,p.y-s);ctx.lineTo(p.x-s,p.y+s);
       ctx.stroke();
     }
   }
@@ -3027,8 +3037,24 @@ function drawLiveMap(){
   if(document.getElementById('mapLayerActors')?.checked){
     for(const actor of (mapOverlay.other||[])) dot(actor,3,'#a1a8b5');
     for(const actor of (mapOverlay.players||[])) dot(actor,4,'#32df8f');
+    const showNames=!!document.getElementById('mapMonsterLabels')?.checked;
     for(const actor of (mapOverlay.monsters||[])){
       dot(actor,actor.aggressive_to_me?5:4,'#ff4f64',actor.aggressive_to_me?'#ffd166':null);
+      if(showNames && actor.name){
+        const p=point(actor.x,actor.y);
+        ctx.font=(10*dpr)+'px Segoe UI';
+        ctx.textAlign='center';
+        ctx.textBaseline='bottom';
+        const label=String(actor.name);
+        const metrics=ctx.measureText(label);
+        const padX=4*dpr,padY=2*dpr;
+        const bx=p.x-metrics.width/2-padX;
+        const by=p.y-9*dpr-10*dpr-padY;
+        ctx.fillStyle='rgba(5,7,11,.82)';
+        ctx.fillRect(bx,by,metrics.width+padX*2,12*dpr+padY*2);
+        ctx.fillStyle='#ffffff';
+        ctx.fillText(label,p.x,p.y-10*dpr);
+      }
     }
   }
 
@@ -3068,19 +3094,26 @@ function drawLiveMap(){
   document.getElementById('mapCurrentGoal').textContent=nav.wander_goal
     ? nav.wander_goal.x+', '+nav.wander_goal.y : '—';
   document.getElementById('mapHuntState').textContent=(mapExploration&&mapExploration.hunt_state)||'—';
-  document.getElementById('mapRecentKills').textContent=((mapExploration&&mapExploration.recent_kills)||[]).length;
+  const densitySummary=(mapDensity&&mapDensity.summary)||{};
+  const densitySamples=document.getElementById('mapDensitySamples');
+  if(densitySamples) densitySamples.textContent=String(densitySummary.samples||0);
   document.getElementById('mapHuntMessage').textContent=(mapExploration&&mapExploration.hunt_message)||'Waiting for exploration data…';
 }
 
 async function refreshMapLive(forceGrid=false){
   try{
-    const [overlayRes,exploreRes]=await Promise.all([
+    const period=document.getElementById('mapDensityPeriod')?.value||'session';
+    const monster=document.getElementById('mapDensityMonster')?.value||'all';
+    const [overlayRes,exploreRes,densityRes]=await Promise.all([
       fetch('/api/map/live'),
-      fetch('/api/map/exploration')
+      fetch('/api/map/exploration'),
+      fetch('/api/map/monster-density?period='+encodeURIComponent(period)+'&monster='+encodeURIComponent(monster))
     ]);
     const overlay=await overlayRes.json();
     mapOverlay=overlay;
     mapExploration=await exploreRes.json();
+    mapDensity=await densityRes.json();
+    updateDensityMonsterOptions();
 
     if(overlay.map && (forceGrid || mapGrid.map!==overlay.map || !mapGrid.cells)){
       await loadCurrentMapGrid(true);
