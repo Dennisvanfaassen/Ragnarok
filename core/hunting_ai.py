@@ -3667,6 +3667,26 @@ class HuntingAI:
                     },
                     "exploration": exploration_planner.snapshot(),
                 },
+                "map_debug": {
+                    "navigation": {
+                        "wander_goal": (
+                            {"x": self.wander_goal[0], "y": self.wander_goal[1]}
+                            if self.wander_goal else None
+                        ),
+                        "wander_progress_index": self.wander_progress_index,
+                        "astar_path": [{"x": x, "y": y} for x, y in self.wander_path],
+                        "straight_segments": [{"x": x, "y": y} for x, y in self.wander_line_points],
+                    },
+                    "recent_kills": [
+                        {
+                            "time": row.get("time"),
+                            "x": row.get("pos")[0] if row.get("pos") else None,
+                            "y": row.get("pos")[1] if row.get("pos") else None,
+                            "monster": row.get("monster"),
+                        }
+                        for row in self.recent_kills[-10:]
+                    ],
+                },
                 "calibration": game_actions.calibration_snapshot(),
                 "actions": self.actions[-30:],
                 "architecture": (
