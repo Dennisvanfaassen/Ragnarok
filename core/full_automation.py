@@ -6,6 +6,8 @@ from typing import Any
 
 from core.active_control import active_hunt_controller
 from core.game_actions import game_actions
+from core.hunt_profiles import hunt_profile_store
+from core.models import BotProfile
 from core.openkore_data import item_id_for_name
 from core.pathing import astar, nav_repository
 from core.state import app_state
@@ -1096,6 +1098,44 @@ class FullAutomationController:
 
             profile = app_state.get_profile()
             hunt_map = str(profile.hunt.map or "").strip()
+
+            # Recovery for an accidentally blank active profile: town controls
+            # used to save the entire dashboard form and could overwrite hunt
+            # fields. If a saved Hunt Profile is still marked active, restore
+            # that exact profile rather than guessing a map.
+            if not hunt_map:
+                saved_profiles = hunt_profile_store.list()
+                active_id = saved_profiles.get("active_id")
+                active_row = (
+                    hunt_profile_store.get(str(active_id))
+                    if active_id
+                    else None
+                )
+                saved_payload = (
+                    (active_row or {}).get("profile")
+                    if active_row
+                    else None
+                )
+                if saved_payload:
+                    try:
+                        recovered = BotProfile.model_validate(saved_payload)
+                        recovered_map = str(recovered.hunt.map or "").strip()
+                        if recovered_map:
+                            app_state.set_profile(recovered)
+                            profile = recovered
+                            hunt_map = recovered_map
+                            self._log(
+                                "hunt_profile_recovered",
+                                profile_id=active_id,
+                                map=recovered_map,
+                            )
+                    except Exception as exc:
+                        self._log(
+                            "hunt_profile_recovery_failed",
+                            profile_id=active_id,
+                            error=str(exc),
+                        )
+
             enabled_monsters = [
                 rule.monster
                 for rule in profile.hunt.monster_rules
