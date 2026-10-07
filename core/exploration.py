@@ -27,6 +27,13 @@ class ExplorationPlanner:
         self.turn_penalty = 2.6
         self.reverse_penalty = 8.0
         self.path_coverage_weight = 1.8
+        # Free-roaming should feel like a player sweeping useful open ground,
+        # not like a wall-following robot. These are deliberately soft goal
+        # preferences only: A* paths are never rejected for passing through
+        # bridges, corridors, gates, or other narrow terrain.
+        self.open_space_weight = 2.2
+        self.wall_hug_penalty = 2.0
+        self.dead_end_penalty = 2.6
         self.frontier_bias_enabled = True
 
         self._map: str | None = None
@@ -106,8 +113,79 @@ class ExplorationPlanner:
                 penalty += (20 - d) / 20.0 * 4.0
         return penalty
 
+    def _local_openness(
+        self,
+        grid: NavGrid,
+        point: tuple[int, int],
+        *,
+        radius: int = 5,
+    ) -> float:
+        """Return how much usable space surrounds a roaming destination."""
+        x, y = point
+        walkable = 0
+        total = 0
+        for ox in range(-radius, radius + 1):
+            for oy in range(-radius, radius + 1):
+                if ox == 0 and oy == 0:
+                    continue
+                # Circular-ish sample so map corners do not dominate the score.
+                if (ox * ox + oy * oy) > radius * radius:
+                    continue
+                total += 1
+                if grid.walkable(x + ox, y + oy):
+                    walkable += 1
+        return walkable / max(1, total)
+
+    def _wall_proximity(
+        self,
+        grid: NavGrid,
+        point: tuple[int, int],
+        *,
+        max_radius: int = 6,
+    ) -> float:
+        """0=open, 1=immediately next to blocked/out-of-bounds terrain."""
+        x, y = point
+        for radius in range(1, max_radius + 1):
+            for ox in range(-radius, radius + 1):
+                for oy in range(-radius, radius + 1):
+                    if max(abs(ox), abs(oy)) != radius:
+                        continue
+                    if not grid.walkable(x + ox, y + oy):
+                        return (max_radius - radius + 1) / max_radius
+        return 0.0
+
+    def _escape_directions(
+        self,
+        grid: NavGrid,
+        point: tuple[int, int],
+        *,
+        distance: int = 5,
+    ) -> int:
+        """Approximate whether a goal sits in open terrain or a dead-end pocket.
+
+        This does not inspect or penalize the route used to reach the goal.
+        Narrow bridges/corridors therefore remain fully usable when they are
+        needed to reach another worthwhile area.
+        """
+        x, y = point
+        directions = (
+            (1, 0), (-1, 0), (0, 1), (0, -1),
+            (1, 1), (1, -1), (-1, 1), (-1, -1),
+        )
+        open_dirs = 0
+        for dx, dy in directions:
+            clear = 0
+            for step in range(1, distance + 1):
+                if not grid.walkable(x + dx * step, y + dy * step):
+                    break
+                clear += 1
+            if clear >= max(2, distance - 1):
+                open_dirs += 1
+        return open_dirs
+
     def _score(
         self,
+        grid: NavGrid,
         start: tuple[int, int],
         goal: tuple[int, int],
         path: list[tuple[int, int]],
@@ -133,6 +211,13 @@ class ExplorationPlanner:
             / max(1, len(sampled_path))
         )
         route_efficiency = distance / max(1.0, len(path) - 1)
+
+        # Only the *destination* gets an open-space preference. The route itself
+        # may freely hug walls or cross narrow terrain when topology requires it.
+        openness = self._local_openness(grid, goal)
+        wall_proximity = self._wall_proximity(grid, goal)
+        escape_directions = self._escape_directions(grid, goal)
+        dead_end = max(0.0, (3 - escape_directions) / 3.0)
 
         reverse = 0.0
         if self.frontier_bias_enabled and self._heading is not None:
@@ -160,7 +245,10 @@ class ExplorationPlanner:
             - recent_path_penalty * 5.0
             - self._goal_recent_penalty(goal)
             + route_efficiency * self.distance_weight
-            + random.uniform(-0.08, 0.08)
+            + openness * self.open_space_weight
+            - wall_proximity * self.wall_hug_penalty
+            - dead_end * self.dead_end_penalty
+            + random.uniform(-0.16, 0.16)
         )
 
     def choose_route(
@@ -237,14 +325,27 @@ class ExplorationPlanner:
                 if not path or len(path) < 8:
                     continue
 
-                score = self._score(start, walkable_goal, path)
+                score = self._score(grid, start, walkable_goal, path)
                 candidates.append((score, path))
 
         if not candidates:
             return None
 
         candidates.sort(key=lambda entry: entry[0], reverse=True)
-        best = candidates[0][1]
+
+        # Avoid a mechanically identical "perfect" destination every time.
+        # Choose among near-equal top routes, while never allowing a clearly
+        # worse edge/dead-end candidate to win through randomness alone.
+        best_score = candidates[0][0]
+        near_best = [
+            entry for entry in candidates[:5]
+            if entry[0] >= best_score - 0.9
+        ]
+        if len(near_best) == 1:
+            best = near_best[0][1]
+        else:
+            weights = [1.0 / (1.0 + rank * 0.75) for rank in range(len(near_best))]
+            best = random.choices(near_best, weights=weights, k=1)[0][1]
         goal = best[-1]
 
         # Slowly steer the persistent heading toward the chosen sweep direction.
@@ -275,6 +376,12 @@ class ExplorationPlanner:
             "visited_cells": len(self._visits),
             "recent_position_count": len(self._recent_positions),
             "frontier_bias_enabled": self.frontier_bias_enabled,
+            "open_space_bias": {
+                "weight": self.open_space_weight,
+                "wall_hug_penalty": self.wall_hug_penalty,
+                "dead_end_penalty": self.dead_end_penalty,
+                "goal_only": True,
+            },
             "recent_goals": [
                 {"x": x, "y": y} for x, y in list(self._recent_goals)
             ],
