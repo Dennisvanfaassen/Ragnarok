@@ -101,6 +101,7 @@ class HuntingAI:
         self._opening_skill_used_target_id = None
         self._last_heal_hotkey_at = 0.0
         self._last_heal_result: dict[str, Any] | None = None
+        self._next_heal_threshold: int | None = None
         self._last_aspd_use_at = 0.0
         self._last_aspd_result: dict[str, Any] | None = None
         self._opening_skill_used_target_id: int | None = None
@@ -3088,6 +3089,7 @@ class HuntingAI:
         profile = app_state.get_profile()
         settings = profile.healing
         if not settings.enabled:
+            self._next_heal_threshold = None
             return False
 
         world = self._world(snapshot)
@@ -3097,7 +3099,15 @@ class HuntingAI:
             return False
 
         hp_percent = float(world.get("hp_percent") or (int(hp) * 100 / int(hp_max)))
-        threshold = max(1, min(99, int(settings.hp_below_percent)))
+        min_threshold = max(1, min(99, int(settings.hp_trigger_min_percent)))
+        max_threshold = max(min_threshold, min(99, int(settings.hp_trigger_max_percent)))
+
+        # Pick one threshold and keep it until it actually triggers. Re-rolling
+        # every AI tick would make healing erratic and less human-looking.
+        if self._next_heal_threshold is None:
+            self._next_heal_threshold = random.randint(min_threshold, max_threshold)
+        threshold = int(self._next_heal_threshold)
+
         if hp_percent >= threshold:
             return False
 
@@ -3106,57 +3116,91 @@ class HuntingAI:
         if now - self._last_heal_hotkey_at < cooldown:
             return False
 
-        result: dict[str, Any]
+        burst_min = max(1, min(10, int(settings.burst_min_items)))
+        burst_max = max(burst_min, min(10, int(settings.burst_max_items)))
+        requested_uses = random.randint(burst_min, burst_max)
+        delay = max(0.0, min(2.0, float(settings.burst_delay_seconds)))
+
         native_only = bool(profile.hunt.native_only_actions)
         wanted_name = str(settings.item or "Meat").strip().casefold()
+        results: list[dict[str, Any]] = []
 
-        if native_only:
-            items = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
-            item = next(
-                (
-                    row for row in items
-                    if str(row.get("name") or "").strip().casefold() == wanted_name
-                    or (wanted_name == "meat" and int(row.get("name_id") or -1) == 517)
-                ),
-                None,
-            )
-            target_id = world.get("self_account_id") or world.get("self_char_id")
-            if item is None:
-                result = {
-                    "ok": False,
-                    "backend": "native",
-                    "reason": "healing_item_not_found",
-                    "item": settings.item or "Meat",
-                }
-            elif target_id is None:
-                result = {
-                    "ok": False,
-                    "backend": "native",
-                    "reason": "self_target_id_unknown",
-                }
-            else:
-                result = native_action_bridge.item_use(
-                    int(item["index"]),
-                    int(target_id),
+        for use_index in range(requested_uses):
+            if self._stop.is_set():
+                break
+
+            result: dict[str, Any]
+            if native_only:
+                items = authenticated_client_monitor.item_state_snapshot().get("inventory") or []
+                item = next(
+                    (
+                        row for row in items
+                        if str(row.get("name") or "").strip().casefold() == wanted_name
+                        or (wanted_name == "meat" and int(row.get("name_id") or -1) == 517)
+                    ),
+                    None,
                 )
-                result["backend"] = "native"
-                result["input_mode"] = "inventory_index"
-        else:
-            result = game_actions.press_hotkey(settings.hotkey or "1")
+                target_id = world.get("self_account_id") or world.get("self_char_id")
+                if item is None:
+                    result = {
+                        "ok": False,
+                        "backend": "native",
+                        "reason": "healing_item_not_found",
+                        "item": settings.item or "Meat",
+                    }
+                elif target_id is None:
+                    result = {
+                        "ok": False,
+                        "backend": "native",
+                        "reason": "self_target_id_unknown",
+                    }
+                else:
+                    result = native_action_bridge.item_use(
+                        int(item["index"]),
+                        int(target_id),
+                    )
+                    result["backend"] = "native"
+                    result["input_mode"] = "inventory_index"
+            else:
+                result = game_actions.press_hotkey(settings.hotkey or "1")
 
-        self._last_heal_hotkey_at = now
-        self._last_heal_result = dict(result)
+            results.append(dict(result))
+            if not result.get("ok"):
+                break
+
+            # Only multi-use bursts pause between items. Exactly 0.2s by
+            # default, matching a quick but believable manual double/triple use.
+            if use_index < requested_uses - 1 and delay > 0:
+                self._stop.wait(delay)
+
+        self._last_heal_hotkey_at = time.time()
+        successful_uses = sum(1 for row in results if row.get("ok"))
+        self._last_heal_result = {
+            "ok": successful_uses > 0,
+            "requested_uses": requested_uses,
+            "successful_uses": successful_uses,
+            "delay_seconds": delay,
+            "results": results,
+        }
         self._log(
             "healing_action",
             hp=int(hp),
             hp_max=int(hp_max),
             hp_percent=round(hp_percent, 1),
             threshold=threshold,
+            trigger_range=[min_threshold, max_threshold],
+            requested_uses=requested_uses,
+            successful_uses=successful_uses,
+            burst_delay_seconds=delay,
             item=settings.item or "Meat",
             hotkey=settings.hotkey or "1",
-            result=result,
+            result=self._last_heal_result,
         )
-        return bool(result.get("ok"))
+
+        # A completed healing decision gets a fresh threshold next time.
+        # Keeping this reset event-based prevents a predictable fixed cutoff.
+        self._next_heal_threshold = random.randint(min_threshold, max_threshold)
+        return successful_uses > 0
 
     def _maybe_use_aspd_potion(self, snapshot: dict[str, Any]) -> bool:
         profile = app_state.get_profile()
@@ -3570,6 +3614,12 @@ class HuntingAI:
                         "enabled": app_state.get_profile().healing.enabled,
                         "hotkey": app_state.get_profile().healing.hotkey,
                         "hp_below_percent": app_state.get_profile().healing.hp_below_percent,
+                        "trigger_min_percent": app_state.get_profile().healing.hp_trigger_min_percent,
+                        "trigger_max_percent": app_state.get_profile().healing.hp_trigger_max_percent,
+                        "next_trigger_percent": self._next_heal_threshold,
+                        "burst_min_items": app_state.get_profile().healing.burst_min_items,
+                        "burst_max_items": app_state.get_profile().healing.burst_max_items,
+                        "burst_delay_seconds": app_state.get_profile().healing.burst_delay_seconds,
                         "last_result": self._last_heal_result,
                     },
                     "aspd": {
