@@ -589,6 +589,7 @@ async def live_map_exploration():
         "exploration": exploration,
         "navigation": debug.get("navigation") or {},
         "recent_kills": debug.get("recent_kills") or [],
+        "position_guard": hunt.get("position_guard") or {},
         "hunt_state": hunt.get("state"),
         "hunt_message": hunt.get("message"),
         "target": hunt.get("target"),
