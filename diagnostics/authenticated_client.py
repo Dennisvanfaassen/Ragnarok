@@ -12,6 +12,7 @@ from typing import Any
 import psutil
 
 from core.openkore_data import item_name
+from core.skill_catalog import skill_name
 from scapy.all import AsyncSniffer, IP, TCP, Raw
 
 
@@ -32,10 +33,17 @@ FIXED_PACKET_LENGTHS = {
     0x009E: 17,  # legacy floor item appeared
     0x00A1: 6,   # floor item disappeared
     0x00B0: 8,   # stat_info
+    0x010E: 11,  # legacy skill_update
+    0x0111: 39,  # legacy skill_add
+    0x0196: 9,   # actor_status_active
+    0x043F: 25,  # modern actor_status_active
+    0x0B31: 17,  # modern skill_add
+    0x0B33: 17,  # modern skill_update
     0x0AC7: 156, # modern map_changed (kRO 2021 family)
     0x0ADD: 24,  # modern floor item appeared
 }
 VARIABLE_PACKET_OPCODES = {0x09FD, 0x09FE, 0x09FF}
+SKILL_LIST_OPCODES = {0x010F: 37, 0x0B32: 15}
 
 # OpenKore-compatible inventory/storage packet families. Different Ragexe
 # generations use different list opcodes, so we trace them first and only
@@ -242,6 +250,10 @@ class AuthenticatedClientMonitor:
         self._aggressors: dict[int, float] = {}
         self._inventory: dict[int, dict[str, Any]] = {}
         self._storage: dict[int, dict[str, Any]] = {}
+        self._skills: dict[int, dict[str, Any]] = {}
+        self._skills_updated_at: float | None = None
+        self._active_statuses: dict[int, dict[str, Any]] = {}
+        self._status_packets_seen = 0
         self._item_list_updated_at: dict[str, float | None] = {
             "inventory": None,
             "storage": None,
@@ -263,6 +275,9 @@ class AuthenticatedClientMonitor:
             "client_action": 0,
             "item_seen": 0,
             "item_removed": 0,
+            "skills_list": 0,
+            "skill_update": 0,
+            "status_active": 0,
         }
 
     def _set_status(self, status: str, message: str):
@@ -510,6 +525,92 @@ class AuthenticatedClientMonitor:
                     actor.pop("move_duration", None)
 
             self._parsed_counts["movement_interrupted"] += 1
+            return
+
+        if opcode in {0x010E, 0x0B33}:
+            if opcode == 0x010E and len(data) >= 11:
+                skill_id = int.from_bytes(data[2:4], "little")
+                level = int.from_bytes(data[4:6], "little")
+                sp = int.from_bytes(data[6:8], "little")
+                skill_range = int.from_bytes(data[8:10], "little")
+                upgradable = int(data[10])
+                self._set_skill(
+                    skill_id, level, sp=sp, skill_range=skill_range,
+                    upgradable=upgradable,
+                )
+            elif opcode == 0x0B33 and len(data) >= 17:
+                skill_id = int.from_bytes(data[2:4], "little")
+                target_type = int.from_bytes(data[4:8], "little")
+                level = int.from_bytes(data[8:10], "little")
+                sp = int.from_bytes(data[10:12], "little")
+                skill_range = int.from_bytes(data[12:14], "little")
+                upgradable = int(data[14])
+                level2 = int.from_bytes(data[15:17], "little")
+                self._set_skill(
+                    skill_id, level, sp=sp, skill_range=skill_range,
+                    target_type=target_type, upgradable=upgradable, level2=level2,
+                )
+            self._parsed_counts["skill_update"] += 1
+            return
+
+        if opcode in {0x0111, 0x0B31}:
+            if opcode == 0x0111 and len(data) >= 39:
+                skill_id = int.from_bytes(data[2:4], "little")
+                target_type = int.from_bytes(data[4:8], "little")
+                level = int.from_bytes(data[8:10], "little")
+                sp = int.from_bytes(data[10:12], "little")
+                skill_range = int.from_bytes(data[12:14], "little")
+                handle = _clean_text(data[14:38])
+                upgradable = int(data[38])
+                self._set_skill(
+                    skill_id, level, sp=sp, skill_range=skill_range,
+                    target_type=target_type, upgradable=upgradable, handle=handle,
+                )
+            elif opcode == 0x0B31 and len(data) >= 17:
+                skill_id = int.from_bytes(data[2:4], "little")
+                target_type = int.from_bytes(data[4:8], "little")
+                level = int.from_bytes(data[8:10], "little")
+                sp = int.from_bytes(data[10:12], "little")
+                skill_range = int.from_bytes(data[12:14], "little")
+                upgradable = int(data[14])
+                level2 = int.from_bytes(data[15:17], "little")
+                self._set_skill(
+                    skill_id, level, sp=sp, skill_range=skill_range,
+                    target_type=target_type, upgradable=upgradable, level2=level2,
+                )
+            self._parsed_counts["skill_update"] += 1
+            return
+
+        if opcode in {0x0196, 0x043F}:
+            if opcode == 0x0196 and len(data) >= 9:
+                status_type = int.from_bytes(data[2:4], "little")
+                actor_id = int.from_bytes(data[4:8], "little")
+                flag = int(data[8])
+                tick = None
+            else:
+                status_type = int.from_bytes(data[2:4], "little")
+                actor_id = int.from_bytes(data[4:8], "little")
+                flag = int(data[8])
+                tick = int.from_bytes(data[9:13], "little") if len(data) >= 13 else None
+
+            self_ids = {
+                int(v) for v in (
+                    self._world.get("self_account_id"),
+                    self._world.get("self_char_id"),
+                ) if v is not None
+            }
+            if actor_id in self_ids:
+                self._status_packets_seen += 1
+                if flag:
+                    self._active_statuses[status_type] = {
+                        "type": status_type,
+                        "active": True,
+                        "tick": tick,
+                        "updated_at": time.time(),
+                    }
+                else:
+                    self._active_statuses.pop(status_type, None)
+                self._parsed_counts["status_active"] += 1
             return
 
         if opcode == 0x00B0 and len(data) >= 8:
@@ -917,6 +1018,136 @@ class AuthenticatedClientMonitor:
                 "packet_hex_prefix": packet[:96].hex(" "),
             })
 
+    def _set_skill(
+        self,
+        skill_id: int,
+        level: int,
+        *,
+        sp: int | None = None,
+        skill_range: int | None = None,
+        target_type: int | None = None,
+        upgradable: int | None = None,
+        level2: int | None = None,
+        handle: str | None = None,
+    ) -> None:
+        if skill_id <= 0:
+            return
+        row = dict(self._skills.get(int(skill_id), {}))
+        row.update({
+            "id": int(skill_id),
+            "name": skill_name(int(skill_id)),
+            "level": int(level),
+        })
+        if sp is not None:
+            row["sp"] = int(sp)
+        if skill_range is not None:
+            row["range"] = int(skill_range)
+        if target_type is not None:
+            row["target_type"] = int(target_type)
+        if upgradable is not None:
+            row["upgradable"] = bool(upgradable)
+        if level2 is not None:
+            row["level2"] = int(level2)
+        if handle:
+            row["handle"] = handle
+        row["updated_at"] = time.time()
+        self._skills[int(skill_id)] = row
+        self._skills_updated_at = time.time()
+
+    def _parse_skill_list_packets(self, payload: bytes) -> None:
+        size = len(payload)
+        i = 0
+        while i + 4 <= size:
+            opcode = int.from_bytes(payload[i:i + 2], "little")
+            record_len = SKILL_LIST_OPCODES.get(opcode)
+            if record_len is None:
+                i += 1
+                continue
+            declared = int.from_bytes(payload[i + 2:i + 4], "little")
+            if (
+                declared < 4
+                or declared > 8192
+                or i + declared > size
+                or (declared - 4) % record_len != 0
+            ):
+                i += 1
+                continue
+
+            packet = payload[i:i + declared]
+            parsed: dict[int, dict[str, Any]] = {}
+            for off in range(4, declared, record_len):
+                rec = packet[off:off + record_len]
+                if opcode == 0x0B32:
+                    # OpenKore 0B32: v V v3 C v
+                    skill_id = int.from_bytes(rec[0:2], "little")
+                    target_type = int.from_bytes(rec[2:6], "little")
+                    level = int.from_bytes(rec[6:8], "little")
+                    sp = int.from_bytes(rec[8:10], "little")
+                    skill_range = int.from_bytes(rec[10:12], "little")
+                    upgradable = int(rec[12])
+                    level2 = int.from_bytes(rec[13:15], "little")
+                    handle = None
+                else:
+                    # OpenKore 010F: v V v3 Z24 C
+                    skill_id = int.from_bytes(rec[0:2], "little")
+                    target_type = int.from_bytes(rec[2:6], "little")
+                    level = int.from_bytes(rec[6:8], "little")
+                    sp = int.from_bytes(rec[8:10], "little")
+                    skill_range = int.from_bytes(rec[10:12], "little")
+                    handle = _clean_text(rec[12:36])
+                    upgradable = int(rec[36])
+                    level2 = None
+
+                if skill_id <= 0 or level < 0 or level > 200:
+                    continue
+                parsed[skill_id] = {
+                    "id": skill_id,
+                    "name": skill_name(skill_id),
+                    "level": level,
+                    "sp": sp,
+                    "range": skill_range,
+                    "target_type": target_type,
+                    "upgradable": bool(upgradable),
+                    "updated_at": time.time(),
+                }
+                if level2 is not None:
+                    parsed[skill_id]["level2"] = level2
+                if handle:
+                    parsed[skill_id]["handle"] = handle
+
+            if parsed:
+                self._skills = parsed
+                self._skills_updated_at = time.time()
+                self._parsed_counts["skills_list"] += 1
+            i += declared
+
+    def character_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            world = dict(self._world)
+            skills = [dict(row) for _, row in sorted(self._skills.items())]
+            statuses = [dict(row) for _, row in sorted(self._active_statuses.items())]
+            updated_at = self._skills_updated_at
+            status_packets_seen = self._status_packets_seen
+        return {
+            "base_level": world.get("base_level"),
+            "skill_points": world.get("skill_points"),
+            "hp": world.get("hp"),
+            "hp_max": world.get("hp_max"),
+            "sp": world.get("sp"),
+            "sp_max": world.get("sp_max"),
+            "skills": skills,
+            "skill_count": len(skills),
+            "skills_updated_at": updated_at,
+            "active_statuses": statuses,
+            "status_packets_seen": status_packets_seen,
+        }
+
+    def status_active(self, status_type: int) -> bool | None:
+        with self._lock:
+            if self._status_packets_seen <= 0:
+                return None
+            return int(status_type) in self._active_statuses
+
     def _parse_payload(self, payload: bytes):
         """Extract Live Game State packets from a TCP payload.
 
@@ -925,6 +1156,8 @@ class AuthenticatedClientMonitor:
         validate their lengths before decoding them. This is deliberately
         read-only and does not modify the client stream.
         """
+        self._parse_skill_list_packets(payload)
+
         i = 0
         size = len(payload)
 
