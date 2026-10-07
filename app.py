@@ -224,6 +224,11 @@ async def live_items():
     return authenticated_client_monitor.item_state_snapshot()
 
 
+@app.get("/api/character")
+async def live_character():
+    return authenticated_client_monitor.character_snapshot()
+
+
 @app.post("/api/native-action/start")
 async def start_native_action_bridge():
     try:
