@@ -480,11 +480,37 @@ class AuthenticatedClientMonitor:
             movement = _coords6(data[6:12])
             if movement:
                 start, destination = movement
+                current_x = self._world.get("x")
+                current_y = self._world.get("y")
+                start_jump = (
+                    max(abs(start[0] - int(current_x)), abs(start[1] - int(current_y)))
+                    if current_x is not None and current_y is not None
+                    else 0
+                )
+
+                # A normal self-movement packet starts close to the character's
+                # current position. If a malformed/misaligned packet decodes to
+                # something hundreds of cells away (observed as 214,79 -> 2,935),
+                # do not create a fake interpolated trajectory from it.
+                if start_jump > 32:
+                    self._parsed_counts["character_move_rejected"] += 1
+                    self._self_move = None
+                    return
+
                 tiles = max(
                     abs(destination[0] - start[0]),
                     abs(destination[1] - start[1]),
                     1,
                 )
+
+                # Also reject impossible single movement spans. Legitimate
+                # teleports/map changes are delivered through different state
+                # updates and must not be represented as a walking interpolation.
+                if tiles > 96:
+                    self._parsed_counts["character_move_rejected"] += 1
+                    self._self_move = None
+                    return
+
                 self._self_move = {
                     "from_x": start[0],
                     "from_y": start[1],
