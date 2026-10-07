@@ -717,10 +717,14 @@ class HuntingAI:
 
         candidate_priority, _distance, candidate = candidates[0]
         current_priority = self._monster_priority(self.target_name)
+        required_gap = max(1, int(profile.hunt.preempt_priority_gap))
 
-        # Lower number means higher priority. Equal-priority monsters never
-        # cause a pre-attack switch; distance only decides the initial choice.
+        # Preserve visual target continuity while approaching. Only a
+        # meaningfully higher-priority aggressor may steal the lock before
+        # combat begins; equal/nearby priorities wait their turn.
         if candidate_priority >= current_priority:
+            return False
+        if (current_priority - candidate_priority) < required_gap:
             return False
 
         old_id = self.target_id
@@ -746,7 +750,10 @@ class HuntingAI:
     def _acquire_target(self, snapshot: dict[str, Any]) -> bool:
         profile = app_state.get_profile()
         player = self._position(snapshot)
-        candidates = self._eligible_target_candidates(snapshot)
+        candidates = [
+            row for row in self._eligible_target_candidates(snapshot)
+            if self._reaction_ready(row[2])
+        ]
 
         if not candidates:
             return False
