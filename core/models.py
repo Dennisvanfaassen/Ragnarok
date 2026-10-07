@@ -99,9 +99,9 @@ class HuntSettings(BaseModel):
     normal_reaction_delay_max: float = 0.45
     aggressor_reaction_delay_min: float = 0.06
     aggressor_reaction_delay_max: float = 0.20
-    post_kill_pause_chance: float = 0.72
-    post_kill_pause_min: float = 0.15
-    post_kill_pause_max: float = 0.50
+    post_kill_pause_chance: float = 0.50
+    post_kill_pause_min: float = 0.08
+    post_kill_pause_max: float = 0.25
     preempt_priority_gap: int = 2
     monster_memory_min_seconds: float = 1.0
     monster_memory_max_seconds: float = 3.0
