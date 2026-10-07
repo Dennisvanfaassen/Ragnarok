@@ -252,6 +252,10 @@ class AuthenticatedClientMonitor:
         self._storage: dict[int, dict[str, Any]] = {}
         self._skills: dict[int, dict[str, Any]] = {}
         self._skills_updated_at: float | None = None
+        # Skill lists are variable-length packets and may be split across TCP
+        # segments. Keep only an incomplete skill-list packet (or up to the
+        # final 3 bytes that could begin its header) until the next payload.
+        self._skill_list_pending = b""
         self._active_statuses: dict[int, dict[str, Any]] = {}
         self._status_packets_seen = 0
         self._item_list_updated_at: dict[str, float | None] = {
@@ -1055,25 +1059,44 @@ class AuthenticatedClientMonitor:
         self._skills_updated_at = time.time()
 
     def _parse_skill_list_packets(self, payload: bytes) -> None:
-        size = len(payload)
+        """Parse complete skill lists, preserving packets split by TCP.
+
+        Scapy exposes TCP payloads per captured segment, while Ragnarok's
+        variable-length 010F/0B32 packet can span more than one segment. The
+        previous parser dropped such packets when the declared packet length
+        exceeded the current payload length. Preserve the incomplete packet
+        and prepend it to the next server payload instead.
+        """
+        pending = self._skill_list_pending
+        data = pending + payload if pending else payload
+        self._skill_list_pending = b""
+
+        size = len(data)
         i = 0
         while i + 4 <= size:
-            opcode = int.from_bytes(payload[i:i + 2], "little")
+            opcode = int.from_bytes(data[i:i + 2], "little")
             record_len = SKILL_LIST_OPCODES.get(opcode)
             if record_len is None:
                 i += 1
                 continue
-            declared = int.from_bytes(payload[i + 2:i + 4], "little")
+
+            declared = int.from_bytes(data[i + 2:i + 4], "little")
             if (
                 declared < 4
                 or declared > 8192
-                or i + declared > size
                 or (declared - 4) % record_len != 0
             ):
                 i += 1
                 continue
 
-            packet = payload[i:i + declared]
+            # Valid skill-list header, but the body continues in a later TCP
+            # segment. Keep it intact instead of scanning the partial body as
+            # unrelated packet data.
+            if i + declared > size:
+                self._skill_list_pending = data[i:]
+                return
+
+            packet = data[i:i + declared]
             parsed: dict[int, dict[str, Any]] = {}
             for off in range(4, declared, record_len):
                 rec = packet[off:off + record_len]
@@ -1121,6 +1144,12 @@ class AuthenticatedClientMonitor:
                 self._parsed_counts["skills_list"] += 1
             i += declared
 
+        # A skill-list opcode or its two-byte length field can itself straddle
+        # a TCP boundary. Retain only enough trailing bytes to reconstruct that
+        # header on the next call. Do not retain arbitrary payload history.
+        if size:
+            self._skill_list_pending = data[max(0, size - 3):]
+
     def character_snapshot(self) -> dict[str, Any]:
         with self._lock:
             world = dict(self._world)
@@ -1142,6 +1171,7 @@ class AuthenticatedClientMonitor:
             "skills": skills,
             "skill_count": len(skills),
             "skills_updated_at": updated_at,
+            "skills_packet_pending_bytes": len(self._skill_list_pending),
             "active_statuses": statuses,
             "status_packets_seen": status_packets_seen,
         }
