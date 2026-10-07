@@ -2604,6 +2604,14 @@ class HuntingAI:
         # Start the next exploration leg from the character's actual position.
         self._reset_wander_navigation(release_move=True)
 
+        hunt = app_state.get_profile().hunt
+        if random.random() < max(0.0, min(1.0, float(hunt.post_kill_pause_chance))):
+            low = max(0.0, float(hunt.post_kill_pause_min))
+            high = max(low, float(hunt.post_kill_pause_max))
+            pause = random.uniform(low, high)
+            self._log("post_kill_pause", seconds=round(pause, 3))
+            self._stop.wait(pause)
+
         snapshot = authenticated_client_monitor.snapshot()
 
         # Strict kill -> loot -> rescan -> next target lifecycle. Do not chain
@@ -2612,7 +2620,7 @@ class HuntingAI:
             hunt = app_state.get_profile().hunt
             low = max(0.0, float(hunt.loot_drop_delay_min))
             high = max(low, float(hunt.loot_drop_delay_max))
-            self._loot_not_before = time.time() + ((low + high) / 2.0)
+            self._loot_not_before = time.time() + random.uniform(low, high)
             self._set_state(
                 "LOOTING",
                 f"{old_name or 'Monster'} dead; waiting for drops before next target",
@@ -2962,6 +2970,51 @@ class HuntingAI:
         exploration_planner.observe(str(map_name), player)
 
         now = time.time()
+        hunt = app_state.get_profile().hunt
+        saved_route = hunt_route_store.get(str(map_name)).get("exists")
+
+        # Rare short pauses break up endless perfectly continuous roaming.
+        # In native mode, sending the current tile acts as a gentle stop request.
+        if not saved_route and now >= self._next_roam_pause_at:
+            low = max(0.1, float(hunt.roam_pause_min))
+            high = max(low, float(hunt.roam_pause_max))
+            pause = random.uniform(low, high)
+            if game_actions.native_move_ready():
+                game_actions.move_to(player)
+                self._native_wander_destination = player
+                self._native_wander_sent_at = now
+            else:
+                game_actions.release_hold_move()
+            self._log("roam_micro_pause", seconds=round(pause, 3))
+            self._schedule_next_roam_pause()
+            self._stop.wait(pause)
+            return
+
+        # Once the destination area is already within normal screen-awareness
+        # range and still contains no eligible target, don't march to an exact
+        # arbitrary endpoint. Reconsider from the newly revealed area instead.
+        if (
+            not saved_route
+            and self.wander_goal is not None
+            and self.wander_path
+            and self._tile_distance(player, self.wander_goal)
+                <= int(self._wander_visibility_stop_distance)
+            and now - self._last_roam_reconsider_at >= 1.5
+        ):
+            self._last_roam_reconsider_at = now
+            old_goal = self.wander_goal
+            self._log(
+                "exploration_visibility_reconsider",
+                player={"x": player[0], "y": player[1]},
+                previous_goal={"x": old_goal[0], "y": old_goal[1]},
+                reveal_distance=self._wander_visibility_stop_distance,
+            )
+            self._reset_wander_navigation(release_move=False)
+            if not self._choose_wander_path(snapshot):
+                self._set_state("SEARCHING", "Visible area checked; rescanning")
+                self._stop.wait(0.08)
+                return
+
         if self._wander_last_position != player:
             self._wander_last_position = player
             self._wander_last_progress_at = now
@@ -3698,6 +3751,12 @@ class HuntingAI:
             self.saved_route_direction = 1
             self._wander_last_position = None
             self._wander_last_progress_at = time.time()
+            self._monster_memory.clear()
+            self._reaction_ready_at.clear()
+            self._attack_commit_range = self.attack_range
+            self._roam_pause_until = 0.0
+            self._last_roam_reconsider_at = 0.0
+            self._schedule_next_roam_pause()
             self._target_failure_count.clear()
             self._target_cooldown_until.clear()
             self._target_locked_at.clear()
