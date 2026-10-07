@@ -16,6 +16,7 @@ from core.hotkey import hunting_hotkey
 from core.world_route import world_route_planner
 from core.town_travel import town_travel_controller
 from core.map_dashboard import map_grid_payload, map_live_overlay
+from core.monster_density import monster_density_tracker
 from core.exploration import exploration_planner
 from core.hunt_routes import hunt_route_store
 from core.hunt_profiles import hunt_profile_store
@@ -656,6 +657,17 @@ async def live_map_grid():
 @app.get("/api/map/live")
 async def live_map_overlay():
     return map_live_overlay()
+
+
+@app.get("/api/map/monster-density")
+async def live_map_monster_density(period: str = "session", monster: str = "all"):
+    snapshot = authenticated_client_monitor.snapshot()
+    world = (snapshot.get("live_state") or {}).get("world") or {}
+    return monster_density_tracker.snapshot(
+        world.get("map"),
+        period=str(period or "session"),
+        monster=str(monster or "all"),
+    )
 
 
 @app.get("/api/map/exploration")
