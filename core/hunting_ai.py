@@ -83,6 +83,8 @@ class HuntingAI:
         self.wander_reconnect_route_index: int | None = None
         self._native_wander_destination: tuple[int, int] | None = None
         self._native_wander_sent_at = 0.0
+        self._last_combat_move_destination: tuple[int, int] | None = None
+        self._last_combat_move_sent_at = 0.0
         self.saved_route_map: str | None = None
         self.saved_route_waypoint_index = 0
         self.saved_route_direction = 1
@@ -411,6 +413,8 @@ class HuntingAI:
         self.attack_retry = 0
         self._target_failure_count.setdefault(int(self.target_id), 0)
         self._target_locked_at[int(self.target_id)] = time.time()
+        self._last_combat_move_destination = None
+        self._last_combat_move_sent_at = 0.0
         self._attack_commit_range = random.randint(
             max(1, int(self.attack_range) - 1),
             max(1, int(self.attack_range)),
@@ -2151,6 +2155,19 @@ class HuntingAI:
                 return
 
         self.route_target_pos = approach_target
+
+        # Avoid issuing the exact same approach destination multiple times in a
+        # few hundred milliseconds. The recording showed duplicate commands as
+        # close as ~80-160 ms, which adds jitter without improving pursuit.
+        now = time.time()
+        if (
+            self._last_combat_move_destination == segment
+            and now - self._last_combat_move_sent_at < 0.45
+        ):
+            self._stop.wait(0.06)
+            self._set_state("ROUTING", f"Continuing approach to {self.target_name}")
+            return
+
         self._set_state(
             "APPROACHING",
             f"Approaching {self.target_name} via {segment[0]},{segment[1]}",
@@ -2161,6 +2178,9 @@ class HuntingAI:
             segment,
             allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
         )
+        if result.get("ok"):
+            self._last_combat_move_destination = segment
+            self._last_combat_move_sent_at = now
         self._log(
             "move",
             target_id=self.target_id,
@@ -3139,7 +3159,7 @@ class HuntingAI:
             self._wander_last_progress_at = now
         elif (
             self.wander_path
-            and now - self._wander_last_progress_at >= 2.5
+            and now - self._wander_last_progress_at >= 1.7
         ):
             # A stale path after combat/loot can leave Ragnarok visually idle.
             # Throw that path away and immediately search for a fresh route.
@@ -3392,7 +3412,7 @@ class HuntingAI:
             now = time.time()
             resend_due = (
                 self._native_wander_destination != destination
-                or now - self._native_wander_sent_at >= 1.0
+                or now - self._native_wander_sent_at >= 1.15
             )
             if resend_due:
                 result = game_actions.move_to(destination)
