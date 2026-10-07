@@ -191,8 +191,11 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <label>Healing enabled
             <select id="healEnabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select>
           </label>
-          <label>Use below HP %
-            <input id="healPercent" type="number" min="1" max="99" value="50">
+          <label>Random trigger range
+            <div class="row" style="margin-top:6px">
+              <input id="healMinPercent" type="number" min="1" max="99" value="30" aria-label="Minimum healing HP percent">
+              <input id="healMaxPercent" type="number" min="1" max="99" value="60" aria-label="Maximum healing HP percent">
+            </div>
           </label>
         </div>
         <div class="row">
@@ -203,10 +206,21 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             <input id="healHotkey" value="1">
           </label>
         </div>
+        <div class="row">
+          <label>Items per healing burst
+            <div class="row" style="margin-top:6px">
+              <input id="healBurstMin" type="number" min="1" max="10" value="1" aria-label="Minimum healing items per burst">
+              <input id="healBurstMax" type="number" min="1" max="10" value="3" aria-label="Maximum healing items per burst">
+            </div>
+          </label>
+          <label>Delay between burst items (seconds)
+            <input id="healBurstDelay" type="number" min="0" max="2" step="0.05" value="0.2">
+          </label>
+        </div>
         <label>Restock target
           <input id="healRestockTarget" type="number" min="0" value="50">
         </label>
-        <div class="section-note">Example: Meat at 50% means the bot uses Meat whenever HP drops below 50%, respecting the healing cooldown.</div>
+        <div class="section-note">Humanized healing picks one trigger between 30–60% HP for each healing event, then uses 1–3 items. Multi-item bursts wait 0.2 seconds between uses.</div>
       </section>
 
       <section class="card">
@@ -1217,7 +1231,12 @@ async function saveProfile(silent=false){
     healing:{
       enabled:document.getElementById('healEnabled').value==='true',
       item:document.getElementById('healItem').value.trim(),
-      hp_below_percent:+document.getElementById('healPercent').value,
+      hp_below_percent:+document.getElementById('healMaxPercent').value,
+      hp_trigger_min_percent:+document.getElementById('healMinPercent').value,
+      hp_trigger_max_percent:+document.getElementById('healMaxPercent').value,
+      burst_min_items:+document.getElementById('healBurstMin').value,
+      burst_max_items:+document.getElementById('healBurstMax').value,
+      burst_delay_seconds:+document.getElementById('healBurstDelay').value,
       hotkey:document.getElementById('healHotkey').value.trim()||'1',
       cooldown_seconds:0.9
     },
@@ -1287,7 +1306,7 @@ function renderDashboardProfileSummary(p){
   setText('summaryHuntMap',hunt.map||'Not configured');
   const enabled=((hunt.monster_rules)||[]).filter(r=>r.enabled!==false).length || ((hunt.monsters)||[]).length;
   setText('summaryMonsterCount',String(enabled));
-  setText('summaryHealing',healing.enabled===false?'Disabled':((healing.item||'Meat')+' < '+(healing.hp_below_percent??50)+'% HP'));
+  setText('summaryHealing',healing.enabled===false?'Disabled':((healing.item||'Meat')+' · '+(healing.hp_trigger_min_percent??30)+'–'+(healing.hp_trigger_max_percent??60)+'% · '+(healing.burst_min_items??1)+'–'+(healing.burst_max_items??3)+' items'));
   setText('summaryAspd',aspd.enabled?((aspd.item||'Awakening Potion')+' · effect-aware reactivation'):'Disabled');
   setText(
     'summaryTownReturn',
@@ -1390,7 +1409,11 @@ async function loadProfile(){
     document.getElementById('storageMap').value=(p.town&&p.town.storage_map)||'';
     document.getElementById('healEnabled').value=(p.healing&&p.healing.enabled===false)?'false':'true';
     document.getElementById('healItem').value=(p.healing&&p.healing.item)||'';
-    document.getElementById('healPercent').value=(p.healing&&p.healing.hp_below_percent)||50;
+    document.getElementById('healMinPercent').value=(p.healing&&p.healing.hp_trigger_min_percent)??30;
+    document.getElementById('healMaxPercent').value=(p.healing&&p.healing.hp_trigger_max_percent)??60;
+    document.getElementById('healBurstMin').value=(p.healing&&p.healing.burst_min_items)??1;
+    document.getElementById('healBurstMax').value=(p.healing&&p.healing.burst_max_items)??3;
+    document.getElementById('healBurstDelay').value=(p.healing&&p.healing.burst_delay_seconds)??0.2;
     document.getElementById('healHotkey').value=(p.healing&&p.healing.hotkey)||'1';
     const aspd=p.aspd||{};
     document.getElementById('aspdEnabled').value=aspd.enabled===true?'true':'false';
