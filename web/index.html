@@ -111,7 +111,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     <div id="navCharacter" onclick="switchView('character')">Character</div>
     <div id="navHunting" onclick="switchView('hunting')">Hunting & Loot</div>
     <div id="navSupplies" onclick="switchView('supplies')">Healing & Supplies</div>
-    <div id="navStorage" onclick="switchView('storage')">Manual Town</div>
+    <div id="navStorage" onclick="switchView('storage')">Town & Storage</div>
     <div id="navMap" onclick="switchView('map')">Map & Route</div>
     <div class="nav-group-label">System</div>
     <div id="navAdvanced" onclick="switchView('advanced')">Advanced & Diagnostics</div>
@@ -129,7 +129,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </div>
     <div class="bot-control-actions">
       <button class="action secondary" onclick="saveProfile()">Save settings</button>
-      <button id="townCycleToggleButton" class="action secondary" disabled>Town automation: OFF · manual</button>
+      <button id="townCycleToggleButton" class="action secondary" onclick="toggleAutoTownCycle()">Town cycle: MANUAL</button>
       <button id="globalStartButton" class="action" onclick="startFullAutomation()">Start bot</button>
       <button id="globalStopButton" class="action danger" onclick="stopFullAutomation()">Stop</button>
     </div>
@@ -219,7 +219,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <label>Saved town<input id="fullAutomationTown" value="—" disabled></label>
       <label>Live weight<input id="fullAutomationWeight" value="—" disabled></label>
       <div class="actions">
-        <button class="action secondary" disabled>Town automation disabled</button>
+        <button class="action secondary" onclick="forceTownCycle()">Run town cycle now</button>
       </div>
     </section>
 
@@ -789,10 +789,10 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <section class="card full">
         <div class="hunt-hero">
           <div>
-            <h2 style="font-size:20px;margin-bottom:7px">Manual Town</h2>
-            <div class="muted">Storage, selling and buying are intentionally manual. RO Control handles travel, hunting and looting only.</div>
+            <h2 style="font-size:20px;margin-bottom:7px">Town & Storage</h2>
+            <div class="muted">Choose Automatic for hands-free return, storage, selling, restocking and return-to-hunt. Choose Manual when you only want the cycle to run when you press the button.</div>
           </div>
-          <div class="section-note">Automatic town inventory actions are disabled to avoid SoulBound storage disconnects.</div>
+          <div class="section-note">Both modes use the same live-resolved storage transfer system, including the OpenKore-style inventory re-check and storage acknowledgement handling.</div>
         </div>
       </section>
 
@@ -800,9 +800,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <h2>1. Town cycle trigger</h2>
         <div class="row">
           <label>Automatic town cycle
-            <select id="autoTownCycle">
-              <option value="false" selected>Disabled — manual town only</option>
-              <option value="true">Disabled by application</option>
+            <select id="autoTownCycle" onchange="renderAutoTownCycleToggle(this.value==='true')">
+              <option value="false" selected>Manual — only when I run it</option>
+              <option value="true">Automatic — return when triggers are reached</option>
             </select>
           </label>
           <label>Return to town at weight %
@@ -882,9 +882,10 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <h2>4. Town cycle controls</h2>
         <div class="actions">
           <button class="action" onclick="saveProfile()">Save Selling & Storage settings</button>
-          <button class="action secondary" disabled>Town automation disabled</button>
+          <button class="action secondary" onclick="forceTownCycle()">Run town cycle now</button>
+          <button class="action secondary" onclick="toggleAutoTownCycle()">Switch Automatic / Manual</button>
         </div>
-        <div class="section-note" style="margin-top:12px">Use this page only as an inventory reference. Store, sell and buy manually in the Ragnarok client.</div>
+        <div id="townCycleModeHelp" class="section-note" style="margin-top:12px">Manual mode: the bot will never return to town automatically. Use “Run town cycle now” whenever you want storage, selling and restocking to run.</div>
       </section>
     </div>
   </div>
@@ -2305,11 +2306,17 @@ async function refreshActiveHuntQuiet(){
 function renderAutoTownCycleToggle(enabled){
   const button=document.getElementById('townCycleToggleButton');
   const select=document.getElementById('autoTownCycle');
-  if(select) select.value='false';
+  const help=document.getElementById('townCycleModeHelp');
+  if(select) select.value=enabled?'true':'false';
   if(button){
-    button.textContent='Town automation: OFF · manual';
-    button.classList.remove('danger');
-    button.disabled=true;
+    button.textContent=enabled?'Town cycle: AUTOMATIC':'Town cycle: MANUAL';
+    button.classList.toggle('danger',!!enabled);
+    button.disabled=false;
+  }
+  if(help){
+    help.textContent=enabled
+      ? 'Automatic mode: RO Control watches weight and configured supply triggers, runs storage/selling/restocking, then returns to the hunt.'
+      : 'Manual mode: the bot will never return to town automatically. Use “Run town cycle now” whenever you want storage, selling and restocking to run.';
   }
 }
 async function toggleAutoTownCycle(){
@@ -2341,10 +2348,16 @@ async function startFullAutomation(){
   out(data);
 }
 async function forceTownCycle(){
-  const r=await fetch('/api/full-automation/force-town-cycle',{method:'POST'});
-  const data=await r.json();
-  renderFullAutomation(data);
-  out(data);
+  try{
+    await saveProfile(true);
+    const r=await fetch('/api/full-automation/force-town-cycle',{method:'POST'});
+    const data=await r.json();
+    if(!r.ok) throw new Error((data&&data.detail)||'Could not start town cycle');
+    renderFullAutomation(data);
+    out(data);
+  }catch(e){
+    out('Could not run town cycle: '+e.message);
+  }
 }
 async function stopFullAutomation(){
   const r=await fetch('/api/full-automation/stop',{method:'POST'});
