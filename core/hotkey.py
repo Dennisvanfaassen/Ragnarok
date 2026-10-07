@@ -16,7 +16,7 @@ WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 
-# Windows virtual-key code for ] } on a standard keyboard.
+# Windows virtual-key code for Tab.
 VK_TAB = 0x09
 WM_HOTKEY = 0x0312
 MOD_NOREPEAT = 0x4000
@@ -161,7 +161,7 @@ class HuntingHotkey:
                     self._message = "Global Tab hotkey stopped."
             return
 
-        # Fallback for systems/layouts where VK_OEM_4 cannot be registered.
+        # Fallback for systems where the global Tab hotkey cannot be registered.
         @LowLevelKeyboardProc
         def callback(n_code, w_param, l_param):
             if n_code >= 0:
@@ -203,7 +203,7 @@ class HuntingHotkey:
             with self._lock:
                 self._status = "error"
                 self._message = (
-                    "Could not register global ]. Run RO Control as administrator."
+                    "Could not register global Tab. Run RO Control as administrator."
                 )
                 self._last_error = self._message
             return
