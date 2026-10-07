@@ -326,6 +326,12 @@ class HuntingDiagnosticRecorder:
             self._stop.clear()
             self.running = True
 
+            bridge_start_error = None
+            try:
+                native_action_bridge.start()
+            except Exception as exc:
+                bridge_start_error = str(exc)
+
             try:
                 from core.mouse_adapter import mouse_game_adapter
                 calibration = mouse_game_adapter.calibration_snapshot()
@@ -338,6 +344,7 @@ class HuntingDiagnosticRecorder:
                 "sample_interval_ms": 100,
                 "classic_geometry": self._classic_geometry(),
                 "calibration": calibration,
+                "native_bridge_start_error": bridge_start_error,
                 "notes": (
                     "Passive game-state diagnostics plus normal Windows input telemetry. "
                     "Includes a rolling trace of recent outbound socket calls (length and first "
