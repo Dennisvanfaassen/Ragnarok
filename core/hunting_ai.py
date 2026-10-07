@@ -2100,19 +2100,17 @@ class HuntingAI:
                 failures=failures,
                 message=pathing.get("message"),
             )
-            if failures >= 2:
-                failed_id = self.target_id
-                failed_name = self.target_name
-                self._cooldown_target(failed_id, "route_failed_repeatedly")
-                self._clear_target()
-                self._set_state(
-                    "SEARCHING",
-                    f"Skipping unreachable {failed_name}; continuing hunt",
-                )
-                return
+            # A failed A* result is already decisive for the current
+            # snapshot. Retrying the exact same target a few hundred ms later
+            # only creates visible state thrashing. Cool it down immediately
+            # and continue with the next valid target.
+            failed_id = self.target_id
+            failed_name = self.target_name
+            self._cooldown_target(failed_id, "route_failed")
+            self._clear_target()
             self._set_state(
-                "FAILED",
-                pathing.get("message") or "Could not route to target",
+                "SEARCHING",
+                f"Skipping unreachable {failed_name}; continuing hunt",
             )
             return
 
@@ -3767,6 +3765,11 @@ class HuntingAI:
             return False
 
         if self.state not in {"SEARCHING", "WANDERING"}:
+            # Combat/loot time must not accumulate as "stationary hunting"
+            # time. Reset the watchdog clock while another state owns control.
+            self._liveness_last_position = player
+            self._liveness_last_progress_at = now
+            self._liveness_recoveries = 0
             return False
 
         timeout = max(
