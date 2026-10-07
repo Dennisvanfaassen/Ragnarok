@@ -67,6 +67,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
   <div class="nav">
     <div id="navDashboard" class="active" onclick="switchView('dashboard')">Dashboard</div>
     <div class="nav-group-label">Bot setup</div>
+    <div id="navCharacter" onclick="switchView('character')">Character</div>
     <div id="navHunting" onclick="switchView('hunting')">Hunting & Loot</div>
     <div id="navSupplies" onclick="switchView('supplies')">Healing & Supplies</div>
     <div id="navStorage" onclick="switchView('storage')">Manual Town</div>
@@ -219,6 +220,8 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <label>Reuse every minutes<input id="aspdReuseMinutes" type="number" min="1" step="0.5" value="30"></label>
         </div>
         <label>Restock target<input id="aspdRestockTarget" type="number" min="0" value="4"></label>
+        <input id="aspdStatusEffectId" type="hidden" value="38">
+        <div class="section-note">Automatic reactivation watches the actual ASPD potion status effect. While the effect is active, another potion is never used. It is reactivated after the effect ends. The duration timer is only a fallback if this client does not expose status telemetry.</div>
       </section>
 
       <section class="card full">
@@ -354,6 +357,63 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
     </div>
   </div>
 
+  <div id="characterView" class="view-hidden">
+    <div class="grid">
+      <section class="card full">
+        <div class="hunt-hero">
+          <div>
+            <h2 style="font-size:20px;margin-bottom:7px">Character</h2>
+            <div class="muted">Live character information learned from the authenticated Ragnarok client.</div>
+          </div>
+          <div class="section-note">Skills are captured from the server's skill-list packets. If this page is empty after restarting RO Control while already logged in, log in once with the monitor running.</div>
+        </div>
+      </section>
+
+      <section class="card full">
+        <h2>Character status</h2>
+        <div class="summary-grid">
+          <div>
+            <div class="summary-row"><span>Base level</span><strong id="characterBaseLevel">—</strong></div>
+            <div class="summary-row"><span>Skill points</span><strong id="characterSkillPoints">—</strong></div>
+          </div>
+          <div>
+            <div class="summary-row"><span>HP</span><strong id="characterHp">—</strong></div>
+            <div class="summary-row"><span>SP</span><strong id="characterSp">—</strong></div>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button class="action secondary" onclick="refreshCharacter()">Refresh character</button>
+        </div>
+      </section>
+
+      <section class="card full">
+        <h2>Learned skills</h2>
+        <div id="characterSkillSummary" class="muted" style="margin-bottom:12px">Waiting for skill list…</div>
+        <div style="overflow:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Skill</th>
+                <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">Level</th>
+                <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">SP</th>
+                <th style="text-align:right;padding:8px;border-bottom:1px solid var(--line)">Range</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--line)">Hunting</th>
+              </tr>
+            </thead>
+            <tbody id="characterSkillRows">
+              <tr><td colspan="5" class="muted" style="padding:10px">No skills captured yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card full">
+        <h2>Active effects</h2>
+        <div id="characterStatusEffects" class="drop-grid"><span class="muted">No status-effect telemetry yet.</span></div>
+      </section>
+    </div>
+  </div>
+
   <div id="huntingView" class="view-hidden">
     <div class="grid">
       <section class="card full">
@@ -402,12 +462,19 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           Add targeted combat skills to use as an opener before normal attacks. Example: Bash when SP is at least 50%.
         </div>
         <div class="row">
-          <label>Skill name<input id="skillName" value="Bash" placeholder="Bash"></label>
-          <label>Skill ID<input id="skillId" type="number" min="1" value="5"></label>
+          <label>Learned skill
+            <select id="skillSelect" onchange="selectHuntSkill(this.value)">
+              <option value="">Load character skills first</option>
+            </select>
+          </label>
+          <label>Use skill level<input id="skillLevel" type="number" min="1" max="10" value="1"></label>
         </div>
+        <input id="skillName" type="hidden" value="">
+        <input id="skillId" type="hidden" value="">
+        <input id="skillRange" type="hidden" value="1">
         <div class="row">
-          <label>Skill level<input id="skillLevel" type="number" min="1" max="10" value="1"></label>
           <label>Minimum SP %<input id="skillMinSp" type="number" min="0" max="100" value="50"></label>
+          <label>Learned level<input id="skillLearnedLevel" value="—" disabled></label>
         </div>
         <div class="row">
           <label>When to use
@@ -422,8 +489,8 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <input id="skillMonsters" placeholder="Obeaune, Cornutus">
         </label>
         <div class="actions">
-          <button class="action secondary" onclick="addAttackSkillRule()">Add skill rule</button>
-          <button class="action secondary" onclick="addBashPreset()">Add Bash preset</button>
+          <button class="action secondary" onclick="addAttackSkillRule()">Add selected skill rule</button>
+          <button class="action secondary" onclick="refreshCharacter()">Refresh learned skills</button>
         </div>
         <div id="attackSkillRuleList" class="drop-grid" style="margin-top:12px"></div>
       </section>
@@ -741,6 +808,8 @@ async function refresh(){
 let huntCatalogData={map:'',monsters:[]};
 let huntMonsterRules={};
 let huntAttackSkills=[];
+let liveCharacterSkills=[];
+let liveCharacterData=null;
 let huntAvoidZones=[];
 let townItemRules=[];
 let townBuyRules=[];
@@ -902,6 +971,105 @@ function renderTownBuyRules(){
   }).join('');
 }
 
+function skillById(id){
+  return liveCharacterSkills.find(s=>+s.id===+id)||null;
+}
+function populateHuntSkillSelect(){
+  const select=document.getElementById('skillSelect');
+  if(!select) return;
+  const current=select.value;
+  const learned=liveCharacterSkills.filter(s=>(+s.level||0)>0);
+  select.innerHTML=learned.length
+    ? '<option value="">Choose a learned skill…</option>'+learned.map(function(s){
+        return '<option value="'+escapeHtml(String(s.id))+'">'+
+          escapeHtml(s.name||('Skill #'+s.id))+' · Lv.'+escapeHtml(String(s.level||0))+
+          '</option>';
+      }).join('')
+    : '<option value="">No learned skills captured</option>';
+  if(current && learned.some(s=>String(s.id)===String(current))) select.value=current;
+}
+function selectHuntSkill(id){
+  const skill=skillById(id);
+  const name=document.getElementById('skillName');
+  const skillId=document.getElementById('skillId');
+  const level=document.getElementById('skillLevel');
+  const learned=document.getElementById('skillLearnedLevel');
+  const range=document.getElementById('skillRange');
+  if(!skill){
+    if(name) name.value='';
+    if(skillId) skillId.value='';
+    if(learned) learned.value='—';
+    return;
+  }
+  if(name) name.value=skill.name||('Skill #'+skill.id);
+  if(skillId) skillId.value=skill.id;
+  if(level){
+    level.max=Math.max(1,+skill.level||1);
+    level.value=Math.max(1,+skill.level||1);
+  }
+  if(learned) learned.value='Lv.'+(+skill.level||0);
+  if(range) range.value=Math.max(1,+skill.range||1);
+}
+function configureSkillFromCharacter(skillId){
+  switchView('hunting');
+  setTimeout(function(){
+    const select=document.getElementById('skillSelect');
+    if(select){
+      select.value=String(skillId);
+      selectHuntSkill(skillId);
+      select.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+  },50);
+}
+function renderCharacter(data){
+  liveCharacterData=data||{};
+  liveCharacterSkills=(data&&data.skills)||[];
+  const setText=function(id,value){const el=document.getElementById(id);if(el)el.textContent=value};
+  setText('characterBaseLevel',data&&data.base_level!=null?data.base_level:'—');
+  setText('characterSkillPoints',data&&data.skill_points!=null?data.skill_points:'—');
+  setText('characterHp',data&&data.hp!=null?data.hp+' / '+(data.hp_max??'—'):'—');
+  setText('characterSp',data&&data.sp!=null?data.sp+' / '+(data.sp_max??'—'):'—');
+
+  const summary=document.getElementById('characterSkillSummary');
+  if(summary){
+    summary.textContent=liveCharacterSkills.length
+      ? liveCharacterSkills.length+' learned skill(s) captured from Classic.exe.'
+      : 'No skill list captured yet. Start monitoring before login, then refresh.';
+  }
+  const rows=document.getElementById('characterSkillRows');
+  if(rows){
+    rows.innerHTML=liveCharacterSkills.length
+      ? liveCharacterSkills.map(function(s){
+          return '<tr>'+
+            '<td style="padding:8px;border-bottom:1px solid var(--line)"><strong>'+escapeHtml(s.name||('Skill #'+s.id))+'</strong><div class="muted">ID '+escapeHtml(String(s.id))+'</div></td>'+
+            '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+escapeHtml(String(s.level??0))+'</td>'+
+            '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+escapeHtml(String(s.sp??'—'))+'</td>'+
+            '<td style="padding:8px;text-align:right;border-bottom:1px solid var(--line)">'+escapeHtml(String(s.range??'—'))+'</td>'+
+            '<td style="padding:8px;border-bottom:1px solid var(--line)"><button class="action secondary" style="padding:5px 9px" onclick="configureSkillFromCharacter('+Number(s.id)+')">Use in hunt</button></td>'+
+          '</tr>';
+        }).join('')
+      : '<tr><td colspan="5" class="muted" style="padding:10px">No skills captured yet.</td></tr>';
+  }
+
+  const statusBox=document.getElementById('characterStatusEffects');
+  const statuses=(data&&data.active_statuses)||[];
+  if(statusBox){
+    statusBox.innerHTML=statuses.length
+      ? statuses.map(s=>'<span class="drop-chip">Effect #'+escapeHtml(String(s.type))+' active</span>').join('')
+      : '<span class="muted">No active effects currently reported.</span>';
+  }
+  populateHuntSkillSelect();
+}
+async function refreshCharacter(){
+  try{
+    const r=await fetch('/api/character');
+    const data=await r.json();
+    renderCharacter(data);
+  }catch(e){
+    out('Could not load character skills: '+e.message);
+  }
+}
+
 function renderAttackSkillRules(){
   const box=document.getElementById('attackSkillRuleList');
   if(!box) return;
@@ -923,9 +1091,11 @@ function renderAttackSkillRules(){
 function addAttackSkillRule(){
   const name=document.getElementById('skillName').value.trim();
   const id=+document.getElementById('skillId').value;
-  const level=Math.max(1,+document.getElementById('skillLevel').value||1);
+  const learned=skillById(id);
+  const learnedLevel=learned?Math.max(1,+learned.level||1):1;
+  const level=Math.max(1,Math.min(learnedLevel,+document.getElementById('skillLevel').value||1));
   const minSp=Math.max(0,Math.min(100,+document.getElementById('skillMinSp').value||0));
-  if(!name||!id){out('Enter a skill name and numeric skill ID.');return}
+  if(!name||!id||!learned){out('Choose one of the skills learned by the current character.');return}
   const monsters=document.getElementById('skillMonsters').value.split(',').map(s=>s.trim()).filter(Boolean);
   huntAttackSkills.push({
     enabled:true,
@@ -935,6 +1105,8 @@ function addAttackSkillRule(){
     min_sp_percent:minSp,
     first_attack_only:document.getElementById('skillFirstAttack').value==='true',
     cooldown_seconds:Math.max(0,+document.getElementById('skillCooldown').value||0),
+    range_tiles:Math.max(1,+document.getElementById('skillRange').value||1),
+    post_skill_delay_seconds:0.35,
     monsters:monsters
   });
   renderAttackSkillRules();
@@ -1050,6 +1222,7 @@ async function saveProfile(silent=false){
       enabled:aspdEnabled,
       item:aspdItem,
       name_id:aspdId,
+      status_effect_id:+document.getElementById('aspdStatusEffectId').value||38,
       reuse_minutes:+document.getElementById('aspdReuseMinutes').value||30,
       restock_target:aspdRestock
     },
@@ -1220,6 +1393,7 @@ async function loadProfile(){
     document.getElementById('aspdEnabled').value=aspd.enabled===true?'true':'false';
     document.getElementById('aspdItem').value=aspd.item||'Awakening Potion';
     document.getElementById('aspdNameId').value=aspd.name_id??656;
+    document.getElementById('aspdStatusEffectId').value=aspd.status_effect_id??38;
     document.getElementById('aspdReuseMinutes').value=aspd.reuse_minutes??30;
     document.getElementById('aspdRestockTarget').value=aspd.restock_target??4;
     const supplies=(p.town&&p.town.supplies)||{};
@@ -1266,6 +1440,7 @@ async function loadProfile(){
     document.getElementById('combatNoProgressTimeout').value=(p.hunt&&p.hunt.combat_no_progress_timeout)??1.6;
     document.getElementById('huntingLivenessTimeout').value=(p.hunt&&p.hunt.hunting_liveness_timeout)??3;
     renderDashboardProfileSummary(p);
+    await refreshCharacter();
     if((p.hunt&&p.hunt.map)) await loadHuntingCatalog();
   }catch(e){}
 }
@@ -1802,6 +1977,7 @@ function switchView(view){
   currentView=view;
   const views={
     dashboard:document.getElementById('dashboardView'),
+    character:document.getElementById('characterView'),
     hunting:document.getElementById('huntingView'),
     supplies:document.getElementById('suppliesView'),
     storage:document.getElementById('storageView'),
@@ -1810,6 +1986,7 @@ function switchView(view){
   };
   const navs={
     dashboard:document.getElementById('navDashboard'),
+    character:document.getElementById('navCharacter'),
     hunting:document.getElementById('navHunting'),
     supplies:document.getElementById('navSupplies'),
     storage:document.getElementById('navStorage'),
@@ -1821,7 +1998,8 @@ function switchView(view){
     if(navs[key]) navs[key].classList.toggle('active',key===view);
   });
   if(view==='map') refreshMapLive(true);
-  if(view==='hunting') loadHuntingCatalog();
+  if(view==='character') refreshCharacter();
+  if(view==='hunting'){ loadHuntingCatalog(); refreshCharacter(); }
   if(view==='storage') refreshTownInventory();
 }
 
