@@ -115,6 +115,13 @@ class HuntingAI:
         self._target_failure_count: dict[int, int] = {}
         self._target_cooldown_until: dict[int, float] = {}
         self._target_locked_at: dict[int, float] = {}
+        self._monster_memory: dict[int, dict[str, Any]] = {}
+        self._reaction_ready_at: dict[int, float] = {}
+        self._attack_commit_range = self.attack_range
+        self._next_roam_pause_at = time.time() + 12.0
+        self._roam_pause_until = 0.0
+        self._last_roam_reconsider_at = 0.0
+        self._wander_visibility_stop_distance = 10
         self._loot_not_before = 0.0
         self._next_loot_at = 0.0
         self._loot_first_attempt_at: dict[int, float] = {}
@@ -495,6 +502,106 @@ class HuntingAI:
             seconds=seconds,
             reason=reason,
         )
+
+    def _observe_monster_memory(self, snapshot: dict[str, Any]) -> None:
+        """Remember recently visible monsters and assign stable reaction delays."""
+        now = time.time()
+        profile = app_state.get_profile().hunt
+        live = snapshot.get("live_state") or {}
+        aggressor_ids = {int(v) for v in (live.get("aggressor_ids") or [])}
+        visible_ids: set[int] = set()
+
+        for actor in live.get("actors") or []:
+            if actor.get("kind") != "monster" or actor.get("id") is None:
+                continue
+            actor_id = int(actor["id"])
+            visible_ids.add(actor_id)
+            x, y = actor.get("x"), actor.get("y")
+            entry = self._monster_memory.get(actor_id)
+            if entry is None:
+                ttl = random.uniform(
+                    max(0.2, float(profile.monster_memory_min_seconds)),
+                    max(float(profile.monster_memory_min_seconds), float(profile.monster_memory_max_seconds)),
+                )
+                entry = {
+                    "first_seen": now,
+                    "ttl": ttl,
+                }
+                self._monster_memory[actor_id] = entry
+                if actor_id in aggressor_ids:
+                    low = max(0.0, float(profile.aggressor_reaction_delay_min))
+                    high = max(low, float(profile.aggressor_reaction_delay_max))
+                else:
+                    low = max(0.0, float(profile.normal_reaction_delay_min))
+                    high = max(low, float(profile.normal_reaction_delay_max))
+                self._reaction_ready_at[actor_id] = now + random.uniform(low, high)
+            elif actor_id in aggressor_ids:
+                low = max(0.0, float(profile.aggressor_reaction_delay_min))
+                high = max(low, float(profile.aggressor_reaction_delay_max))
+                self._reaction_ready_at[actor_id] = min(
+                    float(self._reaction_ready_at.get(actor_id, now)),
+                    now + random.uniform(low, high),
+                )
+
+            entry.update({
+                "last_seen": now,
+                "x": int(x) if x is not None else entry.get("x"),
+                "y": int(y) if y is not None else entry.get("y"),
+                "name": str(actor.get("name") or entry.get("name") or ""),
+                "priority": self._monster_priority(actor.get("name")),
+                "aggressor": actor_id in aggressor_ids,
+            })
+
+        expired = []
+        for actor_id, entry in self._monster_memory.items():
+            last_seen = float(entry.get("last_seen") or entry.get("first_seen") or now)
+            if actor_id not in visible_ids and now - last_seen > float(entry.get("ttl") or 1.0):
+                expired.append(actor_id)
+        for actor_id in expired:
+            self._monster_memory.pop(actor_id, None)
+            self._reaction_ready_at.pop(actor_id, None)
+
+    def _reaction_ready(self, actor: dict[str, Any]) -> bool:
+        actor_id = int(actor.get("id") or -1)
+        return time.time() >= float(self._reaction_ready_at.get(actor_id, 0.0))
+
+    def _remembered_target(self) -> dict[str, Any] | None:
+        if self.target_id is None:
+            return None
+        entry = self._monster_memory.get(int(self.target_id))
+        if not entry or entry.get("x") is None or entry.get("y") is None:
+            return None
+        now = time.time()
+        last_seen = float(entry.get("last_seen") or 0.0)
+        if now - last_seen > float(entry.get("ttl") or 1.0):
+            return None
+        return {
+            "id": int(self.target_id),
+            "name": entry.get("name") or self.target_name,
+            "x": int(entry["x"]),
+            "y": int(entry["y"]),
+            "_remembered": True,
+            "_last_seen": last_seen,
+        }
+
+    def _schedule_next_roam_pause(self) -> None:
+        hunt = app_state.get_profile().hunt
+        low = max(2.0, float(hunt.roam_pause_interval_min))
+        high = max(low, float(hunt.roam_pause_interval_max))
+        self._next_roam_pause_at = time.time() + random.uniform(low, high)
+
+    def _adaptive_move_segment_tiles(
+        self,
+        grid,
+        player: tuple[int, int],
+    ) -> int:
+        openness = exploration_planner._local_openness(grid, player, radius=5)
+        wall = exploration_planner._wall_proximity(grid, player, max_radius=5)
+        if openness >= 0.78 and wall <= 0.25:
+            return min(8, max(self.move_segment_tiles, 7))
+        if openness <= 0.48 or wall >= 0.70:
+            return min(4, max(2, self.move_segment_tiles - 2))
+        return min(6, max(3, self.move_segment_tiles))
 
     def _monster_priority(self, name: str | None) -> int:
         rule = self._monster_rule(name)
