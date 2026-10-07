@@ -3166,7 +3166,22 @@ class HuntingAI:
 
         now = time.time()
         reuse_seconds = max(30.0, float(settings.reuse_minutes) * 60.0)
-        if self._last_aspd_use_at and now - self._last_aspd_use_at < reuse_seconds:
+
+        # Prefer the actual client status-effect state over a blind timer.
+        # Awakening Potion uses EFST_ATTHASTE_POTION2 (38). If the effect is
+        # active, never consume another potion. Once the server reports that
+        # effect gone, the bot may reactivate it immediately.
+        status_effect_id = getattr(settings, "status_effect_id", None)
+        if status_effect_id is not None:
+            active = authenticated_client_monitor.status_active(int(status_effect_id))
+            if active is True:
+                return False
+            if active is None and self._last_aspd_use_at:
+                # If this client build does not expose status packets, keep the
+                # previous duration safeguard rather than consuming repeatedly.
+                if now - self._last_aspd_use_at < reuse_seconds:
+                    return False
+        elif self._last_aspd_use_at and now - self._last_aspd_use_at < reuse_seconds:
             return False
 
         world = self._world(snapshot)
@@ -3212,6 +3227,11 @@ class HuntingAI:
             item=item.get("name") or settings.item,
             name_id=item.get("name_id"),
             reuse_minutes=settings.reuse_minutes,
+            status_effect_id=status_effect_id,
+            status_active=(
+                authenticated_client_monitor.status_active(int(status_effect_id))
+                if status_effect_id is not None else None
+            ),
             result=result,
         )
         if result.get("ok"):
