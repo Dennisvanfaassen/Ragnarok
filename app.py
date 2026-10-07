@@ -18,6 +18,7 @@ from core.town_travel import town_travel_controller
 from core.map_dashboard import map_grid_payload, map_live_overlay
 from core.exploration import exploration_planner
 from core.hunt_routes import hunt_route_store
+from core.hunt_profiles import hunt_profile_store
 from core.game_actions import game_actions
 from core.full_automation import full_automation_controller
 from core.town_services import town_service_registry
@@ -63,6 +64,95 @@ async def get_profile():
 @app.put("/api/profile")
 async def save_profile(profile: BotProfile):
     return app_state.set_profile(profile)
+
+
+@app.get("/api/hunt-profiles")
+async def list_hunt_profiles():
+    return hunt_profile_store.list()
+
+
+@app.post("/api/hunt-profiles")
+async def save_hunt_profile(payload: dict):
+    profile = app_state.get_profile()
+    map_name = str(profile.hunt.map or "").strip()
+    if not map_name:
+        raise HTTPException(400, "Choose a hunting map before saving a hunt profile.")
+    route = hunt_route_store.get(map_name)
+    try:
+        row = hunt_profile_store.save(
+            name=str(payload.get("name") or "").strip(),
+            profile=profile,
+            route=route,
+            profile_id=(
+                str(payload.get("id")).strip()
+                if payload.get("id")
+                else None
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {
+        "saved": True,
+        "active_id": row["id"],
+        "profile": row,
+        "profiles": hunt_profile_store.list()["profiles"],
+    }
+
+
+@app.post("/api/hunt-profiles/{profile_id}/activate")
+async def activate_hunt_profile(profile_id: str):
+    row = hunt_profile_store.get(profile_id)
+    if row is None:
+        raise HTTPException(404, "Hunt profile not found.")
+
+    # A preset switch changes target rules, route, skills and consumables.
+    # Stop automation first so no old in-flight state survives the switch.
+    try:
+        if full_automation_controller.snapshot().get("running"):
+            full_automation_controller.stop()
+        else:
+            active_hunt_controller.stop()
+    except Exception:
+        active_hunt_controller.stop()
+
+    try:
+        profile = BotProfile.model_validate(row.get("profile") or {})
+    except Exception as exc:
+        raise HTTPException(400, f"Saved hunt profile is invalid: {exc}")
+
+    app_state.set_profile(profile)
+
+    map_name = str(profile.hunt.map or "").strip()
+    route = row.get("route") or {}
+    waypoints = route.get("waypoints") or []
+    if map_name:
+        try:
+            if len(waypoints) >= 2:
+                hunt_route_store.save(
+                    map_name,
+                    waypoints,
+                    mode=str(route.get("mode") or "loop"),
+                )
+            else:
+                hunt_route_store.delete(map_name)
+        except Exception as exc:
+            raise HTTPException(
+                400,
+                f"Profile settings loaded, but its saved route is invalid: {exc}",
+            )
+
+    hunt_profile_store.mark_active(profile_id)
+    return {
+        "activated": True,
+        "active_id": profile_id,
+        "profile": app_state.get_profile(),
+        "hunt_profile": row,
+    }
+
+
+@app.delete("/api/hunt-profiles/{profile_id}")
+async def delete_hunt_profile(profile_id: str):
+    return hunt_profile_store.delete(profile_id)
 
 
 @app.get("/api/server/{profile_id}")
