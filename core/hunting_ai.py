@@ -3163,6 +3163,7 @@ class HuntingAI:
         ):
             # A stale path after combat/loot can leave Ragnarok visually idle.
             # Throw that path away and immediately search for a fresh route.
+            self._schedule_next_roam_pause()
             self._log(
                 "wander_stall_recovery",
                 map=str(map_name),
@@ -3776,6 +3777,7 @@ class HuntingAI:
             return False
 
         self._liveness_recoveries += 1
+        self._schedule_next_roam_pause()
         self._log(
             "hunting_liveness_recovery",
             state=self.state,
