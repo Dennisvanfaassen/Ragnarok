@@ -712,10 +712,16 @@ class HuntingAI:
         ):
             return False
 
-        candidates = self._eligible_target_candidates(
-            snapshot,
-            exclude_id=int(self.target_id),
-        )
+        live = snapshot.get("live_state") or {}
+        aggressor_ids = {int(v) for v in (live.get("aggressor_ids") or [])}
+        candidates = [
+            row
+            for row in self._eligible_target_candidates(
+                snapshot,
+                exclude_id=int(self.target_id),
+            )
+            if int(row[2].get("id") or -1) in aggressor_ids
+        ]
         if not candidates:
             return False
 
@@ -1661,9 +1667,9 @@ class HuntingAI:
         distance = self._tile_distance(player, self.target_pos)
         opener_range = self._required_opening_range(fresh)
         required_range = (
-            min(self.attack_range, opener_range)
+            min(self._attack_commit_range, opener_range)
             if opener_range is not None
-            else self.attack_range
+            else self._attack_commit_range
         )
 
         # If an opening skill such as Bash is pending, approach to the skill's
@@ -2254,9 +2260,9 @@ class HuntingAI:
         distance = self._tile_distance(player, self.target_pos)
         opener_range = self._required_opening_range(snapshot)
         required_range = (
-            min(self.attack_range, opener_range)
+            min(self._attack_commit_range, opener_range)
             if opener_range is not None
-            else self.attack_range
+            else self._attack_commit_range
         )
         if hunt.attack_wait_approach_finish and distance > required_range:
             self._set_state(
