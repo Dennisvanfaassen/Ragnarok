@@ -721,6 +721,7 @@ class HuntingAI:
                 exclude_id=int(self.target_id),
             )
             if int(row[2].get("id") or -1) in aggressor_ids
+            and self._reaction_ready(row[2])
         ]
         if not candidates:
             return False
