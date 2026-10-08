@@ -232,6 +232,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <div class="summary-row"><span>Items found</span><strong id="sessionItemsFound">0</strong></div>
           <div class="summary-row"><span>Cards found</span><strong id="sessionCardsFound">0</strong></div>
           <div class="summary-row"><span>Items/potions used</span><strong id="sessionItemsUsed">0</strong></div>
+          <div class="summary-row"><span>Loot value</span><strong id="sessionLootValue">Not configured</strong></div>
           <div class="summary-row"><span>XP/hour</span><strong id="sessionXpHour">Waiting for packet decoder</strong></div>
           <div class="summary-row"><span>Zeny/hour</span><strong id="sessionZenyHour">Waiting for packet decoder</strong></div>
         </div>
@@ -258,7 +259,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         <label>Weight warning %
           <input id="manualAssistWeight" type="number" min="1" max="99" value="70">
         </label>
-        <label>Meat warning below
+        <label>Healing item warning below
           <input id="manualAssistMeat" type="number" min="0" value="20">
         </label>
       </div>
@@ -3380,6 +3381,7 @@ function renderLiveSession(data){
   setText('sessionItemsFound',String(data.items_found_total??0));
   setText('sessionCardsFound',String(data.cards_found_total??0));
   setText('sessionItemsUsed',String(data.items_used_total??0));
+  setText('sessionLootValue',data.loot_value==null?'Not configured':String(data.loot_value));
   setText('sessionXpHour',data.xp_per_hour==null?'Not decoded yet':String(data.xp_per_hour));
   setText('sessionZenyHour',data.zeny_per_hour==null?'Not decoded yet':String(data.zeny_per_hour));
   const loot=document.getElementById('sessionLootSummary');
