@@ -29,6 +29,10 @@ class SessionTracker:
             self.items_used: Counter[str] = Counter()
             self._known_actors: dict[int, dict[str, Any]] = {}
             self._inventory: dict[int, dict[str, Any]] = {}
+            self._inventory_totals: dict[int, int] = {}
+            self._inventory_names: dict[int, str] = {}
+            self._inventory_baseline_ready = False
+            self._last_exp_gain_seq = 0
             self._last_combat_stamp: float | None = None
             self._last_combat_target: int | None = None
             self._last_monster_kill_seq = 0
@@ -113,26 +117,40 @@ class SessionTracker:
                 self.kills += kill_seq - self._last_monster_kill_seq
                 self._last_monster_kill_seq = kill_seq
 
-            gain_seq = int(live.get("inventory_gain_seq") or 0)
-            if gain_seq > self._last_inventory_gain_seq:
-                events = live.get("inventory_gain_events") or []
-                pending = [
-                    row for row in events
-                    if int(row.get("seq") or 0) > self._last_inventory_gain_seq
-                ]
-                pending.sort(key=lambda row: int(row.get("seq") or 0))
-                for gain in pending:
-                    gained = max(0, int(gain.get("amount") or 0))
+            # Derive found-item deltas from the same live inventory snapshot
+            # used by the dashboard supply counters. Aggregate by name_id so
+            # stack merges and inventory-slot changes cannot hide gains.
+            current_totals: dict[int, int] = {}
+            current_names: dict[int, str] = {}
+            for row in inventory.values():
+                try:
+                    name_id = int(row.get("name_id") or 0)
+                except Exception:
+                    name_id = 0
+                if name_id <= 0:
+                    continue
+                current_totals[name_id] = (
+                    int(current_totals.get(name_id) or 0)
+                    + int(row.get("amount") or 0)
+                )
+                current_names[name_id] = str(
+                    row.get("name") or f"Item {name_id}"
+                )
+
+            if self._inventory_baseline_ready:
+                for name_id, current_amount in current_totals.items():
+                    previous_amount = int(self._inventory_totals.get(name_id) or 0)
+                    gained = int(current_amount) - previous_amount
                     if gained <= 0:
                         continue
-                    name = str(
-                        gain.get("name")
-                        or f"Item {gain.get('name_id') or '?'}"
-                    )
+                    name = current_names.get(name_id) or f"Item {name_id}"
                     self.items_found[name] += gained
                     if "card" in name.lower():
                         self.cards_found[name] += gained
-                self._last_inventory_gain_seq = gain_seq
+
+            self._inventory_totals = current_totals
+            self._inventory_names = current_names
+            self._inventory_baseline_ready = True
 
             item_use = world.get("last_client_item_use") or {}
             use_stamp = item_use.get("timestamp")
@@ -148,10 +166,26 @@ class SessionTracker:
                     self.deaths += 1
                 self._last_hp = hp
 
+            exp_gain_seq = int(live.get("exp_gain_seq") or 0)
+            if exp_gain_seq > self._last_exp_gain_seq:
+                events = live.get("exp_gain_events") or []
+                pending_exp = [
+                    row for row in events
+                    if int(row.get("seq") or 0) > self._last_exp_gain_seq
+                ]
+                pending_exp.sort(key=lambda row: int(row.get("seq") or 0))
+                for event in pending_exp:
+                    if int(event.get("type") or 0) != 1:
+                        continue
+                    amount = int(event.get("amount") or 0)
+                    if amount > 0:
+                        self.xp_gained += amount
+                self._last_exp_gain_seq = exp_gain_seq
+
             base_exp = world.get("base_exp")
             base_exp_next = world.get("base_exp_next")
             base_level = world.get("base_level")
-            if base_exp is not None:
+            if base_exp is not None and self._last_exp_gain_seq == 0:
                 current_exp = int(base_exp)
                 current_level = int(base_level) if base_level is not None else self._last_base_level
                 if self._last_base_exp is not None:
