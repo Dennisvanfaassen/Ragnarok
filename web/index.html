@@ -94,6 +94,30 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .position-warning{display:none;margin-top:10px;padding:10px 12px;border:1px solid #7a5e2a;background:#241d0d;border-radius:10px;color:#ffd784;font-size:12px}
 .position-warning.show{display:block}
 .activity-feed{display:grid;gap:7px}.activity-line{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.activity-line:last-child{border-bottom:0}.activity-time{color:#667187}.activity-text{color:#d8deea}
+
+.combat-mode .top,.combat-mode .bot-controlbar{display:none}
+.combat-mode .main{max-width:none;height:100vh;overflow:hidden;padding:14px}
+.combat-dashboard{height:calc(100vh - 28px);display:grid;grid-template-columns:minmax(0,1.8fr) minmax(330px,.9fr);gap:12px}
+.combat-map-panel,.combat-panel{background:linear-gradient(180deg,#141a25,#10151e);border:1px solid var(--line);border-radius:14px}
+.combat-map-panel{display:grid;grid-template-rows:auto minmax(0,1fr);padding:12px;min-width:0;min-height:0}
+.combat-map-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.combat-title{font-size:16px;font-weight:850}.combat-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.combat-map-wrap{min-height:0;overflow:hidden;border-radius:10px;background:#05070b}
+#combatMapCanvas{display:block;width:100%;height:100%;min-height:0;background:#05070b;image-rendering:pixelated}
+.combat-right{min-height:0;display:grid;grid-template-rows:1.25fr .9fr .72fr;gap:12px}
+.combat-panel{padding:12px;min-height:0;overflow:hidden}
+.combat-panel h2{font-size:13px;margin:0 0 9px}
+.combat-session-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.combat-mini{background:#0b1018;border:1px solid var(--line);border-radius:9px;padding:8px;min-width:0}
+.combat-mini span{display:block;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.combat-mini strong{display:block;font-size:15px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.combat-character{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.combat-bar{height:7px;background:#090d13;border-radius:999px;overflow:hidden;margin-top:5px}.combat-bar-fill{height:100%;width:0;background:var(--green)}
+.combat-supplies{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;height:calc(100% - 22px)}
+.combat-supply{display:grid;place-items:center;text-align:center;background:#0b1018;border:1px solid var(--line);border-radius:10px;padding:7px;min-width:0}
+.combat-supply strong{font-size:24px;line-height:1}.combat-supply span{font-size:9px;color:var(--muted);margin-top:5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.combat-status-chip{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:5px 8px;color:var(--muted)}
+@media(max-width:1050px){.combat-dashboard{grid-template-columns:1.45fr .9fr}.combat-session-grid{grid-template-columns:repeat(2,1fr)}.combat-supplies{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){.command-hero{grid-template-columns:1fr}.status-strip,.summary-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.hunt-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
@@ -106,6 +130,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
   <div class="brand">RO <span>Control</span></div>
   <div class="nav">
     <div id="navDashboard" class="active" onclick="switchView('dashboard')">Dashboard</div>
+    <div id="navCombat" onclick="switchView('combat')">Combat Dashboard</div>
     <div id="navSetup" onclick="switchView('setup')">Setup</div>
     <div class="nav-group-label">Bot setup</div>
     <div id="navCharacter" onclick="switchView('character')">Character</div>
@@ -134,6 +159,69 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <button id="globalStopButton" class="action danger" onclick="stopFullAutomation()">Stop</button>
     </div>
   </div>
+  <div id="combatView" class="view-hidden">
+    <div class="combat-dashboard">
+      <section class="combat-map-panel">
+        <div class="combat-map-head">
+          <div>
+            <div class="combat-title">Live Combat Map</div>
+            <div id="combatMapTitle" class="combat-sub">Waiting for map data…</div>
+          </div>
+          <div style="display:flex;gap:7px;align-items:center">
+            <span id="combatHuntState" class="combat-status-chip">Hunt: —</span>
+            <span id="combatPosition" class="combat-status-chip">—, —</span>
+          </div>
+        </div>
+        <div class="combat-map-wrap">
+          <canvas id="combatMapCanvas" width="1000" height="800"></canvas>
+        </div>
+      </section>
+
+      <div class="combat-right">
+        <section class="combat-panel">
+          <h2>Live Session</h2>
+          <div class="combat-session-grid">
+            <div class="combat-mini"><span>Session</span><strong id="combatSessionElapsed">00:00:00</strong></div>
+            <div class="combat-mini"><span>Kills</span><strong id="combatSessionKills">0</strong></div>
+            <div class="combat-mini"><span>Monsters/hour</span><strong id="combatSessionKph">0</strong></div>
+            <div class="combat-mini"><span>Items found</span><strong id="combatSessionItems">0</strong></div>
+            <div class="combat-mini"><span>Cards</span><strong id="combatSessionCards">0</strong></div>
+            <div class="combat-mini"><span>Items used</span><strong id="combatSessionUsed">0</strong></div>
+            <div class="combat-mini"><span>XP/hour</span><strong id="combatSessionXp">—</strong></div>
+            <div class="combat-mini"><span>Zeny/hour</span><strong id="combatSessionZeny">—</strong></div>
+            <div class="combat-mini"><span>Deaths</span><strong id="combatSessionDeaths">0</strong></div>
+          </div>
+        </section>
+
+        <section class="combat-panel">
+          <h2>Live Character</h2>
+          <div class="combat-character">
+            <div class="combat-mini"><span>Base level</span><strong id="combatLevel">—</strong></div>
+            <div class="combat-mini"><span>Weight</span><strong id="combatWeight">—</strong></div>
+            <div class="combat-mini" style="grid-column:1/-1">
+              <span>HP</span><strong id="combatHp">—</strong>
+              <div class="combat-bar"><div id="combatHpBar" class="combat-bar-fill"></div></div>
+            </div>
+            <div class="combat-mini" style="grid-column:1/-1">
+              <span>SP</span><strong id="combatSp">—</strong>
+              <div class="combat-bar"><div id="combatSpBar" class="combat-bar-fill"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="combat-panel">
+          <h2>Supplies</h2>
+          <div class="combat-supplies">
+            <div class="combat-supply"><div><strong id="combatSpeedPotion">0</strong><span id="combatSpeedPotionLabel">Speed potion</span></div></div>
+            <div class="combat-supply"><div><strong id="combatFlyWing">0</strong><span>Fly Wing</span></div></div>
+            <div class="combat-supply"><div><strong id="combatButterflyWing">0</strong><span>Butterfly Wing</span></div></div>
+            <div class="combat-supply"><div><strong id="combatHealingItem">0</strong><span id="combatHealingItemLabel">Healing item</span></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
   <div id="dashboardView" class="grid">
     <section class="full command-hero">
       <div class="hero-panel">
@@ -1305,6 +1393,13 @@ function renderCharacter(data){
   setText('characterSkillPoints',data&&data.skill_points!=null?data.skill_points:'—');
   setText('characterHp',data&&data.hp!=null?data.hp+' / '+(data.hp_max??'—'):'—');
   setText('characterSp',data&&data.sp!=null?data.sp+' / '+(data.sp_max??'—'):'—');
+  setText('combatLevel',data&&data.base_level!=null?String(data.base_level):'—');
+  setText('combatHp',data&&data.hp!=null?data.hp+' / '+(data.hp_max??'—'):'—');
+  setText('combatSp',data&&data.sp!=null?data.sp+' / '+(data.sp_max??'—'):'—');
+  const hpPct=(data&&data.hp!=null&&data.hp_max)?Math.max(0,Math.min(100,data.hp*100/data.hp_max)):0;
+  const spPct=(data&&data.sp!=null&&data.sp_max)?Math.max(0,Math.min(100,data.sp*100/data.sp_max)):0;
+  const hpBar=document.getElementById('combatHpBar'); if(hpBar) hpBar.style.width=hpPct+'%';
+  const spBar=document.getElementById('combatSpBar'); if(spBar) spBar.style.width=spPct+'%';
 
   const summary=document.getElementById('characterSkillSummary');
   if(summary){
@@ -2147,6 +2242,13 @@ function renderLiveState(data){
     : '—';
   const dashWeight=document.getElementById('dashLiveWeight');
   if(dashWeight) dashWeight.textContent=world.weight_percent!=null?world.weight_percent+'%':'—';
+  setText('combatWeight',world.weight_percent!=null?world.weight_percent+'%':'—');
+  setText('combatHp',world.hp!=null?world.hp+' / '+(world.hp_max??'—'):'—');
+  setText('combatSp',world.sp!=null?world.sp+' / '+(world.sp_max??'—'):'—');
+  const combatHpBar=document.getElementById('combatHpBar');
+  if(combatHpBar) combatHpBar.style.width=(world.hp_percent!=null?Math.max(0,Math.min(100,+world.hp_percent)):0)+'%';
+  const combatSpBar=document.getElementById('combatSpBar');
+  if(combatSpBar) combatSpBar.style.width=(world.sp_percent!=null?Math.max(0,Math.min(100,+world.sp_percent)):0)+'%';
   const actorsEl=document.getElementById('liveActors');
   if(actorsEl) actorsEl.value=counts.total??0;
   const dashActors=document.getElementById('dashLiveActors');
@@ -2563,6 +2665,7 @@ function switchView(view){
   currentView=view;
   const views={
     dashboard:document.getElementById('dashboardView'),
+    combat:document.getElementById('combatView'),
     setup:document.getElementById('setupView'),
     character:document.getElementById('characterView'),
     hunting:document.getElementById('huntingView'),
@@ -2573,6 +2676,7 @@ function switchView(view){
   };
   const navs={
     dashboard:document.getElementById('navDashboard'),
+    combat:document.getElementById('navCombat'),
     setup:document.getElementById('navSetup'),
     character:document.getElementById('navCharacter'),
     hunting:document.getElementById('navHunting'),
@@ -2585,7 +2689,15 @@ function switchView(view){
     if(views[key]) views[key].classList.toggle('view-hidden',key!==view);
     if(navs[key]) navs[key].classList.toggle('active',key===view);
   });
+  document.body.classList.toggle('combat-mode',view==='combat');
   if(view==='map') refreshMapLive(true);
+  if(view==='combat'){
+    refreshMapLive(true);
+    refreshLiveSessionQuiet();
+    refreshCombatSupplies();
+    refreshCharacter();
+    setTimeout(mirrorCombatMap,30);
+  }
   if(view==='setup') updateSetupReadiness();
   if(view==='character') refreshCharacter();
   if(view==='hunting'){ loadHuntingCatalog(); refreshCharacter(); refreshHuntProfiles(); }
@@ -2975,9 +3087,12 @@ function drawLiveMap(){
   if(!canvas || !mapGrid.baseCanvas || !mapOverlay) return;
 
   const rect=canvas.getBoundingClientRect();
+  const combatRect=document.getElementById('combatMapCanvas')?.getBoundingClientRect();
+  const renderWidth=rect.width || ((currentView==='combat'&&combatRect)?combatRect.width:400);
+  const renderHeight=rect.height || ((currentView==='combat'&&combatRect)?combatRect.height:300);
   const dpr=Math.max(1,window.devicePixelRatio||1);
-  const wantW=Math.max(400,Math.floor(rect.width*dpr));
-  const wantH=Math.max(300,Math.floor(rect.height*dpr));
+  const wantW=Math.max(400,Math.floor(renderWidth*dpr));
+  const wantH=Math.max(300,Math.floor(renderHeight*dpr));
   if(canvas.width!==wantW || canvas.height!==wantH){
     canvas.width=wantW;canvas.height=wantH;
   }
@@ -3226,6 +3341,27 @@ function drawLiveMap(){
       : '—';
   }
   document.getElementById('mapHuntMessage').textContent=(mapExploration&&mapExploration.hunt_message)||'Waiting for exploration data…';
+  mirrorCombatMap();
+}
+
+function mirrorCombatMap(){
+  const source=document.getElementById('liveMapCanvas');
+  const target=document.getElementById('combatMapCanvas');
+  if(!source||!target||!source.width||!source.height) return;
+  const rect=target.getBoundingClientRect();
+  if(rect.width<=0||rect.height<=0) return;
+  const dpr=Math.max(1,window.devicePixelRatio||1);
+  const wantW=Math.max(400,Math.floor(rect.width*dpr));
+  const wantH=Math.max(300,Math.floor(rect.height*dpr));
+  if(target.width!==wantW||target.height!==wantH){target.width=wantW;target.height=wantH}
+  const ctx=target.getContext('2d');
+  ctx.clearRect(0,0,target.width,target.height);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(source,0,0,target.width,target.height);
+  const trusted=((mapExploration&&mapExploration.position_guard)||{}).trusted || (mapOverlay&&mapOverlay.player);
+  setText('combatMapTitle',(mapOverlay&&mapOverlay.map?mapOverlay.map:'—')+' · '+(((mapOverlay&&mapOverlay.counts)||{}).monsters||0)+' monsters nearby');
+  setText('combatPosition',trusted?(trusted.x+', '+trusted.y):'—, —');
+  setText('combatHuntState','Hunt: '+((mapExploration&&mapExploration.hunt_state)||'OFF'));
 }
 
 async function refreshMapLive(forceGrid=false){
@@ -3249,7 +3385,7 @@ async function refreshMapLive(forceGrid=false){
     }else if(overlay.map && huntRoute.map!==overlay.map){
       await loadHuntRoute(true);
     }
-    if(currentView==='map') drawLiveMap();
+    if(currentView==='map' || currentView==='combat') drawLiveMap();
   }catch(e){}
 }
 
@@ -3368,6 +3504,38 @@ function setText(id,value){
   if(el) el.textContent=value;
 }
 
+function inventoryAmount(rows,name,nameId){
+  const key=String(name||'').trim().toLowerCase();
+  return (rows||[]).reduce(function(total,row){
+    const sameId=nameId!=null && +row.name_id===+nameId;
+    const sameName=key && String(row.name||'').trim().toLowerCase()===key;
+    return total+((sameId||sameName)?(+row.amount||0):0);
+  },0);
+}
+
+async function refreshCombatSupplies(){
+  try{
+    const [itemsRes,profileRes]=await Promise.all([fetch('/api/items/live'),fetch('/api/profile')]);
+    if(!itemsRes.ok||!profileRes.ok) return;
+    const items=await itemsRes.json();
+    const profile=await profileRes.json();
+    const rows=items.inventory||[];
+    const aspd=profile.aspd||{};
+    const healing=profile.healing||{};
+    const town=profile.town||{};
+    const speedName=aspd.item||'Awakening Potion';
+    const speedId=aspd.name_id??656;
+    const healName=healing.item||'Meat';
+    const healId=String(healName).trim().toLowerCase()==='meat'?517:null;
+    setText('combatSpeedPotion',String(inventoryAmount(rows,speedName,speedId)));
+    setText('combatSpeedPotionLabel',speedName);
+    setText('combatFlyWing',String(inventoryAmount(rows,(profile.hunt||{}).teleport_item||'Fly Wing',601)));
+    setText('combatButterflyWing',String(inventoryAmount(rows,town.butterfly_wing_item||'Butterfly Wing',602)));
+    setText('combatHealingItem',String(inventoryAmount(rows,healName,healId)));
+    setText('combatHealingItemLabel',healName);
+  }catch(e){}
+}
+
 function formatDuration(seconds){
   const total=Math.max(0,Math.floor(+seconds||0));
   const h=Math.floor(total/3600);
@@ -3383,6 +3551,15 @@ function renderLiveSession(data){
   setText('sessionKills',String(data.kills??0));
   setText('sessionKillsPerHour',String(data.monsters_per_hour??0));
   setText('sessionDeaths',String(data.deaths??0));
+  setText('combatSessionElapsed',formatDuration(data.elapsed_seconds));
+  setText('combatSessionKills',String(data.kills??0));
+  setText('combatSessionKph',String(data.monsters_per_hour??0));
+  setText('combatSessionItems',String(data.items_found_total??0));
+  setText('combatSessionCards',String(data.cards_found_total??0));
+  setText('combatSessionUsed',String(data.items_used_total??0));
+  setText('combatSessionXp',data.xp_per_hour==null?'—':String(data.xp_per_hour));
+  setText('combatSessionZeny',data.zeny_per_hour==null?'—':String(data.zeny_per_hour));
+  setText('combatSessionDeaths',String(data.deaths??0));
   setText('sessionItemsFound',String(data.items_found_total??0));
   setText('sessionCardsFound',String(data.cards_found_total??0));
   setText('sessionItemsUsed',String(data.items_used_total??0));
@@ -3474,7 +3651,7 @@ const mapCanvas=document.getElementById('liveMapCanvas');
 if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
 const dashboardHuntProfile=document.getElementById('dashboardHuntProfile');
 if(dashboardHuntProfile) dashboardHuntProfile.addEventListener('change',updateDashboardHuntProfileMeta);
-loadRoutableMaps();loadProfile();refreshHuntProfiles();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);setInterval(refreshLiveSessionQuiet,1000);setInterval(refreshManualAssistantQuiet,750);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();refreshLiveSessionQuiet();refreshManualAssistantQuiet();
+loadRoutableMaps();loadProfile();refreshHuntProfiles();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);setInterval(refreshLiveSessionQuiet,1000);setInterval(refreshManualAssistantQuiet,750);setInterval(refreshCombatSupplies,1000);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();refreshLiveSessionQuiet();refreshManualAssistantQuiet();refreshCombatSupplies();
 </script>
 </body>
 </html>
