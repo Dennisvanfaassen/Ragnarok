@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from core.state import app_state
+from core.active_control import active_hunt_controller
 from diagnostics.authenticated_client import authenticated_client_monitor
 from diagnostics.native_action_bridge import native_action_bridge
 
@@ -84,6 +85,10 @@ class ManualAssistant:
     ) -> None:
         profile = app_state.get_profile()
         healing = profile.healing
+        if not profile.manual_assistant.auto_heal:
+            return
+        if active_hunt_controller.snapshot().get("running"):
+            return
         if not healing.enabled:
             return
 
@@ -261,7 +266,11 @@ class ManualAssistant:
                 "mode": "manual_assist" if self.enabled else "off",
                 "movement_control": False,
                 "attack_control": False,
-                "auto_healing": self.enabled and app_state.get_profile().manual_assistant.auto_heal,
+                "auto_healing": (
+                    self.enabled
+                    and app_state.get_profile().manual_assistant.auto_heal
+                    and not active_hunt_controller.snapshot().get("running")
+                ),
                 "warnings": list(self._warnings),
                 "healing_items_used": self._heals_used,
                 "next_heal_threshold": self._next_heal_threshold,
