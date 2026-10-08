@@ -17,6 +17,8 @@ from core.world_route import world_route_planner
 from core.town_travel import town_travel_controller
 from core.map_dashboard import map_grid_payload, map_live_overlay
 from core.monster_density import monster_density_tracker
+from core.session_tracker import session_tracker
+from core.manual_assistant import manual_assistant
 from core.exploration import exploration_planner
 from core.hunt_routes import hunt_route_store
 from core.hunt_profiles import hunt_profile_store
@@ -37,6 +39,8 @@ ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Ragnarok Bot", version="0.1.0")
 hunting_hotkey.start()
 monster_density_tracker.start_background_observer()
+session_tracker.start()
+manual_assistant.start_worker()
 
 
 def load_server_profile(profile_id: str) -> ServerProfile:
@@ -75,6 +79,31 @@ async def patch_town_mode(payload: dict):
     town = profile.town.model_copy(update={"auto_town_cycle": enabled})
     updated = profile.model_copy(update={"town": town})
     return app_state.set_profile(updated)
+
+
+@app.get("/api/session")
+async def session_state():
+    return session_tracker.snapshot()
+
+
+@app.post("/api/session/reset")
+async def reset_session():
+    return session_tracker.reset()
+
+
+@app.get("/api/manual-assistant")
+async def manual_assistant_state():
+    return manual_assistant.snapshot()
+
+
+@app.post("/api/manual-assistant/enable")
+async def enable_manual_assistant():
+    return manual_assistant.set_enabled(True)
+
+
+@app.post("/api/manual-assistant/disable")
+async def disable_manual_assistant():
+    return manual_assistant.set_enabled(False)
 
 
 @app.get("/api/hunt-profiles")
