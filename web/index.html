@@ -3363,6 +3363,11 @@ async function clearMonsterEncounters(){
   out(data);
 }
 
+function setText(id,value){
+  const el=document.getElementById(id);
+  if(el) el.textContent=value;
+}
+
 function formatDuration(seconds){
   const total=Math.max(0,Math.floor(+seconds||0));
   const h=Math.floor(total/3600);
