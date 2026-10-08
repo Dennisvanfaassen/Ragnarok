@@ -428,6 +428,34 @@ class AuthenticatedClientMonitor:
                     self._aggressors[source_id] = now
                     actor["aggressive_to_me"] = True
                     actor["last_aggression"] = now
+            else:
+                source_actor = self._actors.get(source_id)
+                target_actor = self._actors.get(target_id)
+
+                # Anti-KS ownership telemetry. The 008A actor-action packet
+                # tells us who is fighting whom. Mark a monster as claimed by
+                # another player when a visible player attacks it, or when the
+                # monster is actively fighting a visible player. HuntingAI uses
+                # the timestamp with a short expiry rather than trusting a
+                # permanent boolean.
+                if (
+                    source_actor
+                    and target_actor
+                    and source_actor.get("kind") == "player"
+                    and target_actor.get("kind") == "monster"
+                ):
+                    target_actor["engaged_by_other"] = True
+                    target_actor["last_other_player_combat"] = now
+                    target_actor["other_player_id"] = source_id
+                elif (
+                    source_actor
+                    and target_actor
+                    and source_actor.get("kind") == "monster"
+                    and target_actor.get("kind") == "player"
+                ):
+                    source_actor["engaged_by_other"] = True
+                    source_actor["last_other_player_combat"] = now
+                    source_actor["other_player_id"] = target_id
             self._parsed_counts["combat"] += 1
             return
 
