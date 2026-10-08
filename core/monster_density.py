@@ -144,7 +144,6 @@ class MonsterDensityTracker:
                 self._save()
         return True
 
-    @staticmethod
     def start_background_observer(self) -> None:
         with self._lock:
             if self._observer_thread and self._observer_thread.is_alive():
@@ -173,6 +172,7 @@ class MonsterDensityTracker:
                 pass
             self._observer_stop.wait(0.50)
 
+    @staticmethod
     def _merge_cell(target: dict[str, Any], source: dict[str, Any]) -> None:
         target["total"] = int(target.get("total") or 0) + int(source.get("total") or 0)
         names = target.setdefault("monsters", {})
