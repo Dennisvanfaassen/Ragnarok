@@ -19,11 +19,6 @@ WM_SYSKEYUP = 0x0105
 # Windows virtual-key code for Tab.
 # Windows virtual-key code for ] } on a standard keyboard.
 VK_OEM_6 = 0xDD
-WM_HOTKEY = 0x0312
-MOD_NOREPEAT = 0x4000
-HOTKEY_ID = 0x524F
-
-
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
@@ -72,7 +67,7 @@ class HuntingHotkey:
             self._thread = threading.Thread(
                 target=self._message_loop,
                 daemon=True,
-                name="full-automation-tab-hotkey",
+                name="hunting-bracket-hotkey",
             )
             self._thread.start()
 
@@ -88,7 +83,7 @@ class HuntingHotkey:
         threading.Thread(
             target=self._toggle,
             daemon=True,
-            name="full-automation-tab-toggle",
+            name="hunting-bracket-toggle",
         ).start()
 
     def _toggle(self):
@@ -131,38 +126,12 @@ class HuntingHotkey:
                 self._toggle_busy = False
 
     def _message_loop(self):
-        # Prefer RegisterHotKey: Windows delivers WM_HOTKEY globally even when
-        # Classic.exe has focus. MOD_NOREPEAT prevents key-repeat toggling.
-        if user32.RegisterHotKey(
-            None,
-            HOTKEY_ID,
-            MOD_NOREPEAT,
-            VK_OEM_6,
-        ):
-            with self._lock:
-                self._status = "ready"
-                self._message = "] toggles hunting globally."
+        """Run a dedicated low-level keyboard hook for the hunting toggle.
 
-            msg = wintypes.MSG()
-            try:
-                while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
-                    if msg.message == WM_HOTKEY and int(msg.wParam) == HOTKEY_ID:
-                        self._queue_toggle()
-                    else:
-                        user32.TranslateMessage(ctypes.byref(msg))
-                        user32.DispatchMessageW(ctypes.byref(msg))
-            finally:
-                user32.UnregisterHotKey(None, HOTKEY_ID)
-                try:
-                    mouse_game_adapter.release_hold_move()
-                except Exception:
-                    pass
-                with self._lock:
-                    self._status = "stopped"
-                    self._message = "Global ] hotkey stopped."
-            return
-
-        # Fallback for systems where the global ] hotkey cannot be registered.
+        OEM punctuation keys such as ] are not consistently delivered through
+        RegisterHotKey on every keyboard layout/focus combination. A WH_KEYBOARD_LL
+        hook sees the physical key event even while Classic.exe owns focus.
+        """
         @LowLevelKeyboardProc
         def callback(n_code, w_param, l_param):
             if n_code >= 0:
@@ -171,12 +140,28 @@ class HuntingHotkey:
                     ctypes.POINTER(KBDLLHOOKSTRUCT),
                 ).contents
 
-                if int(info.vkCode) == VK_OEM_6:
+                vk = int(info.vkCode)
+                scan = int(info.scanCode)
+
+                # VK_OEM_6 is the normal Windows virtual key for ].
+                # Scan code 0x1B is the physical US/OEM bracket key and is
+                # accepted as a fallback for layouts that translate OEM keys
+                # differently.
+                is_toggle_key = (
+                    vk == VK_OEM_6
+                    or scan == 0x1B
+                )
+
+                if is_toggle_key:
                     if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                        should_toggle = False
                         with self._lock:
                             if not self._pressed:
                                 self._pressed = True
-                                self._queue_toggle()
+                                should_toggle = True
+                        if should_toggle:
+                            self._queue_toggle()
+                        # Swallow the key so Ragnarok never receives ] itself.
                         return 1
 
                     if w_param in (WM_KEYUP, WM_SYSKEYUP):
@@ -204,7 +189,8 @@ class HuntingHotkey:
             with self._lock:
                 self._status = "error"
                 self._message = (
-                    "Could not register global ]. Run RO Control as administrator."
+                    "Could not install the global ] hunting hotkey. "
+                    "Run RO Control as administrator."
                 )
                 self._last_error = self._message
             return
@@ -212,7 +198,8 @@ class HuntingHotkey:
         self._hook = hook
         with self._lock:
             self._status = "ready"
-            self._message = "] toggles hunting globally (keyboard-hook fallback)."
+            self._message = "] starts/stops hunting globally."
+            self._last_error = None
 
         msg = wintypes.MSG()
         try:
@@ -228,8 +215,9 @@ class HuntingHotkey:
             except Exception:
                 pass
             with self._lock:
+                self._pressed = False
                 self._status = "stopped"
-                self._message = "Global ] hotkey stopped."
+                self._message = "Global ] hunting hotkey stopped."
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
