@@ -137,6 +137,14 @@ class HealingSettings(BaseModel):
     cooldown_seconds: float = 0.9
 
 
+class ManualAssistantSettings(BaseModel):
+    auto_heal: bool = True
+    warn_weight_percent: int = 70
+    warn_meat_below: int = 20
+    warn_fly_wings_below: int = 10
+    aspd_warning_seconds: int = 60
+
+
 class AspdSettings(BaseModel):
     enabled: bool = False
     item: str = "Awakening Potion"
@@ -192,6 +200,7 @@ class BotProfile(BaseModel):
     hunt: HuntSettings = Field(default_factory=HuntSettings)
     healing: HealingSettings = Field(default_factory=HealingSettings)
     aspd: AspdSettings = Field(default_factory=AspdSettings)
+    manual_assistant: ManualAssistantSettings = Field(default_factory=ManualAssistantSettings)
     town: TownSettings = Field(default_factory=TownSettings)
 
 
