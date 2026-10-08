@@ -212,6 +212,71 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
       <input id="liveReturnTrigger" value="70%" disabled style="display:none">
     </section>
 
+    <section class="card wide">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+        <div>
+          <h2>Live session</h2>
+          <div class="muted">Always running while Classic.exe is connected — manual play and bot hunting are counted together.</div>
+        </div>
+        <button class="action secondary" onclick="resetLiveSession()">Reset session</button>
+      </div>
+      <div class="summary-grid" style="margin-top:12px">
+        <div>
+          <div class="summary-row"><span>Session time</span><strong id="sessionElapsed">00:00:00</strong></div>
+          <div class="summary-row"><span>Time on map</span><strong id="sessionMapTime">00:00:00</strong></div>
+          <div class="summary-row"><span>Kills</span><strong id="sessionKills">0</strong></div>
+          <div class="summary-row"><span>Monsters/hour</span><strong id="sessionKillsPerHour">0</strong></div>
+          <div class="summary-row"><span>Deaths</span><strong id="sessionDeaths">0</strong></div>
+        </div>
+        <div>
+          <div class="summary-row"><span>Items found</span><strong id="sessionItemsFound">0</strong></div>
+          <div class="summary-row"><span>Cards found</span><strong id="sessionCardsFound">0</strong></div>
+          <div class="summary-row"><span>Items/potions used</span><strong id="sessionItemsUsed">0</strong></div>
+          <div class="summary-row"><span>XP/hour</span><strong id="sessionXpHour">Waiting for packet decoder</strong></div>
+          <div class="summary-row"><span>Zeny/hour</span><strong id="sessionZenyHour">Waiting for packet decoder</strong></div>
+        </div>
+      </div>
+      <div class="section-note" style="margin-top:12px">
+        <strong>Recent loot</strong>
+        <div id="sessionLootSummary" class="muted" style="margin-top:5px">No items recorded yet.</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <h2 style="margin:0">Manual Assistant</h2>
+        <button id="manualAssistantToggle" class="action secondary" onclick="toggleManualAssistant()">OFF</button>
+      </div>
+      <div class="muted" style="margin:8px 0 12px">Optional manual-play helper. It never moves or attacks. It can auto-heal and warn you about supplies/status.</div>
+      <label>Auto-heal while playing manually
+        <select id="manualAssistAutoHeal">
+          <option value="true" selected>Enabled</option>
+          <option value="false">Disabled</option>
+        </select>
+      </label>
+      <div class="row">
+        <label>Weight warning %
+          <input id="manualAssistWeight" type="number" min="1" max="99" value="70">
+        </label>
+        <label>Meat warning below
+          <input id="manualAssistMeat" type="number" min="0" value="20">
+        </label>
+      </div>
+      <div class="row">
+        <label>Fly Wings warning below
+          <input id="manualAssistFly" type="number" min="0" value="10">
+        </label>
+        <label>ASPD warning seconds
+          <input id="manualAssistAspdSeconds" type="number" min="10" max="600" value="60">
+        </label>
+      </div>
+      <div id="manualAssistantState" class="section-note">Manual Assistant is OFF.</div>
+      <div id="manualAssistantWarnings" style="margin-top:9px"></div>
+      <div class="actions">
+        <button class="action secondary" onclick="saveProfile()">Save assistant settings</button>
+      </div>
+    </section>
+
     <section class="card">
       <h2>Automation</h2>
       <label>Phase<input id="fullAutomationPhase" value="idle" disabled></label>
@@ -1621,6 +1686,13 @@ async function saveProfile(silent=false){
       reuse_minutes:+document.getElementById('aspdReuseMinutes').value||30,
       restock_target:aspdRestock
     },
+    manual_assistant:{
+      auto_heal:document.getElementById('manualAssistAutoHeal').value==='true',
+      warn_weight_percent:+document.getElementById('manualAssistWeight').value||70,
+      warn_meat_below:Math.max(0,+document.getElementById('manualAssistMeat').value||0),
+      warn_fly_wings_below:Math.max(0,+document.getElementById('manualAssistFly').value||0),
+      aspd_warning_seconds:Math.max(10,+document.getElementById('manualAssistAspdSeconds').value||60)
+    },
     town:{
       auto_town_cycle:document.getElementById('autoTownCycle').value==='true',
       storage_map:document.getElementById('storageMap').value.trim(),
@@ -1795,6 +1867,12 @@ async function loadProfile(){
     document.getElementById('aspdStatusEffectId').value=aspd.status_effect_id??38;
     document.getElementById('aspdReuseMinutes').value=aspd.reuse_minutes??30;
     document.getElementById('aspdRestockTarget').value=aspd.restock_target??4;
+    const manualAssist=p.manual_assistant||{};
+    document.getElementById('manualAssistAutoHeal').value=manualAssist.auto_heal===false?'false':'true';
+    document.getElementById('manualAssistWeight').value=manualAssist.warn_weight_percent??70;
+    document.getElementById('manualAssistMeat').value=manualAssist.warn_meat_below??20;
+    document.getElementById('manualAssistFly').value=manualAssist.warn_fly_wings_below??10;
+    document.getElementById('manualAssistAspdSeconds').value=manualAssist.aspd_warning_seconds??60;
     const supplies=(p.town&&p.town.supplies)||{};
     document.getElementById('awakeningTarget').value=supplies.awakening_potions??4;
     document.getElementById('butterflyTarget').value=supplies.butterfly_wings??1;
@@ -3284,6 +3362,96 @@ async function clearMonsterEncounters(){
   out(data);
 }
 
+function formatDuration(seconds){
+  const total=Math.max(0,Math.floor(+seconds||0));
+  const h=Math.floor(total/3600);
+  const m=Math.floor((total%3600)/60);
+  const s=total%60;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+
+function renderLiveSession(data){
+  if(!data) return;
+  setText('sessionElapsed',formatDuration(data.elapsed_seconds));
+  setText('sessionMapTime',formatDuration(data.time_on_current_map_seconds));
+  setText('sessionKills',String(data.kills??0));
+  setText('sessionKillsPerHour',String(data.monsters_per_hour??0));
+  setText('sessionDeaths',String(data.deaths??0));
+  setText('sessionItemsFound',String(data.items_found_total??0));
+  setText('sessionCardsFound',String(data.cards_found_total??0));
+  setText('sessionItemsUsed',String(data.items_used_total??0));
+  setText('sessionXpHour',data.xp_per_hour==null?'Not decoded yet':String(data.xp_per_hour));
+  setText('sessionZenyHour',data.zeny_per_hour==null?'Not decoded yet':String(data.zeny_per_hour));
+  const loot=document.getElementById('sessionLootSummary');
+  if(loot){
+    const rows=(data.items_found||[]).slice(0,8);
+    loot.textContent=rows.length
+      ? rows.map(r=>r.name+' ×'+r.amount).join(' · ')
+      : 'No items recorded yet.';
+  }
+}
+
+async function refreshLiveSessionQuiet(){
+  try{
+    const r=await fetch('/api/session');
+    if(!r.ok) return;
+    renderLiveSession(await r.json());
+  }catch(e){}
+}
+
+async function resetLiveSession(){
+  try{
+    const r=await fetch('/api/session/reset',{method:'POST'});
+    const data=await r.json();
+    renderLiveSession(data);
+    out('Live session reset.');
+  }catch(e){out('Could not reset live session: '+e.message)}
+}
+
+function renderManualAssistant(data){
+  const btn=document.getElementById('manualAssistantToggle');
+  const state=document.getElementById('manualAssistantState');
+  const warnings=document.getElementById('manualAssistantWarnings');
+  const enabled=!!(data&&data.enabled);
+  if(btn){
+    btn.textContent=enabled?'ON':'OFF';
+    btn.classList.toggle('danger',enabled);
+  }
+  if(state){
+    state.textContent=enabled
+      ? ('Manual Assistant ON · auto-heal '+(data.auto_healing?'active':'inactive')+' · no movement/attacks')
+      : 'Manual Assistant is OFF.';
+  }
+  if(warnings){
+    const rows=(data&&data.warnings)||[];
+    warnings.innerHTML=rows.length
+      ? rows.map(row=>'<div class="section-note" style="margin-top:6px"><strong>⚠ '+escapeHtml(row.message||'Warning')+'</strong></div>').join('')
+      : (enabled?'<div class="muted">No warnings right now.</div>':'');
+  }
+}
+
+async function refreshManualAssistantQuiet(){
+  try{
+    const r=await fetch('/api/manual-assistant');
+    if(!r.ok) return;
+    renderManualAssistant(await r.json());
+  }catch(e){}
+}
+
+async function toggleManualAssistant(){
+  try{
+    await saveProfile(true);
+    const current=await fetch('/api/manual-assistant');
+    const state=await current.json();
+    const endpoint=state.enabled?'/api/manual-assistant/disable':'/api/manual-assistant/enable';
+    const r=await fetch(endpoint,{method:'POST'});
+    const data=await r.json();
+    if(!r.ok) throw new Error((data&&data.detail)||'Could not change Manual Assistant');
+    renderManualAssistant(data);
+    out('Manual Assistant '+(data.enabled?'enabled.':'disabled.'));
+  }catch(e){out('Could not change Manual Assistant: '+e.message)}
+}
+
 async function analyzePcap(){
   const input=document.getElementById('pcapFile');
   if(!input.files.length){out('Choose a .pcap or .pcapng file first.');return}
@@ -3299,7 +3467,7 @@ const mapCanvas=document.getElementById('liveMapCanvas');
 if(mapCanvas) mapCanvas.addEventListener('click',onMapCanvasClick);
 const dashboardHuntProfile=document.getElementById('dashboardHuntProfile');
 if(dashboardHuntProfile) dashboardHuntProfile.addEventListener('change',updateDashboardHuntProfileMeta);
-loadRoutableMaps();loadProfile();refreshHuntProfiles();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();
+loadRoutableMaps();loadProfile();refreshHuntProfiles();refresh();setInterval(refresh,1000);setInterval(refreshLiveStateQuiet,1000);setInterval(refreshActiveHuntQuiet,700);setInterval(refreshTownTravelQuiet,800);setInterval(refreshFullAutomationQuiet,700);setInterval(refreshMapLive,400);setInterval(refreshHotkeyQuiet,700);setInterval(refreshHuntDiagnosticQuiet,500);setInterval(refreshLiveSessionQuiet,1000);setInterval(refreshManualAssistantQuiet,750);refreshHotkeyQuiet();refreshHuntDiagnosticQuiet();refreshLiveSessionQuiet();refreshManualAssistantQuiet();
 </script>
 </body>
 </html>
