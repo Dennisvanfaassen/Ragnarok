@@ -125,7 +125,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
   <div class="bot-controlbar">
     <div class="bot-control-left">
       <span id="automationBadge" class="bot-badge stopped">BOT STOPPED</span>
-      <span id="automationPhaseText" class="bot-phase">Idle · = controls hunting</span>
+      <span id="automationPhaseText" class="bot-phase">Idle · ] uses the same Start bot path</span>
     </div>
     <div class="bot-control-actions">
       <button class="action secondary" onclick="saveProfile()">Save settings</button>
@@ -149,7 +149,7 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
           <div class="status-tile"><div class="muted">Action</div><strong id="action">Idle</strong><div id="message" class="muted">Ready</div></div>
           <div class="status-tile"><div class="muted">Location</div><strong id="location">—</strong><div class="muted">Live map position</div></div>
           <div class="status-tile"><div class="muted">Target</div><strong id="target">—</strong><div class="muted">Current combat target</div></div>
-          <div class="status-tile"><div class="muted">Global hotkey</div><strong>=</strong><div id="hotkeyStatus" class="muted">checking…</div></div>
+          <div class="status-tile"><div class="muted">Global hotkey</div><strong>]</strong><div id="hotkeyStatus" class="muted">checking…</div></div>
         </div>
       </div>
       <div class="hero-panel">
@@ -1651,7 +1651,7 @@ async function saveProfile(silent=false){
   renderTownBuyRules();
   const phaseText=document.getElementById('automationPhaseText');
   if(phaseText && !document.getElementById('automationBadge').classList.contains('running')){
-    phaseText.textContent='Settings saved · = controls hunting';
+    phaseText.textContent='Settings saved · ] uses the same Start bot path';
   }
   if(!silent) out(data);
   return data;
@@ -2413,7 +2413,7 @@ function renderFullAutomation(data){
     const message=(data&&data.message)||'';
     phaseText.textContent=running
       ? phase.toUpperCase()+(message?' · '+message:'')
-      : ((data&&data.last_error)?String(data.last_error):'Idle · = controls hunting');
+      : ((data&&data.last_error)?String(data.last_error):'Idle · ] uses the same Start bot path');
   }
   const dashPhase=document.getElementById('dashAutomationPhase');
   if(dashPhase) dashPhase.textContent=(data&&data.phase)||'idle';
@@ -3180,15 +3180,15 @@ async function refreshHotkeyQuiet(){
     const data=await r.json();
     const el=document.getElementById('hotkeyStatus');
     if(el){
-      let text='= — '+(data.status||'unknown');
+      let text='] — '+(data.status||'unknown');
       if(data.last_action==='error' && data.last_error){
         text+=' · ERROR: '+data.last_error;
-      }else if(data.hunt_running){
-        text+=' · HUNTING ON';
+      }else if(data.full_automation_running){
+        text+=' · BOT ON';
       }else if(data.last_action==='stopped'){
-        text+=' · HUNTING OFF';
+        text+=' · BOT OFF';
       }else{
-        text+=' · ready to start/stop hunting';
+        text+=' · ready to start/stop bot';
       }
       if('value' in el) el.value=text; else el.textContent=text;
     }
