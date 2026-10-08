@@ -259,6 +259,9 @@ class AuthenticatedClientMonitor:
         self._self_move: dict[str, Any] | None = None
         self._floor_items: dict[int, dict[str, Any]] = {}
         self._aggressors: dict[int, float] = {}
+        self._self_attack_targets: dict[int, float] = {}
+        self._monster_kill_seq = 0
+        self._last_monster_kill: dict[str, Any] | None = None
         self._inventory: dict[int, dict[str, Any]] = {}
         self._storage: dict[int, dict[str, Any]] = {}
         self._skills: dict[int, dict[str, Any]] = {}
@@ -433,6 +436,7 @@ class AuthenticatedClientMonitor:
                     "source_id": source_id,
                     "target_id": target_id,
                 }
+                self._self_attack_targets[target_id] = now
             elif target_id in self_ids:
                 actor = self._actors.get(source_id)
                 if actor and actor.get("kind") == "monster":
@@ -512,6 +516,7 @@ class AuthenticatedClientMonitor:
             self._actors.clear()
             self._floor_items.clear()
             self._aggressors.clear()
+            self._self_attack_targets.clear()
             self._parsed_counts["map_change"] += 1
             return
 
@@ -698,9 +703,35 @@ class AuthenticatedClientMonitor:
 
         if opcode == 0x0080 and len(data) >= 7:
             actor_id = int.from_bytes(data[2:6], "little")
+            vanish_type = int(data[6])
+            actor = self._actors.get(actor_id)
+            now = time.time()
+
+            # ZC_NOTIFY_VANISH type 1 is an actual death. Other values are
+            # ordinary disappear/teleport/out-of-sight events and must never
+            # count as kills.
+            if vanish_type == 1 and actor and actor.get("kind") == "monster":
+                attacked_at = self._self_attack_targets.get(actor_id)
+                if attacked_at is not None and now - float(attacked_at) <= 12.0:
+                    self._monster_kill_seq += 1
+                    self._last_monster_kill = {
+                        "seq": self._monster_kill_seq,
+                        "timestamp": now,
+                        "actor_id": actor_id,
+                        "name": actor.get("name") or "Unknown monster",
+                        "map": self._world.get("map"),
+                        "x": actor.get("x"),
+                        "y": actor.get("y"),
+                    }
+
             self._actors.pop(actor_id, None)
             self._aggressors.pop(actor_id, None)
+            self._self_attack_targets.pop(actor_id, None)
             self._parsed_counts["actor_removed"] += 1
+            if vanish_type == 1:
+                self._parsed_counts["actor_died"] = (
+                    int(self._parsed_counts.get("actor_died") or 0) + 1
+                )
             return
 
         if opcode == 0x009D and len(data) >= 19:
@@ -1786,6 +1817,12 @@ class AuthenticatedClientMonitor:
                 "traffic_counts": counts,
                 "live_state": {
                     "world": world,
+                    "monster_kill_seq": self._monster_kill_seq,
+                    "last_monster_kill": (
+                        dict(self._last_monster_kill)
+                        if self._last_monster_kill is not None
+                        else None
+                    ),
                     "actor_counts": actor_counts,
                     "actors": sorted(
                         actors,
