@@ -262,6 +262,8 @@ class AuthenticatedClientMonitor:
         self._self_attack_targets: dict[int, float] = {}
         self._monster_kill_seq = 0
         self._last_monster_kill: dict[str, Any] | None = None
+        self._inventory_gain_seq = 0
+        self._last_inventory_gain: dict[str, Any] | None = None
         self._inventory: dict[int, dict[str, Any]] = {}
         self._storage: dict[int, dict[str, Any]] = {}
         self._skills: dict[int, dict[str, Any]] = {}
@@ -990,7 +992,34 @@ class AuthenticatedClientMonitor:
                 # This keeps the live inventory/storage snapshot in sync after
                 # native town-cycle actions instead of leaving the original
                 # full-list snapshot stale.
-                if opcode == 0x00AF:
+                if opcode == 0x0A37:
+                    index = int(decoded["index"])
+                    amount = int(decoded["amount"])
+                    existing = self._inventory.get(index)
+                    if (
+                        existing is not None
+                        and int(existing.get("name_id") or -1)
+                        == int(decoded.get("name_id") or -2)
+                    ):
+                        row = dict(existing)
+                        row["amount"] = int(existing.get("amount") or 0) + amount
+                        row["name"] = decoded.get("name") or row.get("name")
+                        self._inventory[index] = row
+                    else:
+                        self._inventory[index] = dict(decoded)
+
+                    self._item_list_updated_at["inventory"] = now
+                    self._inventory_gain_seq += 1
+                    self._last_inventory_gain = {
+                        "seq": self._inventory_gain_seq,
+                        "timestamp": now,
+                        "index": index,
+                        "amount": amount,
+                        "name_id": decoded.get("name_id"),
+                        "name": decoded.get("name"),
+                    }
+
+                elif opcode == 0x00AF:
                     index = int(decoded["index"])
                     removed = int(decoded["amount"])
                     current = self._inventory.get(index)
@@ -1828,6 +1857,12 @@ class AuthenticatedClientMonitor:
                     "last_monster_kill": (
                         dict(self._last_monster_kill)
                         if self._last_monster_kill is not None
+                        else None
+                    ),
+                    "inventory_gain_seq": self._inventory_gain_seq,
+                    "last_inventory_gain": (
+                        dict(self._last_inventory_gain)
+                        if self._last_inventory_gain is not None
                         else None
                     ),
                     "actor_counts": actor_counts,
