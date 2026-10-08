@@ -3,6 +3,11 @@ from __future__ import annotations
 import random
 import threading
 import time
+
+try:
+    import winsound
+except Exception:  # pragma: no cover - non-Windows development environments
+    winsound = None
 from typing import Any
 
 from core.state import app_state
@@ -250,11 +255,16 @@ class ManualAssistant:
                         character = authenticated_client_monitor.character_snapshot()
                         self._maybe_heal(world, inventory)
                         warnings = self._build_warnings(world, inventory, character)
+                        new_keys = {str(row.get("key")) for row in warnings}
                         with self._lock:
+                            previous_keys = set(self._last_warning_keys)
                             self._warnings = warnings
-                            self._last_warning_keys = {
-                                str(row.get("key")) for row in warnings
-                            }
+                            self._last_warning_keys = new_keys
+                        if new_keys - previous_keys and winsound is not None:
+                            try:
+                                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                            except Exception:
+                                pass
             except Exception:
                 pass
             self._stop.wait(0.25)
