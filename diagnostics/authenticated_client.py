@@ -239,6 +239,7 @@ class AuthenticatedClientMonitor:
             "self_char_id": None,
             "last_combat": None,
             "last_client_action": None,
+            "last_client_item_use": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
         # Session-wide monster encounter history. Unlike _actors this is not
@@ -1305,6 +1306,28 @@ class AuthenticatedClientMonitor:
             if opcode == 0x0436 and i + 23 <= size:
                 self._parse_client_map_packet(payload[i:i + 23])
                 i += 23
+                continue
+
+            # 0439 item_use: inventory index a2, targetID a4.
+            # This is emitted for manual player item use as well as our native
+            # assistant actions, so session telemetry can count consumables in
+            # both manual and automated play.
+            if opcode == 0x0439 and i + 8 <= size:
+                packet = payload[i:i + 8]
+                inventory_index = int.from_bytes(packet[2:4], "little")
+                target_id = int.from_bytes(packet[4:8], "little")
+                row = self._inventory.get(inventory_index)
+                self._world["last_client_item_use"] = {
+                    "timestamp": time.time(),
+                    "inventory_index": inventory_index,
+                    "target_id": target_id,
+                    "name_id": int(row.get("name_id") or 0) if row else None,
+                    "name": row.get("name") if row else None,
+                }
+                self._parsed_counts["client_item_use"] = (
+                    int(self._parsed_counts.get("client_item_use") or 0) + 1
+                )
+                i += 8
                 continue
 
             # 0437 actor_action: targetID a4, type C.
