@@ -121,6 +121,8 @@ CONFIRMED_ITEM_LIST_LAYOUTS = {
 
 # rAthena/OpenKore SP_* values carried by 00B0.
 STAT_NAMES = {
+    1: "base_exp",
+    2: "job_exp",
     5: "hp",
     6: "hp_max",
     7: "sp",
@@ -128,6 +130,7 @@ STAT_NAMES = {
     9: "status_points",
     11: "base_level",
     12: "skill_points",
+    20: "zeny",
     # Ragnarok/OpenKore SP_WEIGHT and SP_MAXWEIGHT. The wire values are
     # scaled by the client, but their ratio is still the real weight percent.
     24: "weight",
@@ -234,6 +237,9 @@ class AuthenticatedClientMonitor:
             "base_level": None,
             "status_points": None,
             "skill_points": None,
+            "base_exp": None,
+            "job_exp": None,
+            "zeny": None,
             "last_sync": None,
             "self_account_id": None,
             "self_char_id": None,
@@ -1223,6 +1229,9 @@ class AuthenticatedClientMonitor:
             "hp_max": world.get("hp_max"),
             "sp": world.get("sp"),
             "sp_max": world.get("sp_max"),
+            "base_exp": world.get("base_exp"),
+            "job_exp": world.get("job_exp"),
+            "zeny": world.get("zeny"),
             "skills": skills,
             "skill_count": len(skills),
             "skills_updated_at": updated_at,
