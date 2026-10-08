@@ -31,6 +31,7 @@ class SessionTracker:
             self._inventory: dict[int, dict[str, Any]] = {}
             self._last_combat_stamp: float | None = None
             self._last_combat_target: int | None = None
+            self._last_monster_kill_seq = 0
             self._last_item_use_stamp: float | None = None
             self._last_hp: int | None = None
             self._last_base_exp: int | None = None
@@ -103,20 +104,13 @@ class SessionTracker:
                 except Exception:
                     self._last_combat_target = None
 
-            # Count a kill when the monster we most recently attacked disappears
-            # shortly after our own combat packet. This works for manual and bot
-            # play because both originate from Classic.exe.
-            removed_ids = set(self._known_actors) - set(actors)
-            for actor_id in removed_ids:
-                previous = self._known_actors.get(actor_id) or {}
-                if (
-                    previous.get("kind") == "monster"
-                    and self._last_combat_target == actor_id
-                    and self._last_combat_stamp is not None
-                    and now - self._last_combat_stamp <= 8.0
-                ):
-                    self.kills += 1
-                    self._last_combat_target = None
+            # Use confirmed server death events instead of actor-list
+            # disappearance. This avoids missing fast kills between polling
+            # samples and does not count teleport/out-of-sight removals.
+            kill_seq = int(live.get("monster_kill_seq") or 0)
+            if kill_seq > self._last_monster_kill_seq:
+                self.kills += kill_seq - self._last_monster_kill_seq
+                self._last_monster_kill_seq = kill_seq
 
             # Detect inventory gains as loot/items found. Initial inventory is a
             # baseline and is not counted.
