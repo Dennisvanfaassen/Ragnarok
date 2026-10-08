@@ -197,17 +197,22 @@ class ManualAssistant:
                 "message": f"Weight is {float(weight):.1f}% (warning at {settings.warn_weight_percent}%).",
             })
 
-        meat = sum(
+        healing_name = str(profile.healing.item or "Meat").strip()
+        healing_key = healing_name.lower()
+        food_amount = sum(
             int(row.get("amount") or 0)
             for row in inventory
-            if int(row.get("name_id") or -1) == MEAT_ID
-            or str(row.get("name") or "").strip().lower() == "meat"
+            if str(row.get("name") or "").strip().lower() == healing_key
+            or (
+                healing_key == "meat"
+                and int(row.get("name_id") or -1) == MEAT_ID
+            )
         )
-        if meat <= int(settings.warn_meat_below):
+        if food_amount <= int(settings.warn_meat_below):
             warnings.append({
-                "key": "low_meat",
+                "key": "low_food",
                 "level": "warning",
-                "message": f"Meat is low: {meat} left.",
+                "message": f"{healing_name} is low: {food_amount} left.",
             })
 
         fly = sum(
@@ -223,7 +228,7 @@ class ManualAssistant:
                 "message": f"Fly Wings are low: {fly} left.",
             })
 
-        if profile.aspd.enabled and profile.aspd.status_effect_id is not None:
+        if profile.aspd.status_effect_id is not None:
             wanted = int(profile.aspd.status_effect_id)
             status = next(
                 (
