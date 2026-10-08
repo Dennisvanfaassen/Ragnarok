@@ -1392,6 +1392,13 @@ class AuthenticatedClientMonitor:
                 }
                 self._world["last_client_action"] = action
 
+                # Type 7 is the normal attack action. Record it as the
+                # authoritative "I attacked this actor" signal for session
+                # kill tracking. This works for manual play as well as bot
+                # attacks because both originate from Classic.exe.
+                if action_type == 7:
+                    self._self_attack_targets[target_id] = now
+
                 actor = self._actors.get(target_id)
                 trace = {
                     **action,
