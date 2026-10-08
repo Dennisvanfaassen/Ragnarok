@@ -32,7 +32,10 @@ FIXED_PACKET_LENGTHS = {
     0x009D: 19,  # floor item exists
     0x009E: 17,  # legacy floor item appeared
     0x00A1: 6,   # floor item disappeared
-    0x00B0: 8,   # stat_info
+    0x00B0: 8,   # stat_info (legacy variant)
+    0x00B1: 8,   # exp_zeny/stat_info
+    0x07F6: 14,  # exp gained/lost (32-bit)
+    0x0ACC: 18,  # exp gained/lost (64-bit)
     0x010E: 11,  # legacy skill_update
     0x0111: 39,  # legacy skill_add
     0x0196: 9,   # actor_status_active
@@ -265,6 +268,9 @@ class AuthenticatedClientMonitor:
         self._inventory_gain_seq = 0
         self._last_inventory_gain: dict[str, Any] | None = None
         self._inventory_gain_events: deque[dict[str, Any]] = deque(maxlen=200)
+        self._exp_gain_seq = 0
+        self._exp_gain_events: deque[dict[str, Any]] = deque(maxlen=200)
+        self._last_exp_gain: dict[str, Any] | None = None
         self._inventory_baseline_ready = False
         self._inventory: dict[int, dict[str, Any]] = {}
         self._storage: dict[int, dict[str, Any]] = {}
@@ -691,13 +697,45 @@ class AuthenticatedClientMonitor:
                 self._parsed_counts["status_active"] += 1
             return
 
-        if opcode == 0x00B0 and len(data) >= 8:
+        if opcode in {0x00B0, 0x00B1} and len(data) >= 8:
             stat_type = struct.unpack_from("<H", data, 2)[0]
             value = struct.unpack_from("<I", data, 4)[0]
             name = STAT_NAMES.get(stat_type)
             if name:
                 self._world[name] = value
             self._parsed_counts["stat_info"] += 1
+            return
+
+        if opcode in {0x07F6, 0x0ACC}:
+            if opcode == 0x07F6 and len(data) >= 14:
+                account_id = int.from_bytes(data[2:6], "little")
+                amount = int.from_bytes(data[6:10], "little", signed=True)
+                exp_type = int.from_bytes(data[10:12], "little")
+                flag = int.from_bytes(data[12:14], "little")
+            elif opcode == 0x0ACC and len(data) >= 18:
+                account_id = int.from_bytes(data[2:6], "little")
+                amount = int.from_bytes(data[6:14], "little", signed=True)
+                exp_type = int.from_bytes(data[14:16], "little")
+                flag = int.from_bytes(data[16:18], "little")
+            else:
+                return
+
+            now = time.time()
+            self._exp_gain_seq += 1
+            event = {
+                "seq": self._exp_gain_seq,
+                "timestamp": now,
+                "opcode": f"0x{opcode:04X}",
+                "account_id": account_id,
+                "amount": int(amount),
+                "type": exp_type,
+                "kind": "base" if exp_type == 1 else ("job" if exp_type == 2 else "unknown"),
+                "flag": flag,
+            }
+            self._last_exp_gain = event
+            self._exp_gain_events.append(dict(event))
+            self._world["last_exp_gain"] = dict(event)
+            self._parsed_counts["exp_gain"] = int(self._parsed_counts.get("exp_gain") or 0) + 1
             return
 
         if opcode == 0x007F and len(data) >= 6:
@@ -1923,6 +1961,15 @@ class AuthenticatedClientMonitor:
                     ),
                     "inventory_gain_events": [
                         dict(row) for row in self._inventory_gain_events
+                    ],
+                    "exp_gain_seq": self._exp_gain_seq,
+                    "last_exp_gain": (
+                        dict(self._last_exp_gain)
+                        if self._last_exp_gain is not None
+                        else None
+                    ),
+                    "exp_gain_events": [
+                        dict(row) for row in self._exp_gain_events
                     ],
                     "actor_counts": actor_counts,
                     "actors": sorted(
