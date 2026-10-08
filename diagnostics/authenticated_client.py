@@ -265,6 +265,7 @@ class AuthenticatedClientMonitor:
         self._inventory_gain_seq = 0
         self._last_inventory_gain: dict[str, Any] | None = None
         self._inventory_gain_events: deque[dict[str, Any]] = deque(maxlen=200)
+        self._inventory_baseline_ready = False
         self._inventory: dict[int, dict[str, Any]] = {}
         self._storage: dict[int, dict[str, Any]] = {}
         self._skills: dict[int, dict[str, Any]] = {}
@@ -1127,9 +1128,60 @@ class AuthenticatedClientMonitor:
             }.get(list_type)
 
             if list_name == "inventory":
+                now = time.time()
+
+                # Compare the incoming inventory list with the previously known
+                # quantities by item ID. Some servers refresh stack amounts via
+                # a full item-list packet rather than a dedicated incremental
+                # add packet. Treat positive deltas as confirmed item gains.
+                previous_totals: dict[int, int] = {}
+                for row in self._inventory.values():
+                    try:
+                        name_id = int(row.get("name_id") or 0)
+                    except Exception:
+                        name_id = 0
+                    if name_id > 0:
+                        previous_totals[name_id] = (
+                            int(previous_totals.get(name_id) or 0)
+                            + int(row.get("amount") or 0)
+                        )
+
+                incoming_totals: dict[int, int] = {}
+                incoming_names: dict[int, str] = {}
+                for item in items:
+                    name_id = int(item.get("name_id") or 0)
+                    if name_id <= 0:
+                        continue
+                    incoming_totals[name_id] = (
+                        int(incoming_totals.get(name_id) or 0)
+                        + int(item.get("amount") or 0)
+                    )
+                    incoming_names[name_id] = str(
+                        item.get("name") or item_name(name_id)
+                    )
+
+                if self._inventory_baseline_ready:
+                    for name_id, new_total in incoming_totals.items():
+                        gained = int(new_total) - int(previous_totals.get(name_id) or 0)
+                        if gained <= 0:
+                            continue
+                        self._inventory_gain_seq += 1
+                        gain_event = {
+                            "seq": self._inventory_gain_seq,
+                            "timestamp": now,
+                            "index": None,
+                            "amount": gained,
+                            "name_id": name_id,
+                            "name": incoming_names.get(name_id) or item_name(name_id),
+                            "source": "inventory_list_delta",
+                        }
+                        self._last_inventory_gain = gain_event
+                        self._inventory_gain_events.append(dict(gain_event))
+
                 for item in items:
                     self._inventory[int(item["index"])] = dict(item)
-                self._item_list_updated_at["inventory"] = time.time()
+                self._inventory_baseline_ready = True
+                self._item_list_updated_at["inventory"] = now
             elif list_name == "storage":
                 for item in items:
                     self._storage[int(item["index"])] = dict(item)
