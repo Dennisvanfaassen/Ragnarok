@@ -33,6 +33,12 @@ class SessionTracker:
             self._last_combat_target: int | None = None
             self._last_item_use_stamp: float | None = None
             self._last_hp: int | None = None
+            self._last_base_exp: int | None = None
+            self._last_base_exp_next: int | None = None
+            self._last_base_level: int | None = None
+            self._last_zeny: int | None = None
+            self.xp_gained = 0
+            self.zeny_gained = 0
             self._last_map: str | None = None
             self._map_started_at = now
             self._time_by_map: dict[str, float] = {}
@@ -140,6 +146,38 @@ class SessionTracker:
                     self.deaths += 1
                 self._last_hp = hp
 
+            base_exp = world.get("base_exp")
+            base_exp_next = world.get("base_exp_next")
+            base_level = world.get("base_level")
+            if base_exp is not None:
+                current_exp = int(base_exp)
+                current_level = int(base_level) if base_level is not None else self._last_base_level
+                if self._last_base_exp is not None:
+                    if current_exp >= self._last_base_exp:
+                        self.xp_gained += current_exp - self._last_base_exp
+                    elif (
+                        current_level is not None
+                        and self._last_base_level is not None
+                        and current_level > self._last_base_level
+                        and self._last_base_exp_next is not None
+                    ):
+                        self.xp_gained += max(
+                            0,
+                            int(self._last_base_exp_next) - int(self._last_base_exp)
+                        ) + max(0, current_exp)
+                self._last_base_exp = current_exp
+                self._last_base_exp_next = (
+                    int(base_exp_next) if base_exp_next is not None else self._last_base_exp_next
+                )
+                self._last_base_level = current_level
+
+            zeny = world.get("zeny")
+            if zeny is not None:
+                current_zeny = int(zeny)
+                if self._last_zeny is not None and current_zeny > self._last_zeny:
+                    self.zeny_gained += current_zeny - self._last_zeny
+                self._last_zeny = current_zeny
+
             self._known_actors = actors
             self._inventory = inventory
 
@@ -196,12 +234,10 @@ class SessionTracker:
                     {"name": name, "amount": amount}
                     for name, amount in self.items_used.most_common(20)
                 ],
-                # These stay explicit until the corresponding server packets are
-                # confirmed for this client. Never invent XP/zeny values.
-                "xp_gained": None,
-                "xp_per_hour": None,
-                "zeny_gained": None,
-                "zeny_per_hour": None,
+                "xp_gained": int(self.xp_gained),
+                "xp_per_hour": round(self.xp_gained / hours, 1) if hours > 0 else 0.0,
+                "zeny_gained": int(self.zeny_gained),
+                "zeny_per_hour": round(self.zeny_gained / hours, 1) if hours > 0 else 0.0,
                 "loot_value": None,
                 "loot_value_note": "Item pricing is not configured yet.",
             }
