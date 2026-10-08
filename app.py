@@ -36,6 +36,7 @@ from diagnostics.native_action_bridge import native_action_bridge
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Ragnarok Bot", version="0.1.0")
 hunting_hotkey.start()
+monster_density_tracker.start_background_observer()
 
 
 def load_server_profile(profile_id: str) -> ServerProfile:
