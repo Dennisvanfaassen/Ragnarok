@@ -747,6 +747,21 @@ class HuntingAI:
         rule = self._monster_rule(name)
         return max(1, min(999, int(rule.priority))) if rule is not None else 50
 
+    @staticmethod
+    def _engaged_by_other_player(actor: dict[str, Any] | None) -> bool:
+        if not actor:
+            return False
+        # A monster attacking us always remains ours to defend against.
+        if bool(actor.get("aggressive_to_me")):
+            return False
+        last_other = actor.get("last_other_player_combat")
+        if last_other is None:
+            return False
+        try:
+            return time.time() - float(last_other) <= 3.5
+        except (TypeError, ValueError):
+            return False
+
     def _eligible_target_candidates(
         self,
         snapshot: dict[str, Any],
@@ -764,6 +779,14 @@ class HuntingAI:
             if exclude_id is not None and actor_id == int(exclude_id):
                 continue
             if self._target_on_cooldown(actor_id):
+                continue
+            if self._engaged_by_other_player(actor):
+                self._log(
+                    "anti_ks_skip",
+                    target_id=actor_id,
+                    target_name=actor.get("name"),
+                    other_player_id=actor.get("other_player_id"),
+                )
                 continue
 
             rule = self._monster_rule(actor.get("name"))
@@ -1795,6 +1818,20 @@ class HuntingAI:
         player = self._position(fresh)
         if actor is None or player is None or self.target_pos is None:
             return False
+        if self._engaged_by_other_player(actor):
+            skipped_name = self.target_name
+            self._log(
+                "anti_ks_drop_before_attack",
+                target_id=self.target_id,
+                target_name=skipped_name,
+                other_player_id=actor.get("other_player_id"),
+            )
+            self._clear_target()
+            self._set_state(
+                "SEARCHING",
+                f"Skipping {skipped_name}; another player is fighting it",
+            )
+            return False
 
         hunt = app_state.get_profile().hunt
         distance = self._tile_distance(player, self.target_pos)
@@ -2477,6 +2514,20 @@ class HuntingAI:
             self._set_state("TARGET_DEAD", f"{self.target_name} disappeared")
             return
         if player is None or self.target_pos is None:
+            return
+        if self._engaged_by_other_player(actor):
+            skipped_name = self.target_name
+            self._log(
+                "anti_ks_drop_before_attack",
+                target_id=self.target_id,
+                target_name=skipped_name,
+                other_player_id=actor.get("other_player_id"),
+            )
+            self._clear_target()
+            self._set_state(
+                "SEARCHING",
+                f"Skipping {skipped_name}; another player is fighting it",
+            )
             return
 
         player_render = self._render_position(fresh)
