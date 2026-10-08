@@ -32,6 +32,7 @@ class SessionTracker:
             self._last_combat_stamp: float | None = None
             self._last_combat_target: int | None = None
             self._last_monster_kill_seq = 0
+            self._last_inventory_gain_seq = 0
             self._last_item_use_stamp: float | None = None
             self._last_hp: int | None = None
             self._last_base_exp: int | None = None
@@ -112,19 +113,19 @@ class SessionTracker:
                 self.kills += kill_seq - self._last_monster_kill_seq
                 self._last_monster_kill_seq = kill_seq
 
-            # Detect inventory gains as loot/items found. Initial inventory is a
-            # baseline and is not counted.
-            if self._inventory:
-                for index, row in inventory.items():
-                    prev = self._inventory.get(index)
-                    current_amount = int(row.get("amount") or 0)
-                    previous_amount = int(prev.get("amount") or 0) if prev else 0
-                    gained = current_amount - previous_amount
-                    if gained > 0:
-                        name = str(row.get("name") or f"Item {row.get('name_id') or '?'}")
-                        self.items_found[name] += gained
-                        if "card" in name.lower():
-                            self.cards_found[name] += gained
+            gain_seq = int(live.get("inventory_gain_seq") or 0)
+            if gain_seq > self._last_inventory_gain_seq:
+                gain = live.get("last_inventory_gain") or {}
+                gained = max(0, int(gain.get("amount") or 0))
+                if gained > 0:
+                    name = str(
+                        gain.get("name")
+                        or f"Item {gain.get('name_id') or '?'}"
+                    )
+                    self.items_found[name] += gained
+                    if "card" in name.lower():
+                        self.cards_found[name] += gained
+                self._last_inventory_gain_seq = gain_seq
 
             item_use = world.get("last_client_item_use") or {}
             use_stamp = item_use.get("timestamp")
