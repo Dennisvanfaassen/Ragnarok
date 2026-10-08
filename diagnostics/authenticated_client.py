@@ -264,6 +264,7 @@ class AuthenticatedClientMonitor:
         self._last_monster_kill: dict[str, Any] | None = None
         self._inventory_gain_seq = 0
         self._last_inventory_gain: dict[str, Any] | None = None
+        self._inventory_gain_events: deque[dict[str, Any]] = deque(maxlen=200)
         self._inventory: dict[int, dict[str, Any]] = {}
         self._storage: dict[int, dict[str, Any]] = {}
         self._skills: dict[int, dict[str, Any]] = {}
@@ -1018,6 +1019,9 @@ class AuthenticatedClientMonitor:
                         "name_id": decoded.get("name_id"),
                         "name": decoded.get("name"),
                     }
+                    self._inventory_gain_events.append(
+                        dict(self._last_inventory_gain)
+                    )
 
                 elif opcode == 0x00AF:
                     index = int(decoded["index"])
@@ -1865,6 +1869,9 @@ class AuthenticatedClientMonitor:
                         if self._last_inventory_gain is not None
                         else None
                     ),
+                    "inventory_gain_events": [
+                        dict(row) for row in self._inventory_gain_events
+                    ],
                     "actor_counts": actor_counts,
                     "actors": sorted(
                         actors,
