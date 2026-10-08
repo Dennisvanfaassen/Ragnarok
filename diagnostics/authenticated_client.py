@@ -131,6 +131,8 @@ STAT_NAMES = {
     11: "base_level",
     12: "skill_points",
     20: "zeny",
+    22: "base_exp_next",
+    23: "job_exp_next",
     # Ragnarok/OpenKore SP_WEIGHT and SP_MAXWEIGHT. The wire values are
     # scaled by the client, but their ratio is still the real weight percent.
     24: "weight",
@@ -240,6 +242,8 @@ class AuthenticatedClientMonitor:
             "base_exp": None,
             "job_exp": None,
             "zeny": None,
+            "base_exp_next": None,
+            "job_exp_next": None,
             "last_sync": None,
             "self_account_id": None,
             "self_char_id": None,
@@ -1232,6 +1236,8 @@ class AuthenticatedClientMonitor:
             "base_exp": world.get("base_exp"),
             "job_exp": world.get("job_exp"),
             "zeny": world.get("zeny"),
+            "base_exp_next": world.get("base_exp_next"),
+            "job_exp_next": world.get("job_exp_next"),
             "skills": skills,
             "skill_count": len(skills),
             "skills_updated_at": updated_at,
