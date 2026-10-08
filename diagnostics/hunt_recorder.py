@@ -211,6 +211,12 @@ class HuntingDiagnosticRecorder:
             native = {}
             native_recent_calls = []
 
+        try:
+            from core.session_tracker import session_tracker
+            session = session_tracker.snapshot()
+        except Exception:
+            session = {}
+
         record = {
             "time": now,
             "elapsed": (
@@ -223,6 +229,23 @@ class HuntingDiagnosticRecorder:
                 "x": world.get("x"),
                 "y": world.get("y"),
             },
+            "character_stats": {
+                "hp": world.get("hp"),
+                "hp_max": world.get("hp_max"),
+                "hp_percent": world.get("hp_percent"),
+                "sp": world.get("sp"),
+                "sp_max": world.get("sp_max"),
+                "base_level": world.get("base_level"),
+                "base_exp": world.get("base_exp"),
+                "base_exp_next": world.get("base_exp_next"),
+                "job_exp": world.get("job_exp"),
+                "job_exp_next": world.get("job_exp_next"),
+                "zeny": world.get("zeny"),
+                "weight": world.get("weight"),
+                "weight_max": world.get("weight_max"),
+                "weight_percent": world.get("weight_percent"),
+            },
+            "session_tracker": session,
             "hunt": {
                 "running": hunt.get("running"),
                 "state": hunt.get("state"),
