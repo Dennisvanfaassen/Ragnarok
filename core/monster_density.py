@@ -32,6 +32,8 @@ class MonsterDensityTracker:
         self._buckets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
         self._last_sample_at: dict[str, float] = {}
         self._last_persist_at = 0.0
+        self._observer_thread: threading.Thread | None = None
+        self._observer_stop = threading.Event()
         self._load()
 
     @staticmethod
@@ -143,6 +145,34 @@ class MonsterDensityTracker:
         return True
 
     @staticmethod
+    def start_background_observer(self) -> None:
+        with self._lock:
+            if self._observer_thread and self._observer_thread.is_alive():
+                return
+            self._observer_stop.clear()
+            self._observer_thread = threading.Thread(
+                target=self._observer_loop,
+                daemon=True,
+                name="monster-density-observer",
+            )
+            self._observer_thread.start()
+
+    def stop_background_observer(self) -> None:
+        self._observer_stop.set()
+
+    def _observer_loop(self) -> None:
+        # Import lazily to avoid an import cycle during app startup.
+        from diagnostics.authenticated_client import authenticated_client_monitor
+
+        while not self._observer_stop.is_set():
+            try:
+                snapshot = authenticated_client_monitor.snapshot()
+                if snapshot.get("classic_pid"):
+                    self.observe_snapshot(snapshot)
+            except Exception:
+                pass
+            self._observer_stop.wait(0.50)
+
     def _merge_cell(target: dict[str, Any], source: dict[str, Any]) -> None:
         target["total"] = int(target.get("total") or 0) + int(source.get("total") or 0)
         names = target.setdefault("monsters", {})
