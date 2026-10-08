@@ -115,9 +115,16 @@ class SessionTracker:
 
             gain_seq = int(live.get("inventory_gain_seq") or 0)
             if gain_seq > self._last_inventory_gain_seq:
-                gain = live.get("last_inventory_gain") or {}
-                gained = max(0, int(gain.get("amount") or 0))
-                if gained > 0:
+                events = live.get("inventory_gain_events") or []
+                pending = [
+                    row for row in events
+                    if int(row.get("seq") or 0) > self._last_inventory_gain_seq
+                ]
+                pending.sort(key=lambda row: int(row.get("seq") or 0))
+                for gain in pending:
+                    gained = max(0, int(gain.get("amount") or 0))
+                    if gained <= 0:
+                        continue
                     name = str(
                         gain.get("name")
                         or f"Item {gain.get('name_id') or '?'}"
