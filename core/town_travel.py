@@ -13,7 +13,7 @@ from diagnostics.native_action_bridge import native_action_bridge
 
 
 class TownTravelController:
-    """Smooth held-mouse travel through physical portals toward town."""
+    """Route between maps using native map-coordinate movement by default.\n\n    Screen calibration is only relevant when the user explicitly enables the\n    legacy physical mouse fallback. Native/OpenKore-style travel is resolution\n    and Windows-scaling independent.\n    """
 
     def __init__(self):
         self._lock = threading.RLock()
@@ -60,6 +60,41 @@ class TownTravelController:
         app_state.patch_runtime(
             current_action=state.replace("_", " ").title(),
             message=message,
+        )
+
+    @staticmethod
+    def _native_only() -> bool:
+        return bool(app_state.get_profile().hunt.native_only_actions)
+
+    def _ensure_action_mode_ready(self, timeout: float = 6.0) -> None:
+        """Require native actions in native-only mode; calibration only for fallback."""
+        if not self._native_only():
+            if not game_actions.calibration_valid():
+                raise RuntimeError(
+                    "A valid screen calibration is required only when physical "
+                    "mouse fallback is enabled."
+                )
+            return
+
+        state = native_action_bridge.snapshot()
+        if not state.get("attached"):
+            native_action_bridge.start()
+
+        deadline = time.time() + max(0.5, float(timeout))
+        while time.time() < deadline:
+            state = native_action_bridge.snapshot()
+            if (
+                state.get("attached")
+                and state.get("status") == "ready"
+                and (state.get("agent") or {}).get("socket_learned")
+            ):
+                return
+            time.sleep(0.10)
+
+        raise RuntimeError(
+            "Native movement is not ready yet. Enter the game and wait until "
+            "the authenticated map socket is learned; screen calibration is "
+            "not required in Native only mode."
         )
 
     def _route_on_map(
@@ -127,6 +162,12 @@ class TownTravelController:
 
             if game_actions.native_move_ready():
                 result = game_actions.move_to(destination)
+            elif self._native_only():
+                self._set(
+                    "ERROR",
+                    "Native movement became unavailable; screen fallback is disabled.",
+                )
+                return False
             else:
                 result = game_actions.update_hold_direction(
                     destination[0] - player[0],
@@ -290,6 +331,13 @@ class TownTravelController:
 
                 if game_actions.native_move_ready():
                     result = game_actions.move_to(destination)
+                elif self._native_only():
+                    self._set(
+                        "ERROR",
+                        "Native movement became unavailable while entering portal; "
+                        "screen fallback is disabled.",
+                    )
+                    return False
                 else:
                     result = game_actions.update_hold_direction(
                         destination[0] - player[0],
@@ -388,6 +436,15 @@ class TownTravelController:
                         result=result,
                     )
             else:
+                if self._native_only():
+                    game_actions.release_hold_move()
+                    self._set(
+                        "ERROR",
+                        "Native movement became unavailable on the route; "
+                        "screen fallback is disabled.",
+                    )
+                    return False
+
                 dx = destination[0] - player[0]
                 dy = destination[1] - player[1]
 
@@ -501,8 +558,7 @@ class TownTravelController:
                 return self.snapshot()
             if not authenticated_client_monitor.snapshot().get("classic_pid"):
                 raise RuntimeError("Classic.exe is not detected.")
-            if not game_actions.calibration_valid():
-                raise RuntimeError("Valid screen calibration is required.")
+            self._ensure_action_mode_ready()
 
             self._stop.clear()
             self.running = True
@@ -528,8 +584,7 @@ class TownTravelController:
                 return self.snapshot()
             if not authenticated_client_monitor.snapshot().get("classic_pid"):
                 raise RuntimeError("Classic.exe is not detected.")
-            if not game_actions.calibration_valid():
-                raise RuntimeError("Valid screen calibration is required.")
+            self._ensure_action_mode_ready()
 
             self._stop.clear()
             self.running = True
