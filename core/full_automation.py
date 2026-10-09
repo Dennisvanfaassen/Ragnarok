@@ -156,6 +156,11 @@ class FullAutomationController:
             destination = path[min(len(path) - 1, best_i + 9)]
             if game_actions.native_move_ready():
                 result = game_actions.move_to(destination)
+            elif app_state.get_profile().hunt.native_only_actions:
+                self.last_error = (
+                    "Native movement became unavailable; screen fallback is disabled."
+                )
+                return False
             else:
                 result = game_actions.move(
                     player,
