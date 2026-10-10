@@ -3570,7 +3570,10 @@ function renderLiveSession(data){
   if(loot){
     const rows=(data.items_found||[]).slice(0,8);
     loot.textContent=rows.length
-      ? rows.map(r=>r.name+' ×'+r.amount).join(' · ')
+      ? rows.map(r=>{
+          const current=(r.current_amount==null)?'':(' · now '+r.current_amount);
+          return r.name+' ×'+r.amount+current;
+        }).join(' · ')
       : 'No items recorded yet.';
   }
 }
