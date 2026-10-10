@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from typing import Any
 
+from core.openkore_data import item_name
 from diagnostics.authenticated_client import authenticated_client_monitor
 
 
@@ -52,6 +53,8 @@ class SessionTracker:
             self.items_found: Counter[str] = Counter()
             self.cards_found: Counter[str] = Counter()
             self.items_used: Counter[str] = Counter()
+            self._recent_confirmed_pickups: deque[dict[str, Any]] = deque(maxlen=200)
+            self._recent_inventory_gains: deque[dict[str, Any]] = deque(maxlen=200)
             self._known_actors: dict[int, dict[str, Any]] = {}
             self._inventory: dict[int, dict[str, Any]] = inventory
             self._inventory_totals: dict[int, int] = current_totals
@@ -86,6 +89,88 @@ class SessionTracker:
             self._map_started_at = now
             self._time_by_map: dict[str, float] = {}
         return self.snapshot()
+
+
+    @staticmethod
+    def _consume_recent(
+        queue: deque[dict[str, Any]],
+        *,
+        name_id: int,
+        amount: int,
+        now: float,
+        max_age: float = 5.0,
+    ) -> int:
+        """Consume matching recent quantities and return the unmatched amount."""
+        remaining = max(0, int(amount))
+        if remaining <= 0:
+            return 0
+
+        for row in queue:
+            if remaining <= 0:
+                break
+            if int(row.get("name_id") or 0) != int(name_id):
+                continue
+            if now - float(row.get("timestamp") or 0.0) > max_age:
+                continue
+            available = max(0, int(row.get("remaining") or 0))
+            if available <= 0:
+                continue
+            used = min(remaining, available)
+            row["remaining"] = available - used
+            remaining -= used
+        return remaining
+
+    def record_confirmed_loot(
+        self,
+        *,
+        name_id: int,
+        amount: int = 1,
+        floor_item_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Record loot after the server-confirmed floor item disappears.
+
+        Inventory stack update packets are not reliable on every client packet
+        family. A vanished floor item after our native pickup is therefore the
+        primary bot-loot signal. Recent inventory deltas are consumed first so
+        the same pickup can never be counted twice.
+        """
+        name_id = int(name_id or 0)
+        amount = max(1, int(amount or 1))
+        if name_id <= 0:
+            return {"recorded": 0, "reason": "invalid_name_id"}
+
+        now = time.time()
+        with self._lock:
+            unmatched = self._consume_recent(
+                self._recent_inventory_gains,
+                name_id=name_id,
+                amount=amount,
+                now=now,
+            )
+            self._recent_confirmed_pickups.append({
+                "timestamp": now,
+                "name_id": name_id,
+                "remaining": unmatched,
+                "floor_item_id": floor_item_id,
+            })
+            if unmatched <= 0:
+                return {
+                    "recorded": 0,
+                    "deduplicated": amount,
+                    "name_id": name_id,
+                    "name": item_name(name_id),
+                }
+
+            name = item_name(name_id)
+            self.items_found[name] += unmatched
+            if "card" in name.lower():
+                self.cards_found[name] += unmatched
+            return {
+                "recorded": unmatched,
+                "deduplicated": amount - unmatched,
+                "name_id": name_id,
+                "name": name,
+            }
 
     def start(self) -> None:
         with self._lock:
@@ -192,10 +277,23 @@ class SessionTracker:
                         gained = int(current_amount) - previous_amount
                         if gained <= 0:
                             continue
-                        name = current_names.get(name_id) or f"Item {name_id}"
-                        self.items_found[name] += gained
+                        unmatched = self._consume_recent(
+                            self._recent_confirmed_pickups,
+                            name_id=name_id,
+                            amount=gained,
+                            now=now,
+                        )
+                        self._recent_inventory_gains.append({
+                            "timestamp": now,
+                            "name_id": name_id,
+                            "remaining": unmatched,
+                        })
+                        if unmatched <= 0:
+                            continue
+                        name = current_names.get(name_id) or item_name(name_id)
+                        self.items_found[name] += unmatched
                         if "card" in name.lower():
-                            self.cards_found[name] += gained
+                            self.cards_found[name] += unmatched
 
                 self._inventory_totals = current_totals
                 self._inventory_names = current_names
