@@ -18,6 +18,14 @@ from diagnostics.native_action_bridge import native_action_bridge
 
 MEAT_ID = 517
 FLY_WING_ID = 601
+FLAMBERGE_ID = 1129
+LANCE_ID = 1410
+SHIELD_SLOT1_ID = 2106
+PIERCE_SKILL_ID = 56
+
+EQUIP_RIGHT_HAND = 0x02
+EQUIP_LEFT_HAND = 0x20
+EQUIP_BOTH_HANDS = 0x22
 
 
 class ManualAssistant:
@@ -38,6 +46,14 @@ class ManualAssistant:
         self._warnings: list[dict[str, Any]] = []
         self._heals_used = 0
         self._last_heal_result: dict[str, Any] | None = None
+        self._last_equip_stamp: float | None = None
+        self._last_skill_stamp: float | None = None
+        self._last_kill_seq = 0
+        self._pierce_target_id: int | None = None
+        self._pierce_guard_target: int | None = None
+        self._pierce_guard_until = 0.0
+        self._weapon_macro_state = "idle"
+        self._last_weapon_macro_action: dict[str, Any] | None = None
 
     def start_worker(self) -> None:
         with self._lock:
@@ -59,6 +75,178 @@ class ManualAssistant:
                 self._warnings = []
                 self._last_warning_keys.clear()
         return self.snapshot()
+
+    @staticmethod
+    def _find_inventory_id(
+        inventory: list[dict[str, Any]],
+        name_id: int,
+    ) -> dict[str, Any] | None:
+        for row in inventory:
+            try:
+                if int(row.get("name_id") or -1) == int(name_id):
+                    return row
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _ensure_native_bridge() -> bool:
+        if native_action_bridge.snapshot().get("attached"):
+            return True
+        try:
+            result = native_action_bridge.start()
+            return bool(result.get("attached") or result.get("ok"))
+        except Exception:
+            return False
+
+    def _equip_inventory_item(
+        self,
+        inventory: list[dict[str, Any]],
+        *,
+        name_id: int,
+        equip_location: int,
+    ) -> dict[str, Any]:
+        item = self._find_inventory_id(inventory, name_id)
+        if item is None:
+            return {
+                "ok": False,
+                "reason": "item_not_in_inventory",
+                "name_id": int(name_id),
+            }
+        if not self._ensure_native_bridge():
+            return {"ok": False, "reason": "native_bridge_not_ready"}
+        result = native_action_bridge.equip_item(
+            int(item.get("index")),
+            int(equip_location),
+        )
+        return result
+
+    def _restore_flamberge_shield(
+        self,
+        inventory: list[dict[str, Any]],
+        *,
+        reason: str,
+    ) -> None:
+        sword = self._equip_inventory_item(
+            inventory,
+            name_id=FLAMBERGE_ID,
+            equip_location=EQUIP_RIGHT_HAND,
+        )
+        self._stop.wait(0.05)
+        shield = self._equip_inventory_item(
+            inventory,
+            name_id=SHIELD_SLOT1_ID,
+            equip_location=EQUIP_LEFT_HAND,
+        )
+        with self._lock:
+            self._pierce_target_id = None
+            self._weapon_macro_state = "sword_shield"
+            self._last_weapon_macro_action = {
+                "timestamp": time.time(),
+                "action": "restore_flamberge_shield",
+                "reason": reason,
+                "flamberge": sword,
+                "shield": shield,
+            }
+
+    def _update_weapon_macro(
+        self,
+        live: dict[str, Any],
+        inventory: list[dict[str, Any]],
+    ) -> None:
+        if not self.enabled:
+            return
+        if active_hunt_controller.snapshot().get("running"):
+            return
+
+        world = live.get("world") or {}
+
+        equip = world.get("last_client_equip") or {}
+        equip_stamp = equip.get("timestamp")
+        if equip_stamp is not None and float(equip_stamp) != self._last_equip_stamp:
+            self._last_equip_stamp = float(equip_stamp)
+            name_id = int(equip.get("name_id") or 0)
+
+            if name_id == SHIELD_SLOT1_ID:
+                result = self._equip_inventory_item(
+                    inventory,
+                    name_id=FLAMBERGE_ID,
+                    equip_location=EQUIP_RIGHT_HAND,
+                )
+                with self._lock:
+                    self._weapon_macro_state = "sword_shield"
+                    self._last_weapon_macro_action = {
+                        "timestamp": time.time(),
+                        "action": "shield_triggered_flamberge",
+                        "shield_index": equip.get("inventory_index"),
+                        "flamberge": result,
+                    }
+            elif name_id == LANCE_ID:
+                with self._lock:
+                    self._weapon_macro_state = "lance"
+            elif name_id == FLAMBERGE_ID:
+                with self._lock:
+                    if self._weapon_macro_state != "sword_shield":
+                        self._weapon_macro_state = "flamberge"
+
+        skill = world.get("last_client_skill_use") or {}
+        skill_stamp = skill.get("timestamp")
+        if skill_stamp is not None and float(skill_stamp) != self._last_skill_stamp:
+            self._last_skill_stamp = float(skill_stamp)
+            skill_id = int(skill.get("skill_id") or 0)
+            target_id = int(skill.get("target_id") or 0)
+            level = max(1, int(skill.get("skill_level") or 1))
+            now = time.time()
+
+            if skill_id == PIERCE_SKILL_ID and target_id > 0:
+                # Ignore the Pierce packet that we intentionally resend after
+                # equipping Lance. This prevents a recursive macro loop.
+                if (
+                    self._pierce_guard_target == target_id
+                    and now <= self._pierce_guard_until
+                ):
+                    self._pierce_guard_target = None
+                    self._pierce_guard_until = 0.0
+                else:
+                    lance = self._equip_inventory_item(
+                        inventory,
+                        name_id=LANCE_ID,
+                        equip_location=EQUIP_BOTH_HANDS,
+                    )
+                    if lance.get("ok"):
+                        self._stop.wait(0.06)
+                        self._pierce_guard_target = target_id
+                        self._pierce_guard_until = time.time() + 1.0
+                        retry = native_action_bridge.use_skill_to_id(
+                            PIERCE_SKILL_ID,
+                            level,
+                            target_id,
+                        )
+                        with self._lock:
+                            self._pierce_target_id = target_id
+                            self._weapon_macro_state = "pierce_fight"
+                            self._last_weapon_macro_action = {
+                                "timestamp": time.time(),
+                                "action": "pierce_equip_lance_and_retry",
+                                "target_id": target_id,
+                                "skill_level": level,
+                                "lance": lance,
+                                "pierce": retry,
+                            }
+
+        kill_seq = int(live.get("monster_kill_seq") or 0)
+        if kill_seq > self._last_kill_seq:
+            self._last_kill_seq = kill_seq
+            killed = live.get("last_monster_kill") or {}
+            killed_id = int(killed.get("actor_id") or 0)
+            if (
+                self._pierce_target_id is not None
+                and killed_id == int(self._pierce_target_id)
+            ):
+                self._restore_flamberge_shield(
+                    inventory,
+                    reason="pierce_target_confirmed_dead",
+                )
 
     @staticmethod
     def _self_target(world: dict[str, Any]) -> int | None:
@@ -258,6 +446,7 @@ class ManualAssistant:
                         world = live.get("world") or {}
                         inventory = live.get("inventory") or []
                         character = authenticated_client_monitor.character_snapshot()
+                        self._update_weapon_macro(live, inventory)
                         self._maybe_heal(world, inventory)
                         warnings = self._build_warnings(world, inventory, character)
                         new_keys = {str(row.get("key")) for row in warnings}
@@ -290,6 +479,15 @@ class ManualAssistant:
                 "healing_items_used": self._heals_used,
                 "next_heal_threshold": self._next_heal_threshold,
                 "last_heal_result": self._last_heal_result,
+                "weapon_macro": {
+                    "state": self._weapon_macro_state,
+                    "pierce_target_id": self._pierce_target_id,
+                    "last_action": self._last_weapon_macro_action,
+                    "shield_item_id": SHIELD_SLOT1_ID,
+                    "flamberge_item_id": FLAMBERGE_ID,
+                    "lance_item_id": LANCE_ID,
+                    "pierce_skill_id": PIERCE_SKILL_ID,
+                },
             }
 
 
