@@ -111,6 +111,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .combat-mini{background:#0b1018;border:1px solid var(--line);border-radius:9px;padding:8px;min-width:0}
 .combat-mini span{display:block;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .combat-mini strong{display:block;font-size:15px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.combat-session-loot{grid-column:1/-1;background:#0b1018;border:1px solid var(--line);border-radius:9px;padding:8px;min-width:0}
+.combat-session-loot span{display:block;color:var(--muted);font-size:10px;margin-bottom:5px}
+.combat-session-loot div{font-size:11px;line-height:1.35;color:#d8deea;white-space:normal;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
 .combat-character{display:grid;grid-template-columns:1fr 1fr;gap:7px}
 .combat-bar{height:7px;background:#090d13;border-radius:999px;overflow:hidden;margin-top:5px}.combat-bar-fill{height:100%;width:0;background:var(--green)}
 .combat-supplies{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;height:calc(100% - 22px)}
@@ -190,6 +193,10 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             <div class="combat-mini"><span>XP/hour</span><strong id="combatSessionXp">—</strong></div>
             <div class="combat-mini"><span>Zeny/hour</span><strong id="combatSessionZeny">—</strong></div>
             <div class="combat-mini"><span>Deaths</span><strong id="combatSessionDeaths">0</strong></div>
+            <div class="combat-session-loot">
+              <span>Items found this session</span>
+              <div id="combatSessionLoot">No items found yet.</div>
+            </div>
           </div>
         </section>
 
@@ -3560,6 +3567,13 @@ function renderLiveSession(data){
   setText('combatSessionXp',data.xp_per_hour==null?'—':String(data.xp_per_hour));
   setText('combatSessionZeny',data.zeny_per_hour==null?'—':String(data.zeny_per_hour));
   setText('combatSessionDeaths',String(data.deaths??0));
+  const combatLoot=document.getElementById('combatSessionLoot');
+  if(combatLoot){
+    const rows=(data.items_found||[]).slice(0,10);
+    combatLoot.textContent=rows.length
+      ? rows.map(r=>r.name+' ×'+r.amount).join(' · ')
+      : 'No items found yet.';
+  }
   setText('sessionItemsFound',String(data.items_found_total??0));
   setText('sessionCardsFound',String(data.cards_found_total??0));
   setText('sessionItemsUsed',String(data.items_used_total??0));
