@@ -23,6 +23,16 @@ const counters = {
 const hooked = [];
 const recentCalls = [];
 
+// Manual Assistant can arm a tiny in-process pre-send macro. When Classic.exe
+// is about to send Pierce, we synchronously send the Lance equip packet on the
+// same socket first, then let Classic's original Pierce packet continue.
+let piercePreEquipEnabled = false;
+let piercePreEquipIndex = 0;
+let piercePreEquipLocation = 0x22;
+let piercePreEquipSkillId = 56;
+let piercePreEquipInjecting = false;
+let lastPiercePreEquip = null;
+
 function exportPtr(name) {
     const attempts = [];
 
@@ -170,6 +180,59 @@ function inspectBuffer(socket, buf, length, api) {
     }
 }
 
+function maybePreEquipForPierce(socket, buf, length, api) {
+    if (!piercePreEquipEnabled || piercePreEquipInjecting) return;
+    if (sendFn === null || buf.isNull() || length !== 10) return;
+
+    try {
+        if (readByte(buf, 0) !== 0x38 || readByte(buf, 1) !== 0x04) return;
+        const skillId = readByte(buf, 4) | (readByte(buf, 5) << 8);
+        if (skillId !== piercePreEquipSkillId) return;
+
+        const bytes = [
+            0x98, 0x09,
+            piercePreEquipIndex & 0xff,
+            (piercePreEquipIndex >>> 8) & 0xff,
+            piercePreEquipLocation & 0xff,
+            (piercePreEquipLocation >>> 8) & 0xff,
+            (piercePreEquipLocation >>> 16) & 0xff,
+            (piercePreEquipLocation >>> 24) & 0xff
+        ];
+        const packet = Memory.alloc(8);
+        packet.writeByteArray(bytes);
+
+        piercePreEquipInjecting = true;
+        let result = -1;
+        try {
+            result = sendFn(socket, packet, 8, 0);
+        } finally {
+            piercePreEquipInjecting = false;
+        }
+
+        const targetId = (
+            readByte(buf, 6)
+            | (readByte(buf, 7) << 8)
+            | (readByte(buf, 8) << 16)
+            | (readByte(buf, 9) << 24)
+        ) >>> 0;
+        lastPiercePreEquip = {
+            ok: result === 8,
+            bytes_sent: result,
+            inventory_index: piercePreEquipIndex,
+            equip_location: piercePreEquipLocation,
+            skill_id: skillId,
+            target_id: targetId,
+            api: api,
+            socket: socket.toString(),
+            timestamp_ms: Date.now()
+        };
+        send({event: 'pierce_pre_equip', data: lastPiercePreEquip});
+    } catch (e) {
+        piercePreEquipInjecting = false;
+        send({event:'pierce_pre_equip_error', api:api, error:String(e)});
+    }
+}
+
 const sendPtr = exportPtr('send');
 const sendtoPtr = exportPtr('sendto');
 const wsaSendPtr = exportPtr('WSASend');
@@ -186,7 +249,9 @@ if (sendPtr !== null) {
     Interceptor.attach(sendPtr, {
         onEnter(args) {
             counters.send += 1;
-            inspectBuffer(args[0], args[1], args[2].toInt32(), 'send');
+            const length = args[2].toInt32();
+            maybePreEquipForPierce(args[0], args[1], length, 'send');
+            inspectBuffer(args[0], args[1], length, 'send');
         }
     });
 }
@@ -195,7 +260,9 @@ if (sendtoPtr !== null) {
     Interceptor.attach(sendtoPtr, {
         onEnter(args) {
             counters.sendto += 1;
-            inspectBuffer(args[0], args[1], args[2].toInt32(), 'sendto');
+            const length = args[2].toInt32();
+            maybePreEquipForPierce(args[0], args[1], length, 'sendto');
+            inspectBuffer(args[0], args[1], length, 'sendto');
         }
     });
 }
@@ -212,6 +279,7 @@ function inspectWsabufs(socket, wsabufs, count, api) {
         try {
             const len = entry.readU32();
             const buf = entry.add(bufOffset).readPointer();
+            maybePreEquipForPierce(socket, buf, len, api);
             inspectBuffer(socket, buf, len, api);
         } catch (e) {
             send({event: 'wsabuf_error', api: api, error: String(e)});
@@ -262,7 +330,31 @@ rpc.exports = {
             counters: counters,
             hooked_apis: hooked,
             pointer_size: Process.pointerSize,
-            recent_calls: recentCalls
+            recent_calls: recentCalls,
+            pierce_pre_equip: {
+                enabled: piercePreEquipEnabled,
+                inventory_index: piercePreEquipIndex,
+                equip_location: piercePreEquipLocation,
+                skill_id: piercePreEquipSkillId,
+                last: lastPiercePreEquip
+            }
+        };
+    },
+
+    setPiercePreEquip(enabled, index, location, skillId) {
+        piercePreEquipEnabled = Boolean(enabled);
+        piercePreEquipIndex = Math.max(0, Math.min(65535, Number(index) | 0));
+        piercePreEquipLocation = Number(location) >>> 0;
+        piercePreEquipSkillId = Number(skillId) & 0xffff;
+        if (!piercePreEquipEnabled) {
+            lastPiercePreEquip = null;
+        }
+        return {
+            ok: true,
+            enabled: piercePreEquipEnabled,
+            inventory_index: piercePreEquipIndex,
+            equip_location: piercePreEquipLocation,
+            skill_id: piercePreEquipSkillId
         };
     },
 
@@ -948,6 +1040,38 @@ class NativeActionBridge:
         result["executed"] = bool(result.get("ok"))
         result["command"] = "storage_close"
         self._record({"event": "direct_storage_close", "result": result})
+        return result
+
+    def set_pierce_pre_equip(
+        self,
+        enabled: bool,
+        inventory_index: int = 0,
+        equip_location: int = 0x22,
+        skill_id: int = 56,
+    ) -> dict[str, Any]:
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "reason": "bridge_not_running"}
+        try:
+            result = dict(
+                script.exports_sync.set_pierce_pre_equip(
+                    bool(enabled),
+                    int(inventory_index),
+                    int(equip_location),
+                    int(skill_id),
+                )
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+            }
+        self._record({
+            "event": "pierce_pre_equip_config",
+            "result": result,
+        })
         return result
 
     def equip_item(
