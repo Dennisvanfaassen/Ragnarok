@@ -485,6 +485,34 @@ rpc.exports = {
         };
     },
 
+    equipItem(index, location) {
+        if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
+        if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
+        const itemIndex = Math.max(0, Math.min(65535, Number(index) | 0));
+        const equipLocation = Number(location) >>> 0;
+        // Observed Classic.exe packet: 0x0998 CZ_REQ_WEAR_EQUIP
+        // [opcode u16][inventory index u16][equip location u32]
+        const bytes = [
+            0x98, 0x09,
+            itemIndex & 0xff, (itemIndex >>> 8) & 0xff,
+            equipLocation & 0xff,
+            (equipLocation >>> 8) & 0xff,
+            (equipLocation >>> 16) & 0xff,
+            (equipLocation >>> 24) & 0xff
+        ];
+        const packet = Memory.alloc(8);
+        packet.writeByteArray(bytes);
+        const result = sendFn(mapSocket, packet, 8, 0);
+        return {
+            ok: result === 8,
+            bytes_sent: result,
+            inventory_index: itemIndex,
+            equip_location: equipLocation,
+            packet_hex: bytes.map(b=>('0'+b.toString(16)).slice(-2)).join(' '),
+            socket: mapSocket.toString()
+        };
+    },
+
     useSkillToId(skillLevel, skillId, targetId) {
         if (mapSocket === null) return {ok:false, reason:'map_socket_not_learned'};
         if (sendFn === null) return {ok:false, reason:'send_export_unavailable'};
@@ -920,6 +948,42 @@ class NativeActionBridge:
         result["executed"] = bool(result.get("ok"))
         result["command"] = "storage_close"
         self._record({"event": "direct_storage_close", "result": result})
+        return result
+
+    def equip_item(
+        self,
+        inventory_index: int,
+        equip_location: int,
+    ) -> dict[str, Any]:
+        inventory_index = int(inventory_index)
+        equip_location = int(equip_location)
+        if not (0 <= inventory_index <= 65535):
+            return {"ok": False, "executed": False, "reason": "inventory_index_out_of_range"}
+        if not (0 < equip_location <= 0xFFFFFFFF):
+            return {"ok": False, "executed": False, "reason": "equip_location_out_of_range"}
+        with self._lock:
+            script = self._script
+        if script is None:
+            return {"ok": False, "executed": False, "reason": "bridge_not_running"}
+        if not self._agent_status().get("socket_learned"):
+            return {"ok": False, "executed": False, "reason": "map_socket_not_learned"}
+        try:
+            result = dict(
+                script.exports_sync.equip_item(
+                    inventory_index,
+                    equip_location,
+                )
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "executed": False,
+                "reason": "agent_call_failed",
+                "message": str(exc),
+            }
+        result["executed"] = bool(result.get("ok"))
+        result["command"] = "equip_item"
+        self._record({"event": "direct_equip_item", "result": result})
         return result
 
     def use_skill_to_id(
