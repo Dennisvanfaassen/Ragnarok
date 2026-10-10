@@ -489,7 +489,7 @@ class SessionTracker:
                 "loot_unpriced_items": int(unpriced_items),
                 "loot_value": int(loot_zeny_total),
                 "loot_value_note": (
-                    "RateMyServer Pre-Renewal NPC sell values; "
+                    "Supplied rAthena NPC sell values (explicit Sell, otherwise Buy/2); "
                     "Overcharge uses +24% per item."
                 ),
             }
