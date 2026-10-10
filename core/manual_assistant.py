@@ -50,8 +50,6 @@ class ManualAssistant:
         self._last_skill_stamp: float | None = None
         self._last_kill_seq = 0
         self._pierce_target_id: int | None = None
-        self._pierce_guard_target: int | None = None
-        self._pierce_guard_until = 0.0
         self._weapon_macro_state = "idle"
         self._last_weapon_macro_action: dict[str, Any] | None = None
 
@@ -74,6 +72,13 @@ class ManualAssistant:
                 self._next_heal_threshold = None
                 self._warnings = []
                 self._last_warning_keys.clear()
+                self._pierce_target_id = None
+                self._weapon_macro_state = "idle"
+        if not self.enabled:
+            try:
+                native_action_bridge.set_pierce_pre_equip(False)
+            except Exception:
+                pass
         return self.snapshot()
 
     @staticmethod
@@ -120,6 +125,27 @@ class ManualAssistant:
             int(equip_location),
         )
         return result
+
+    def _sync_pierce_pre_equip(
+        self,
+        inventory: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        lance = self._find_inventory_id(inventory, LANCE_ID)
+        if lance is None:
+            try:
+                return native_action_bridge.set_pierce_pre_equip(False)
+            except Exception:
+                return {"ok": False, "reason": "lance_not_in_inventory"}
+
+        if not self._ensure_native_bridge():
+            return {"ok": False, "reason": "native_bridge_not_ready"}
+
+        return native_action_bridge.set_pierce_pre_equip(
+            True,
+            int(lance.get("index")),
+            EQUIP_BOTH_HANDS,
+            PIERCE_SKILL_ID,
+        )
 
     def _restore_flamberge_shield(
         self,
@@ -199,40 +225,19 @@ class ManualAssistant:
             now = time.time()
 
             if skill_id == PIERCE_SKILL_ID and target_id > 0:
-                # Ignore the Pierce packet that we intentionally resend after
-                # equipping Lance. This prevents a recursive macro loop.
-                if (
-                    self._pierce_guard_target == target_id
-                    and now <= self._pierce_guard_until
-                ):
-                    self._pierce_guard_target = None
-                    self._pierce_guard_until = 0.0
-                else:
-                    lance = self._equip_inventory_item(
-                        inventory,
-                        name_id=LANCE_ID,
-                        equip_location=EQUIP_BOTH_HANDS,
-                    )
-                    if lance.get("ok"):
-                        self._stop.wait(0.06)
-                        self._pierce_guard_target = target_id
-                        self._pierce_guard_until = time.time() + 1.0
-                        retry = native_action_bridge.use_skill_to_id(
-                            PIERCE_SKILL_ID,
-                            level,
-                            target_id,
-                        )
-                        with self._lock:
-                            self._pierce_target_id = target_id
-                            self._weapon_macro_state = "pierce_fight"
-                            self._last_weapon_macro_action = {
-                                "timestamp": time.time(),
-                                "action": "pierce_equip_lance_and_retry",
-                                "target_id": target_id,
-                                "skill_level": level,
-                                "lance": lance,
-                                "pierce": retry,
-                            }
+                # Lance was already injected synchronously by the native send
+                # hook immediately before Classic.exe's original Pierce packet.
+                # Here we only remember the target so the normal sword+shield
+                # loadout can be restored after this exact monster dies.
+                with self._lock:
+                    self._pierce_target_id = target_id
+                    self._weapon_macro_state = "pierce_fight"
+                    self._last_weapon_macro_action = {
+                        "timestamp": time.time(),
+                        "action": "pierce_pre_equipped_native",
+                        "target_id": target_id,
+                        "skill_level": level,
+                    }
 
         kill_seq = int(live.get("monster_kill_seq") or 0)
         if kill_seq > self._last_kill_seq:
@@ -446,6 +451,7 @@ class ManualAssistant:
                         world = live.get("world") or {}
                         inventory = live.get("inventory") or []
                         character = authenticated_client_monitor.character_snapshot()
+                        self._sync_pierce_pre_equip(inventory)
                         self._update_weapon_macro(live, inventory)
                         self._maybe_heal(world, inventory)
                         warnings = self._build_warnings(world, inventory, character)
