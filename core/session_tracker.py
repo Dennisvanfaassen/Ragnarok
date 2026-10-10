@@ -18,6 +18,31 @@ class SessionTracker:
         self.reset()
 
     def reset(self) -> dict[str, Any]:
+        # Take a synchronous live snapshot first. Resetting sequence counters to
+        # zero would make the next observer pass re-count all historical kills,
+        # EXP events and inventory as if they happened in the new session.
+        snapshot = authenticated_client_monitor.snapshot()
+        live = snapshot.get("live_state") or {}
+        world = live.get("world") or {}
+        inventory = self._inventory_by_index(snapshot)
+
+        current_totals: dict[int, int] = {}
+        current_names: dict[int, str] = {}
+        for row in inventory.values():
+            try:
+                name_id = int(row.get("name_id") or 0)
+            except Exception:
+                name_id = 0
+            if name_id <= 0:
+                continue
+            current_totals[name_id] = (
+                int(current_totals.get(name_id) or 0)
+                + int(row.get("amount") or 0)
+            )
+            current_names[name_id] = str(
+                row.get("name") or f"Item {name_id}"
+            )
+
         with self._lock:
             now = time.time()
             self.started_at = now
@@ -28,24 +53,36 @@ class SessionTracker:
             self.cards_found: Counter[str] = Counter()
             self.items_used: Counter[str] = Counter()
             self._known_actors: dict[int, dict[str, Any]] = {}
-            self._inventory: dict[int, dict[str, Any]] = {}
-            self._inventory_totals: dict[int, int] = {}
-            self._inventory_names: dict[int, str] = {}
-            self._inventory_baseline_ready = False
-            self._last_exp_gain_seq = 0
+            self._inventory: dict[int, dict[str, Any]] = inventory
+            self._inventory_totals: dict[int, int] = current_totals
+            self._inventory_names: dict[int, str] = current_names
+            self._inventory_baseline_totals: dict[int, int] = dict(current_totals)
+            self._inventory_baseline_ready = bool(current_totals or inventory)
+            self._last_exp_gain_seq = int(live.get("exp_gain_seq") or 0)
             self._last_combat_stamp: float | None = None
             self._last_combat_target: int | None = None
-            self._last_monster_kill_seq = 0
-            self._last_inventory_gain_seq = 0
-            self._last_item_use_stamp: float | None = None
-            self._last_hp: int | None = None
-            self._last_base_exp: int | None = None
-            self._last_base_exp_next: int | None = None
-            self._last_base_level: int | None = None
-            self._last_zeny: int | None = None
+            self._last_monster_kill_seq = int(live.get("monster_kill_seq") or 0)
+            self._last_inventory_gain_seq = int(live.get("inventory_gain_seq") or 0)
+            item_use = world.get("last_client_item_use") or {}
+            use_stamp = item_use.get("timestamp")
+            self._last_item_use_stamp = (
+                float(use_stamp) if use_stamp is not None else None
+            )
+            hp = world.get("hp")
+            self._last_hp = int(hp) if hp is not None else None
+            base_exp = world.get("base_exp")
+            self._last_base_exp = int(base_exp) if base_exp is not None else None
+            base_exp_next = world.get("base_exp_next")
+            self._last_base_exp_next = (
+                int(base_exp_next) if base_exp_next is not None else None
+            )
+            base_level = world.get("base_level")
+            self._last_base_level = int(base_level) if base_level is not None else None
+            zeny = world.get("zeny")
+            self._last_zeny = int(zeny) if zeny is not None else None
             self.xp_gained = 0
             self.zeny_gained = 0
-            self._last_map: str | None = None
+            self._last_map = str(world.get("map") or "").strip() or None
             self._map_started_at = now
             self._time_by_map: dict[str, float] = {}
         return self.snapshot()
@@ -137,20 +174,32 @@ class SessionTracker:
                     row.get("name") or f"Item {name_id}"
                 )
 
-            if self._inventory_baseline_ready:
-                for name_id, current_amount in current_totals.items():
-                    previous_amount = int(self._inventory_totals.get(name_id) or 0)
-                    gained = int(current_amount) - previous_amount
-                    if gained <= 0:
-                        continue
-                    name = current_names.get(name_id) or f"Item {name_id}"
-                    self.items_found[name] += gained
-                    if "card" in name.lower():
-                        self.cards_found[name] += gained
+            inventory_snapshot_usable = bool(inventory)
+            if (
+                self._inventory_baseline_ready
+                and self._inventory_totals
+                and not inventory_snapshot_usable
+            ):
+                # Inventory list refreshes can briefly expose an empty list.
+                # Never treat that transient gap as "all items removed", because
+                # the following full refresh would count the entire inventory as
+                # newly found loot.
+                pass
+            else:
+                if self._inventory_baseline_ready:
+                    for name_id, current_amount in current_totals.items():
+                        previous_amount = int(self._inventory_totals.get(name_id) or 0)
+                        gained = int(current_amount) - previous_amount
+                        if gained <= 0:
+                            continue
+                        name = current_names.get(name_id) or f"Item {name_id}"
+                        self.items_found[name] += gained
+                        if "card" in name.lower():
+                            self.cards_found[name] += gained
 
-            self._inventory_totals = current_totals
-            self._inventory_names = current_names
-            self._inventory_baseline_ready = True
+                self._inventory_totals = current_totals
+                self._inventory_names = current_names
+                self._inventory_baseline_ready = True
 
             item_use = world.get("last_client_item_use") or {}
             use_stamp = item_use.get("timestamp")
@@ -257,8 +306,33 @@ class SessionTracker:
                 "deaths": self.deaths,
                 "items_found_total": int(sum(self.items_found.values())),
                 "items_found": [
-                    {"name": name, "amount": amount}
+                    {
+                        "name": name,
+                        "amount": amount,
+                        "current_amount": int(sum(
+                            qty
+                            for name_id, qty in self._inventory_totals.items()
+                            if self._inventory_names.get(name_id) == name
+                        )),
+                    }
                     for name, amount in self.items_found.most_common(30)
+                ],
+                "inventory_current": [
+                    {
+                        "name_id": int(name_id),
+                        "name": self._inventory_names.get(name_id) or f"Item {name_id}",
+                        "amount": int(amount),
+                        "session_start_amount": int(
+                            self._inventory_baseline_totals.get(name_id) or 0
+                        ),
+                    }
+                    for name_id, amount in sorted(
+                        self._inventory_totals.items(),
+                        key=lambda row: (
+                            (self._inventory_names.get(row[0]) or "").lower(),
+                            row[0],
+                        ),
+                    )
                 ],
                 "cards_found_total": int(sum(self.cards_found.values())),
                 "cards_found": [
