@@ -191,8 +191,11 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
             <div class="combat-mini"><span>Cards</span><strong id="combatSessionCards">0</strong></div>
             <div class="combat-mini"><span>Items used</span><strong id="combatSessionUsed">0</strong></div>
             <div class="combat-mini"><span>XP/hour</span><strong id="combatSessionXp">—</strong></div>
-            <div class="combat-mini"><span>Zeny/hour</span><strong id="combatSessionZeny">—</strong></div>
+            <div class="combat-mini"><span>Zeny/hour</span><strong id="combatSessionZeny">0z</strong></div>
             <div class="combat-mini"><span>Deaths</span><strong id="combatSessionDeaths">0</strong></div>
+            <div class="combat-mini"><span>Session zeny</span><strong id="combatSessionZenyTotal">0z</strong></div>
+            <div class="combat-mini"><span>With Overcharge</span><strong id="combatSessionZenyOc">0z</strong></div>
+            <div class="combat-mini"><span>Unpriced loot</span><strong id="combatSessionUnpriced">0</strong></div>
             <div class="combat-session-loot">
               <span>Items found this session</span>
               <div id="combatSessionLoot">No items found yet.</div>
@@ -3565,13 +3568,20 @@ function renderLiveSession(data){
   setText('combatSessionCards',String(data.cards_found_total??0));
   setText('combatSessionUsed',String(data.items_used_total??0));
   setText('combatSessionXp',data.xp_per_hour==null?'—':String(data.xp_per_hour));
-  setText('combatSessionZeny',data.zeny_per_hour==null?'—':String(data.zeny_per_hour));
+  const fmtZeny=v=>Math.round(+v||0).toLocaleString()+'z';
+  setText('combatSessionZeny',fmtZeny(data.loot_zeny_per_hour));
   setText('combatSessionDeaths',String(data.deaths??0));
+  setText('combatSessionZenyTotal',fmtZeny(data.loot_zeny_total));
+  setText('combatSessionZenyOc',fmtZeny(data.loot_zeny_overcharge_total));
+  setText('combatSessionUnpriced',String(data.loot_unpriced_items??0));
   const combatLoot=document.getElementById('combatSessionLoot');
   if(combatLoot){
     const rows=(data.items_found||[]).slice(0,10);
     combatLoot.textContent=rows.length
-      ? rows.map(r=>r.name+' ×'+r.amount).join(' · ')
+      ? rows.map(r=>{
+          const value=r.npc_value==null?'':(' · '+Math.round(+r.npc_value||0).toLocaleString()+'z');
+          return r.name+' ×'+r.amount+value;
+        }).join(' · ')
       : 'No items found yet.';
   }
   setText('sessionItemsFound',String(data.items_found_total??0));
