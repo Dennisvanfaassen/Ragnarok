@@ -6,6 +6,7 @@ from collections import Counter, deque
 from typing import Any
 
 from core.openkore_data import item_name
+from core.npc_prices import npc_sell_prices
 from diagnostics.authenticated_client import authenticated_client_monitor
 
 
@@ -51,6 +52,7 @@ class SessionTracker:
             self.kills = 0
             self.deaths = 0
             self.items_found: Counter[str] = Counter()
+            self._item_name_ids: dict[str, int] = {}
             self.cards_found: Counter[str] = Counter()
             self.items_used: Counter[str] = Counter()
             self._recent_confirmed_pickups: deque[dict[str, Any]] = deque(maxlen=200)
@@ -162,6 +164,8 @@ class SessionTracker:
                 }
 
             name = item_name(name_id)
+            self._item_name_ids[name] = name_id
+            npc_sell_prices.ensure(name_id)
             self.items_found[name] += unmatched
             if "card" in name.lower():
                 self.cards_found[name] += unmatched
@@ -291,6 +295,8 @@ class SessionTracker:
                         if unmatched <= 0:
                             continue
                         name = current_names.get(name_id) or item_name(name_id)
+                        self._item_name_ids[name] = name_id
+                        npc_sell_prices.ensure(name_id)
                         self.items_found[name] += unmatched
                         if "card" in name.lower():
                             self.cards_found[name] += unmatched
@@ -390,6 +396,47 @@ class SessionTracker:
                     + current_map_elapsed
                 )
 
+            loot_rows = []
+            loot_zeny_total = 0
+            loot_zeny_overcharge_total = 0
+            unpriced_items = 0
+            for name, amount in self.items_found.most_common(30):
+                name_id = int(self._item_name_ids.get(name) or 0)
+                sell_price = npc_sell_prices.get(name_id) if name_id > 0 else None
+                row_value = None
+                row_value_overcharge = None
+                if sell_price is not None:
+                    row_value = int(sell_price) * int(amount)
+                    overcharge_unit = (int(sell_price) * 124) // 100
+                    row_value_overcharge = overcharge_unit * int(amount)
+                    loot_zeny_total += row_value
+                    loot_zeny_overcharge_total += row_value_overcharge
+                else:
+                    unpriced_items += int(amount)
+
+                loot_rows.append({
+                    "name_id": name_id or None,
+                    "name": name,
+                    "amount": int(amount),
+                    "current_amount": int(sum(
+                        qty
+                        for inv_name_id, qty in self._inventory_totals.items()
+                        if self._inventory_names.get(inv_name_id) == name
+                    )),
+                    "npc_sell_price": sell_price,
+                    "npc_value": row_value,
+                    "npc_value_overcharge": row_value_overcharge,
+                })
+
+            loot_zeny_per_hour = (
+                round(loot_zeny_total / hours, 1)
+                if hours > 0 else 0.0
+            )
+            loot_zeny_overcharge_per_hour = (
+                round(loot_zeny_overcharge_total / hours, 1)
+                if hours > 0 else 0.0
+            )
+
             return {
                 "status": "running",
                 "started_at": self.started_at,
@@ -403,18 +450,7 @@ class SessionTracker:
                 "monsters_per_hour": round(self.kills / hours, 1) if hours > 0 else 0.0,
                 "deaths": self.deaths,
                 "items_found_total": int(sum(self.items_found.values())),
-                "items_found": [
-                    {
-                        "name": name,
-                        "amount": amount,
-                        "current_amount": int(sum(
-                            qty
-                            for name_id, qty in self._inventory_totals.items()
-                            if self._inventory_names.get(name_id) == name
-                        )),
-                    }
-                    for name, amount in self.items_found.most_common(30)
-                ],
+                "items_found": loot_rows,
                 "inventory_current": [
                     {
                         "name_id": int(name_id),
@@ -446,8 +482,16 @@ class SessionTracker:
                 "xp_per_hour": round(self.xp_gained / hours, 1) if hours > 0 else 0.0,
                 "zeny_gained": int(self.zeny_gained),
                 "zeny_per_hour": round(self.zeny_gained / hours, 1) if hours > 0 else 0.0,
-                "loot_value": None,
-                "loot_value_note": "Item pricing is not configured yet.",
+                "loot_zeny_total": int(loot_zeny_total),
+                "loot_zeny_per_hour": loot_zeny_per_hour,
+                "loot_zeny_overcharge_total": int(loot_zeny_overcharge_total),
+                "loot_zeny_overcharge_per_hour": loot_zeny_overcharge_per_hour,
+                "loot_unpriced_items": int(unpriced_items),
+                "loot_value": int(loot_zeny_total),
+                "loot_value_note": (
+                    "RateMyServer Pre-Renewal NPC sell values; "
+                    "Overcharge uses +24% per item."
+                ),
             }
 
 
