@@ -272,6 +272,12 @@ class AuthenticatedClientMonitor:
         self._exp_gain_events: deque[dict[str, Any]] = deque(maxlen=200)
         self._last_exp_gain: dict[str, Any] | None = None
         self._inventory_baseline_ready = False
+        # Item-use requests are visible immediately in Classic.exe's outgoing
+        # traffic, while this server does not consistently send the matching
+        # inventory-remove update. Keep a small pending acknowledgement queue
+        # per inventory index so the live stack can be adjusted immediately
+        # without double-subtracting if 0x00AF arrives later.
+        self._pending_inventory_consumptions: dict[int, deque[float]] = {}
         self._inventory: dict[int, dict[str, Any]] = {}
         self._storage: dict[int, dict[str, Any]] = {}
         self._skills: dict[int, dict[str, Any]] = {}
@@ -1068,15 +1074,40 @@ class AuthenticatedClientMonitor:
                 elif opcode == 0x00AF:
                     index = int(decoded["index"])
                     removed = int(decoded["amount"])
+
+                    # A matching outgoing 0x0439 item-use may already have
+                    # reduced the local shadow stack. Consume those pending
+                    # acknowledgements first so the same use is never applied
+                    # twice when the server does send 0x00AF.
+                    pending = self._pending_inventory_consumptions.get(index)
+                    acknowledged = 0
+                    if pending:
+                        # Discard ancient entries; a delayed packet after this
+                        # window should be treated as a fresh authoritative
+                        # removal instead of an acknowledgement.
+                        while pending and now - float(pending[0]) > 10.0:
+                            pending.popleft()
+                        acknowledged = min(removed, len(pending))
+                        for _ in range(acknowledged):
+                            pending.popleft()
+                        if not pending:
+                            self._pending_inventory_consumptions.pop(index, None)
+
+                    unapplied = max(0, removed - acknowledged)
                     current = self._inventory.get(index)
-                    if current is not None:
-                        remaining = max(0, int(current.get("amount") or 0) - removed)
+                    if current is not None and unapplied > 0:
+                        remaining = max(
+                            0,
+                            int(current.get("amount") or 0) - unapplied,
+                        )
                         if remaining <= 0:
                             self._inventory.pop(index, None)
                         else:
                             current = dict(current)
                             current["amount"] = remaining
                             self._inventory[index] = current
+
+                    if current is not None or acknowledged > 0:
                         self._item_list_updated_at["inventory"] = now
 
                 elif opcode == 0x0A0A:
@@ -1221,6 +1252,10 @@ class AuthenticatedClientMonitor:
 
                 for item in items:
                     self._inventory[int(item["index"])] = dict(item)
+                # A complete inventory list is authoritative and supersedes
+                # all optimistic item-use adjustments made since the previous
+                # list. Any later 0x00AF must therefore be treated normally.
+                self._pending_inventory_consumptions.clear()
                 self._inventory_baseline_ready = True
                 self._item_list_updated_at["inventory"] = now
             elif list_name == "storage":
@@ -1488,13 +1523,43 @@ class AuthenticatedClientMonitor:
                 packet = payload[i:i + 8]
                 inventory_index = int.from_bytes(packet[2:4], "little")
                 target_id = int.from_bytes(packet[4:8], "little")
+                now = time.time()
                 row = self._inventory.get(inventory_index)
+
+                amount_before = (
+                    int(row.get("amount") or 0)
+                    if row is not None
+                    else None
+                )
+                amount_after = amount_before
+                shadow_adjusted = False
+
+                if row is not None and amount_before is not None and amount_before > 0:
+                    amount_after = amount_before - 1
+                    updated = dict(row)
+                    if amount_after <= 0:
+                        self._inventory.pop(inventory_index, None)
+                    else:
+                        updated["amount"] = amount_after
+                        self._inventory[inventory_index] = updated
+
+                    pending = self._pending_inventory_consumptions.setdefault(
+                        inventory_index,
+                        deque(),
+                    )
+                    pending.append(now)
+                    shadow_adjusted = True
+                    self._item_list_updated_at["inventory"] = now
+
                 self._world["last_client_item_use"] = {
-                    "timestamp": time.time(),
+                    "timestamp": now,
                     "inventory_index": inventory_index,
                     "target_id": target_id,
                     "name_id": int(row.get("name_id") or 0) if row else None,
                     "name": row.get("name") if row else None,
+                    "amount_before": amount_before,
+                    "amount_after": amount_after,
+                    "shadow_adjusted": shadow_adjusted,
                 }
                 self._parsed_counts["client_item_use"] = (
                     int(self._parsed_counts.get("client_item_use") or 0) + 1
