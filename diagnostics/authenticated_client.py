@@ -754,7 +754,10 @@ class AuthenticatedClientMonitor:
             # count as kills.
             if vanish_type == 1 and actor and actor.get("kind") == "monster":
                 attacked_at = self._self_attack_targets.get(actor_id)
-                if attacked_at is not None and now - float(attacked_at) <= 12.0:
+                # Slower monsters can take well over 12 seconds to die after
+                # the initial attack command. Keep ownership long enough for a
+                # normal sustained fight while still expiring stale targets.
+                if attacked_at is not None and now - float(attacked_at) <= 60.0:
                     self._monster_kill_seq += 1
                     self._last_monster_kill = {
                         "seq": self._monster_kill_seq,
