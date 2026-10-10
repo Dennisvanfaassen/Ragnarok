@@ -253,7 +253,6 @@ class AuthenticatedClientMonitor:
             "last_combat": None,
             "last_client_action": None,
             "last_client_item_use": None,
-            "last_client_skill_use": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
         # Session-wide monster encounter history. Unlike _actors this is not
@@ -308,7 +307,6 @@ class AuthenticatedClientMonitor:
             "sync": 0,
             "combat": 0,
             "client_action": 0,
-            "client_skill_use": 0,
             "item_seen": 0,
             "item_removed": 0,
             "skills_list": 0,
@@ -1515,28 +1513,6 @@ class AuthenticatedClientMonitor:
             if opcode == 0x0436 and i + 23 <= size:
                 self._parse_client_map_packet(payload[i:i + 23])
                 i += 23
-                continue
-
-            # 0438 skill_use: level u16, skill id u16, target actor id u32.
-            # Capture manual skill use so Manual Assistant can react to the
-            # exact monster the player targeted without screen coordinates.
-            if opcode == 0x0438 and i + 10 <= size:
-                packet = payload[i:i + 10]
-                skill_level = int.from_bytes(packet[2:4], "little")
-                skill_id = int.from_bytes(packet[4:6], "little")
-                target_id = int.from_bytes(packet[6:10], "little")
-                now = time.time()
-                self._world["last_client_skill_use"] = {
-                    "timestamp": now,
-                    "skill_level": skill_level,
-                    "skill_id": skill_id,
-                    "target_id": target_id,
-                    "opcode": "0x0438",
-                }
-                self._parsed_counts["client_skill_use"] = (
-                    int(self._parsed_counts.get("client_skill_use") or 0) + 1
-                )
-                i += 10
                 continue
 
             # 0439 item_use: inventory index a2, targetID a4.
