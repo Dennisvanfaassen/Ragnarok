@@ -13,6 +13,7 @@ from core.monster_density import monster_density_tracker
 from core.openkore_data import item_name
 from core.pathing import astar, build_pathing_state, clear_walk_line, nav_repository
 from core.state import app_state
+from core.session_tracker import session_tracker
 from core.targeting import build_targeting_state
 from diagnostics.authenticated_client import authenticated_client_monitor
 from diagnostics.hunt_recorder import hunting_diagnostic_recorder
@@ -3080,6 +3081,25 @@ class HuntingAI:
             if item_id not in ids:
                 self.loot_retry.pop(item_id, None)
                 self._loot_first_attempt_at.pop(item_id, None)
+
+                # The floor item disappearing after our pickup request is the
+                # strongest confirmation available on this client that the
+                # loot was actually collected. Record it directly so session
+                # loot statistics do not depend on an unreliable existing-
+                # stack inventory refresh packet.
+                loot_record = session_tracker.record_confirmed_loot(
+                    name_id=int(item.get("name_id") or 0),
+                    amount=max(1, int(item.get("amount") or 1)),
+                    floor_item_id=item_id,
+                )
+                self._log(
+                    "loot_confirmed",
+                    item_id=item_id,
+                    item_name_id=item.get("name_id"),
+                    amount=max(1, int(item.get("amount") or 1)),
+                    session_record=loot_record,
+                )
+
                 hunt = app_state.get_profile().hunt
                 low = max(0.0, float(hunt.loot_between_items_min))
                 high = max(low, float(hunt.loot_between_items_max))
