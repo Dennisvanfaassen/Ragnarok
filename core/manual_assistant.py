@@ -52,6 +52,8 @@ class ManualAssistant:
         self._pierce_target_id: int | None = None
         self._weapon_macro_state = "idle"
         self._last_weapon_macro_action: dict[str, Any] | None = None
+        self._pierce_hook_inventory_index: int | None = None
+        self._pierce_hook_enabled = False
 
     def start_worker(self) -> None:
         with self._lock:
@@ -74,6 +76,8 @@ class ManualAssistant:
                 self._last_warning_keys.clear()
                 self._pierce_target_id = None
                 self._weapon_macro_state = "idle"
+                self._pierce_hook_inventory_index = None
+                self._pierce_hook_enabled = False
         if not self.enabled:
             try:
                 native_action_bridge.set_pierce_pre_equip(False)
@@ -130,22 +134,56 @@ class ManualAssistant:
         self,
         inventory: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        # This macro belongs to Manual Assistant only. Never let the socket
+        # hook alter autonomous Hunt skill packets.
+        if active_hunt_controller.snapshot().get("running"):
+            if self._pierce_hook_enabled:
+                try:
+                    result = native_action_bridge.set_pierce_pre_equip(False)
+                except Exception:
+                    result = {"ok": False, "reason": "disable_failed"}
+                self._pierce_hook_enabled = False
+                self._pierce_hook_inventory_index = None
+                return result
+            return {"ok": True, "enabled": False, "reason": "active_hunt_running"}
+
         lance = self._find_inventory_id(inventory, LANCE_ID)
         if lance is None:
-            try:
-                return native_action_bridge.set_pierce_pre_equip(False)
-            except Exception:
-                return {"ok": False, "reason": "lance_not_in_inventory"}
+            if self._pierce_hook_enabled:
+                try:
+                    result = native_action_bridge.set_pierce_pre_equip(False)
+                except Exception:
+                    result = {"ok": False, "reason": "disable_failed"}
+                self._pierce_hook_enabled = False
+                self._pierce_hook_inventory_index = None
+                return result
+            return {"ok": False, "enabled": False, "reason": "lance_not_in_inventory"}
+
+        lance_index = int(lance.get("index"))
+        if (
+            self._pierce_hook_enabled
+            and self._pierce_hook_inventory_index == lance_index
+        ):
+            return {
+                "ok": True,
+                "enabled": True,
+                "inventory_index": lance_index,
+                "unchanged": True,
+            }
 
         if not self._ensure_native_bridge():
             return {"ok": False, "reason": "native_bridge_not_ready"}
 
-        return native_action_bridge.set_pierce_pre_equip(
+        result = native_action_bridge.set_pierce_pre_equip(
             True,
-            int(lance.get("index")),
+            lance_index,
             EQUIP_BOTH_HANDS,
             PIERCE_SKILL_ID,
         )
+        if result.get("ok"):
+            self._pierce_hook_enabled = True
+            self._pierce_hook_inventory_index = lance_index
+        return result
 
     def _restore_flamberge_shield(
         self,
