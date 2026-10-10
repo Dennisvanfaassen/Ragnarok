@@ -253,6 +253,8 @@ class AuthenticatedClientMonitor:
             "last_combat": None,
             "last_client_action": None,
             "last_client_item_use": None,
+            "last_client_skill_use": None,
+            "last_client_equip": None,
         }
         self._actors: dict[int, dict[str, Any]] = {}
         # Session-wide monster encounter history. Unlike _actors this is not
@@ -307,6 +309,8 @@ class AuthenticatedClientMonitor:
             "sync": 0,
             "combat": 0,
             "client_action": 0,
+            "client_skill_use": 0,
+            "client_equip": 0,
             "item_seen": 0,
             "item_removed": 0,
             "skills_list": 0,
@@ -1513,6 +1517,48 @@ class AuthenticatedClientMonitor:
             if opcode == 0x0436 and i + 23 <= size:
                 self._parse_client_map_packet(payload[i:i + 23])
                 i += 23
+                continue
+
+            # 0998 equip request observed from Classic.exe:
+            # [opcode u16][inventory index u16][equip location u32].
+            if opcode == 0x0998 and i + 8 <= size:
+                packet = payload[i:i + 8]
+                inventory_index = int.from_bytes(packet[2:4], "little")
+                equip_location = int.from_bytes(packet[4:8], "little")
+                row = self._inventory.get(inventory_index)
+                now = time.time()
+                self._world["last_client_equip"] = {
+                    "timestamp": now,
+                    "inventory_index": inventory_index,
+                    "equip_location": equip_location,
+                    "name_id": int(row.get("name_id") or 0) if row else None,
+                    "name": row.get("name") if row else None,
+                    "opcode": "0x0998",
+                }
+                self._parsed_counts["client_equip"] = (
+                    int(self._parsed_counts.get("client_equip") or 0) + 1
+                )
+                i += 8
+                continue
+
+            # 0438 skill_use: level u16, skill id u16, target actor id u32.
+            if opcode == 0x0438 and i + 10 <= size:
+                packet = payload[i:i + 10]
+                skill_level = int.from_bytes(packet[2:4], "little")
+                skill_id = int.from_bytes(packet[4:6], "little")
+                target_id = int.from_bytes(packet[6:10], "little")
+                now = time.time()
+                self._world["last_client_skill_use"] = {
+                    "timestamp": now,
+                    "skill_level": skill_level,
+                    "skill_id": skill_id,
+                    "target_id": target_id,
+                    "opcode": "0x0438",
+                }
+                self._parsed_counts["client_skill_use"] = (
+                    int(self._parsed_counts.get("client_skill_use") or 0) + 1
+                )
+                i += 10
                 continue
 
             # 0439 item_use: inventory index a2, targetID a4.
