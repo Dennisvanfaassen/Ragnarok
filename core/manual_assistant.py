@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import random
 import threading
 import time
@@ -18,6 +19,12 @@ from diagnostics.native_action_bridge import native_action_bridge
 
 MEAT_ID = 517
 FLY_WING_ID = 601
+PIERCE_SKILL_ID = 56
+VK_Q = 0x51
+VK_W = 0x57
+VK_E = 0x45
+VK_R = 0x52
+KEYEVENTF_KEYUP = 0x0002
 
 
 class ManualAssistant:
@@ -30,6 +37,7 @@ class ManualAssistant:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
+        self._hotkey_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.enabled = False
         self._next_heal_threshold: int | None = None
@@ -38,6 +46,13 @@ class ManualAssistant:
         self._warnings: list[dict[str, Any]] = []
         self._heals_used = 0
         self._last_heal_result: dict[str, Any] | None = None
+        self._pierce_armed_at: float | None = None
+        self._pierce_target_id: int | None = None
+        self._pierce_last_skill_stamp: float | None = None
+        self._pierce_last_kill_seq = 0
+        self._pierce_macro_state = "idle"
+        self._pierce_last_action: dict[str, Any] | None = None
+        self._r_was_down = False
 
     def start_worker(self) -> None:
         with self._lock:
@@ -50,6 +65,13 @@ class ManualAssistant:
                 name="manual-play-assistant",
             )
             self._thread.start()
+            if not self._hotkey_thread or not self._hotkey_thread.is_alive():
+                self._hotkey_thread = threading.Thread(
+                    target=self._hotkey_loop,
+                    daemon=True,
+                    name="manual-pierce-hotkey",
+                )
+                self._hotkey_thread.start()
 
     def set_enabled(self, enabled: bool) -> dict[str, Any]:
         with self._lock:
@@ -58,7 +80,120 @@ class ManualAssistant:
                 self._next_heal_threshold = None
                 self._warnings = []
                 self._last_warning_keys.clear()
+                self._pierce_armed_at = None
+                self._pierce_target_id = None
+                self._pierce_macro_state = "idle"
         return self.snapshot()
+
+    @staticmethod
+    def _press_virtual_key(vk: int) -> bool:
+        """Send a normal Windows key press to the foreground game client."""
+        try:
+            user32 = ctypes.windll.user32
+            user32.keybd_event(int(vk), 0, 0, 0)
+            time.sleep(0.012)
+            user32.keybd_event(int(vk), 0, KEYEVENTF_KEYUP, 0)
+            return True
+        except Exception:
+            return False
+
+    def _restore_sword_and_shield(self, reason: str) -> None:
+        # W = Flamberge, Q = Shield in the user's configured RO hotkeys.
+        w_ok = self._press_virtual_key(VK_W)
+        time.sleep(0.055)
+        q_ok = self._press_virtual_key(VK_Q)
+        with self._lock:
+            self._pierce_last_action = {
+                "timestamp": time.time(),
+                "action": "restore_flambere_shield",
+                "reason": reason,
+                "w_ok": w_ok,
+                "q_ok": q_ok,
+                "target_id": self._pierce_target_id,
+            }
+            self._pierce_armed_at = None
+            self._pierce_target_id = None
+            self._pierce_macro_state = "idle"
+
+    def _arm_pierce_macro(self) -> None:
+        if not self.enabled:
+            return
+        if active_hunt_controller.snapshot().get("running"):
+            return
+
+        # E = Lance. We do this as soon as R is physically pressed. The player
+        # still chooses the monster normally with Ragnarok's Pierce target
+        # cursor; no screen coordinates or target automation are involved.
+        ok = self._press_virtual_key(VK_E)
+        with self._lock:
+            self._pierce_armed_at = time.time()
+            self._pierce_macro_state = "lance_armed"
+            self._pierce_last_action = {
+                "timestamp": self._pierce_armed_at,
+                "action": "equip_lance",
+                "e_ok": ok,
+            }
+
+    def _hotkey_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                if self.enabled and not active_hunt_controller.snapshot().get("running"):
+                    down = bool(ctypes.windll.user32.GetAsyncKeyState(VK_R) & 0x8000)
+                    if down and not self._r_was_down:
+                        self._arm_pierce_macro()
+                    self._r_was_down = down
+                else:
+                    self._r_was_down = False
+            except Exception:
+                self._r_was_down = False
+            self._stop.wait(0.01)
+
+    def _update_pierce_macro(self, live: dict[str, Any]) -> None:
+        if not self.enabled or active_hunt_controller.snapshot().get("running"):
+            return
+
+        world = live.get("world") or {}
+        skill = world.get("last_client_skill_use") or {}
+        skill_stamp = skill.get("timestamp")
+        if skill_stamp is not None and float(skill_stamp) != self._pierce_last_skill_stamp:
+            self._pierce_last_skill_stamp = float(skill_stamp)
+            if (
+                int(skill.get("skill_id") or 0) == PIERCE_SKILL_ID
+                and self._pierce_armed_at is not None
+                and float(skill_stamp) >= self._pierce_armed_at - 0.5
+            ):
+                target_id = int(skill.get("target_id") or 0)
+                if target_id > 0:
+                    with self._lock:
+                        self._pierce_target_id = target_id
+                        self._pierce_macro_state = "pierce_fight"
+                        self._pierce_last_action = {
+                            "timestamp": time.time(),
+                            "action": "pierce_target_locked",
+                            "target_id": target_id,
+                            "skill_level": int(skill.get("skill_level") or 0),
+                        }
+
+        kill_seq = int(live.get("monster_kill_seq") or 0)
+        if kill_seq > self._pierce_last_kill_seq:
+            self._pierce_last_kill_seq = kill_seq
+            killed = live.get("last_monster_kill") or {}
+            killed_id = int(killed.get("actor_id") or 0)
+            if (
+                self._pierce_target_id is not None
+                and killed_id == int(self._pierce_target_id)
+            ):
+                self._restore_sword_and_shield("pierce_target_dead")
+                return
+
+        # If R was pressed but the player cancelled the targeting cursor, there
+        # is no active monster fight to wait for. Restore after a short timeout.
+        if (
+            self._pierce_armed_at is not None
+            and self._pierce_target_id is None
+            and time.time() - self._pierce_armed_at > 8.0
+        ):
+            self._restore_sword_and_shield("pierce_target_cancelled")
 
     @staticmethod
     def _self_target(world: dict[str, Any]) -> int | None:
@@ -258,6 +393,7 @@ class ManualAssistant:
                         world = live.get("world") or {}
                         inventory = live.get("inventory") or []
                         character = authenticated_client_monitor.character_snapshot()
+                        self._update_pierce_macro(live)
                         self._maybe_heal(world, inventory)
                         warnings = self._build_warnings(world, inventory, character)
                         new_keys = {str(row.get("key")) for row in warnings}
@@ -290,6 +426,19 @@ class ManualAssistant:
                 "healing_items_used": self._heals_used,
                 "next_heal_threshold": self._next_heal_threshold,
                 "last_heal_result": self._last_heal_result,
+                "pierce_macro": {
+                    "enabled": self.enabled,
+                    "state": self._pierce_macro_state,
+                    "target_id": self._pierce_target_id,
+                    "armed_at": self._pierce_armed_at,
+                    "last_action": self._pierce_last_action,
+                    "hotkeys": {
+                        "shield": "Q",
+                        "flamberge": "W",
+                        "lance": "E",
+                        "pierce": "R",
+                    },
+                },
             }
 
 
