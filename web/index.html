@@ -121,18 +121,6 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
 .combat-supply strong{font-size:24px;line-height:1}.combat-supply span{font-size:9px;color:var(--muted);margin-top:5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .combat-status-chip{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:5px 8px;color:var(--muted)}
 @media(max-width:1050px){.combat-dashboard{grid-template-columns:1.45fr .9fr}.combat-session-grid{grid-template-columns:repeat(2,1fr)}.combat-supplies{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:900px){
-  .combat-mode .main{height:auto;min-height:100vh;overflow:auto;padding:10px}
-  .combat-dashboard{height:auto;min-height:calc(100vh - 20px);grid-template-columns:1fr;grid-template-rows:minmax(360px,58vh) auto}
-  .combat-right{grid-template-rows:auto auto auto}
-  .combat-panel{overflow:visible}
-  .combat-session-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
-  .combat-supplies{height:auto;grid-template-columns:repeat(4,minmax(0,1fr))}
-}
-@media(max-width:620px){
-  .combat-session-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .combat-supplies{grid-template-columns:repeat(2,minmax(0,1fr))}
-}
 @media(max-width:900px){.command-hero{grid-template-columns:1fr}.status-strip,.summary-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:900px){.hunt-hero{grid-template-columns:1fr}}
 @media(max-width:900px){.map-stats{grid-template-columns:1fr 1fr}}
@@ -850,8 +838,9 @@ pre{white-space:pre-wrap;background:#090d13;padding:13px;border-radius:10px;colo
         </div>
         <div class="row">
           <label>Hunting actions
-            <select id="nativeOnlyActions" disabled>
-              <option value="true" selected>Native only — resolution independent</option>
+            <select id="nativeOnlyActions">
+              <option value="true" selected>Native only — no physical mouse clicks</option>
+              <option value="false">Allow screen/mouse fallback</option>
             </select>
           </label>
           <label>Threat handling
@@ -1767,7 +1756,7 @@ async function saveProfile(silent=false){
       emergency_action:document.getElementById('emergencyAction').value,
       navigation_mode:document.getElementById('navigationMode').value,
       avoid_zones:huntAvoidZones,
-      native_only_actions:true,
+      native_only_actions:document.getElementById('nativeOnlyActions').value==='true',
       threat_first_combat:document.getElementById('threatFirstCombat').value==='true',
       preempt_for_higher_priority_aggressor:document.getElementById('priorityPreempt').value==='true',
       loot_after_aggressors:true,
@@ -2019,7 +2008,7 @@ async function loadProfile(){
     document.getElementById('emergencyAction').value=(p.hunt&&p.hunt.emergency_action)||'teleport';
     document.getElementById('navigationMode').value=(p.hunt&&p.hunt.navigation_mode)||'saved_or_explore';
     document.getElementById('huntLootRadius').value=(p.hunt&&p.hunt.loot_radius)||12;
-    document.getElementById('nativeOnlyActions').value='true';
+    document.getElementById('nativeOnlyActions').value=(p.hunt&&p.hunt.native_only_actions===false)?'false':'true';
     document.getElementById('threatFirstCombat').value=(p.hunt&&p.hunt.threat_first_combat===false)?'false':'true';
     document.getElementById('priorityPreempt').value=(p.hunt&&p.hunt.preempt_for_higher_priority_aggressor===false)?'false':'true';
     document.getElementById('frontierBias').value=(p.hunt&&p.hunt.exploration_frontier_bias===false)?'false':'true';

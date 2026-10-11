@@ -43,17 +43,6 @@ class HuntingAI:
     actuator and does not choose targets, routes or combat behavior.
     """
 
-    @staticmethod
-    def _native_only_hunting() -> bool:
-        """Hunting is always map/socket-native and never screen-calibrated.
-
-        This deliberately applies only to HuntingAI. Town travel/storage and
-        other optional workflows keep their existing configuration. Making the
-        hunting path unconditional prevents copied/older profiles from enabling
-        physical mouse fallback on a laptop with a different resolution.
-        """
-        return True
-
     def __init__(self):
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -1870,7 +1859,7 @@ class HuntingAI:
         # Skill openers are evaluated only after range/route/LOS checks.
         self._try_opening_attack_skill(fresh)
 
-        native_only = self._native_only_hunting()
+        native_only = bool(hunt.native_only_actions)
         if game_actions.native_attack_ready():
             self.attack_clicked_at = time.time()
             result = game_actions.attack(
@@ -1949,7 +1938,7 @@ class HuntingAI:
         if player is not None and self.target_pos is not None:
             native_ready = game_actions.native_attack_ready()
             screen_ready = (
-                not self._native_only_hunting()
+                not app_state.get_profile().hunt.native_only_actions
                 and self._render_position(snapshot) is not None
                 and self._target_render_position(snapshot) is not None
                 and game_actions.can_project(
@@ -2074,7 +2063,7 @@ class HuntingAI:
             and (
                 game_actions.native_attack_ready()
                 or (
-                    not self._native_only_hunting()
+                    not hunt.native_only_actions
                     and self._render_position(snapshot) is not None
                     and self._target_render_position(snapshot) is not None
                     and game_actions.can_project(
@@ -2146,7 +2135,7 @@ class HuntingAI:
                 and (
                     game_actions.native_attack_ready()
                     or (
-                        not self._native_only_hunting()
+                        not hunt.native_only_actions
                         and game_actions.can_project(
                             player,
                             self.target_pos,
@@ -2250,7 +2239,7 @@ class HuntingAI:
         result = game_actions.move(
             player,
             segment,
-            allow_mouse_fallback=not self._native_only_hunting(),
+            allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
         )
         if result.get("ok"):
             self._last_combat_move_destination = segment
@@ -2273,7 +2262,7 @@ class HuntingAI:
                 result = game_actions.move(
                     player,
                     fallback,
-                    allow_mouse_fallback=not self._native_only_hunting(),
+                    allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
                 )
                 self._log(
                     "move_fallback",
@@ -2456,7 +2445,7 @@ class HuntingAI:
             return
 
         hunt = app_state.get_profile().hunt
-        native_only = self._native_only_hunting()
+        native_only = bool(hunt.native_only_actions)
         distance = self._tile_distance(player, self.target_pos)
         opener_range = self._required_opening_range(snapshot)
         required_range = (
@@ -2703,7 +2692,7 @@ class HuntingAI:
                 retry_index=self.attack_retry,
                 target_key=self.target_name,
                 actor_id=int(self.target_id) if self.target_id is not None else None,
-                allow_mouse_fallback=not self._native_only_hunting(),
+                allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
             )
             self._log(
                 "attack_precision_retry",
@@ -2914,7 +2903,7 @@ class HuntingAI:
                 result = game_actions.move(
                     player,
                     item_pos,
-                    allow_mouse_fallback=not self._native_only_hunting(),
+                    allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
                 )
                 self._log(
                     "loot_approach_move",
@@ -3048,7 +3037,7 @@ class HuntingAI:
             player_render,
             item_pos,
             item_id=item_id,
-            allow_mouse_fallback=not self._native_only_hunting(),
+            allow_mouse_fallback=not app_state.get_profile().hunt.native_only_actions,
         )
         self._log(
             "loot_attempt",
@@ -3539,7 +3528,7 @@ class HuntingAI:
                     result=result,
                 )
         else:
-            if self._native_only_hunting():
+            if app_state.get_profile().hunt.native_only_actions:
                 game_actions.release_hold_move()
                 self._set_state(
                     "FAILED",
@@ -3627,7 +3616,7 @@ class HuntingAI:
         requested_uses = random.randint(burst_min, burst_max)
         delay = max(0.0, min(2.0, float(settings.burst_delay_seconds)))
 
-        native_only = self._native_only_hunting()
+        native_only = bool(profile.hunt.native_only_actions)
         wanted_name = str(settings.item or "Meat").strip().casefold()
         results: list[dict[str, Any]] = []
 
@@ -3817,7 +3806,7 @@ class HuntingAI:
             if (
                 game_actions.native_attack_ready()
                 or (
-                    not self._native_only_hunting()
+                    not app_state.get_profile().hunt.native_only_actions
                     and game_actions.can_project(
                         player,
                         self.target_pos,
@@ -3982,7 +3971,7 @@ class HuntingAI:
                     "Classic.exe is not detected. Launch SoulBound and enter the game first."
                 )
 
-            if self._native_only_hunting():
+            if profile.hunt.native_only_actions:
                 native = native_action_bridge.snapshot()
                 if not native.get("attached"):
                     native_action_bridge.start()
@@ -4111,9 +4100,7 @@ class HuntingAI:
                     "attack_walk_timeout": self.attack_walk_timeout,
                     "loot_radius": self.loot_radius,
                     "smart_combat": {
-                        "native_only_actions": self._native_only_hunting(),
-                        "saved_native_only_actions": app_state.get_profile().hunt.native_only_actions,
-                        "resolution_independent_hunting": True,
+                        "native_only_actions": app_state.get_profile().hunt.native_only_actions,
                         "threat_first_combat": app_state.get_profile().hunt.threat_first_combat,
                         "preempt_for_higher_priority_aggressor": app_state.get_profile().hunt.preempt_for_higher_priority_aggressor,
                         "loot_after_aggressors": app_state.get_profile().hunt.loot_after_aggressors,
